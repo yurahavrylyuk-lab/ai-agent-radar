@@ -1,0 +1,19 @@
+node_modules/
+dist/
+.DS_Store
+coverage/
+*.log
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Local application state is machine-specific and must not enter source history.
+data/*
+!data/.gitkeep
+
+# Editor and local preview artifacts.
+*.swp
+.idea/
+.vscode/
+tmp/

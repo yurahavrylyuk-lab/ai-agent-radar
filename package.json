@@ -1,0 +1,34 @@
+{
+  "name": "ai-agent-monitor",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A simple monitor for relevant AI agent and developer-tool updates.",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "type": "module",
+  "scripts": {
+    "monitor": "tsx src/index.ts",
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "test": "tsx --test test/**/*.test.ts",
+    "openai:test": "tsx src/openaiTest.ts",
+    "gemini:test": "tsx src/geminiTest.ts",
+    "analysis:test": "tsx src/analysisAgentTest.ts",
+    "discovery:test": "tsx src/discoveryTest.ts",
+    "email:test": "tsx src/emailTest.ts",
+    "e2e:test": "tsx src/endToEndTest.ts",
+    "monitor:test": "tsx src/monitoringCycleTest.ts"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.0.0",
+    "dotenv": "^16.6.1",
+    "openai": "^5.12.2"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.15.30",
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3"
+  }
+}
