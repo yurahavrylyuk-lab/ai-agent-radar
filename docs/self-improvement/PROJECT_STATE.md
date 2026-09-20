@@ -164,7 +164,8 @@ Explicit human approval is required for autonomous changes to:
 
 - This task is explicitly authorized documentation/governance setup only; it does not authorize future governance changes.
 - GOV-001 revision 1 completed at Builder commit `71751da70ac15767fe1356dece3d719ee7f460a4` and was reviewed as `REVISE` in Analyst checkpoint `846392643d039f5304e118d7c87fb91c2a1aaed1`; the revision-1 Architect decision is `REVISE`.
-- GOV-001 revision 2 is the active documentation-only correction at baseline `846392643d039f5304e118d7c87fb91c2a1aaed1`. Builder-side plan status is REVIEW; revision-2 Analyst result and Architect decision are pending.
+- GOV-001 is COMPLETE at final revision 2. Accepted Builder commit `ab23e28d6d7e8c3a2d55ded8f81a5ce53e4d7744` received Analyst `PASS` at checkpoint `5137631f44f8888fd4690cad368592110bb396c1`; final Architect decision: `ACCEPT`.
+- `3a6946fe07ea3838488c789cba4c69718b2ed328` is the original governance baseline and branch starting checkpoint, not the current `self-improvement` tip.
 - The Analyst historically observed that `Без назви.md` was absent during revision-1 review. The human owner later clarified that they intentionally deleted the empty, unrelated file after the Builder handoff. That resolves the uncertainty; its absence is not a Builder failure and it has no preservation, checksum, or recreation requirement.
 - No autonomous production change is authorized by GOV-001.
 - Deployed production checkpoint remains `be1c03a`; no deployment occurred during governance setup.

@@ -4,7 +4,7 @@
 
 - Cycle ID: `GOV-001`
 - Revision: `2`
-- Status: `REVIEW`
+- Status: `COMPLETE`
 - Revision-2 baseline: `846392643d039f5304e118d7c87fb91c2a1aaed1`
 - Original governance baseline: `3a6946fe07ea3838488c789cba4c69718b2ed328`
 
@@ -38,7 +38,7 @@ Revision-1 changed files:
 
 The Analyst observed that `Без назви.md` was absent during review. The human owner later clarified that, after the revision-1 Builder handoff, they intentionally deleted it because it was empty and unrelated. Its absence is not a Builder failure, and there is no current or future preservation, checksum, or recreation requirement.
 
-## Revision 2 Active Correction
+## Revision 2 Completed Correction
 
 ### Motivation
 
@@ -78,7 +78,7 @@ Inspect full and staged diffs; run `git diff --check` and `git diff --cached --c
 
 ### Acceptance Criteria
 
-All revision-2 requirements are recorded accurately, the final Builder-side state is REVIEW, no contradictory current statement remains, and no unauthorized file or operational action occurs.
+All revision-2 requirements are recorded accurately, the reviewed Builder commit is accepted, no contradictory current statement remains, and no unauthorized file or operational action occurs.
 
 ### Builder Instructions
 
@@ -96,9 +96,14 @@ Explicitly approved for this bounded documentation-only revision-2 correction.
 
 - Architect-authorized revision-2 transition: REVIEW → READY.
 - Builder transitions: READY → IN_PROGRESS → REVIEW.
-- Final Builder-side status: REVIEW.
-- Revision-2 Analyst result: pending.
-- Revision-2 Architect decision: pending.
+- Historical Builder-side status: REVIEW.
+- Revision-2 Builder commit: `ab23e28d6d7e8c3a2d55ded8f81a5ce53e4d7744`.
+- Revision-2 Analyst checkpoint: `5137631f44f8888fd4690cad368592110bb396c1`.
+- Revision-2 Analyst result: `PASS`.
+- Final Architect decision: `ACCEPT`.
+- Architect-authorized closure transition: REVIEW → COMPLETE.
+- Final cycle status: COMPLETE.
+- No further implementation, deployment, merge, or new cycle is authorized by this closure.
 
 ## Revision 2 Builder Handoff
 
@@ -106,4 +111,4 @@ Explicitly approved for this bounded documentation-only revision-2 correction.
 - Validation: full/staged diff inspection, allowlist and Analyst-checkpoint verification, whitespace and secret checks passed; tests/build/typecheck: `not run — documentation-only scope`.
 - Deviations: none.
 - Blockers: none.
-- Review target: the revision-2 Builder commit created from this handoff; exact SHA is reported after commit creation and must be used by Analyst.
+- Review target: `ab23e28d6d7e8c3a2d55ded8f81a5ce53e4d7744`; independently reviewed as PASS at `5137631f44f8888fd4690cad368592110bb396c1`.
