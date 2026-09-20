@@ -185,7 +185,7 @@ test("D1 Gemini usage round-trips totals, preserves window semantics, and fails 
 });
 
 test("Worker health fetch is harmless and does not invoke monitoring", async () => {
-  const response = worker.fetch(new Request("https://worker.example"), {
+  const response = await worker.fetch(new Request("https://worker.example"), {
     DB: {} as D1Database,
   } as RadarWorkerEnv);
   assert.equal(response.status, 200);
