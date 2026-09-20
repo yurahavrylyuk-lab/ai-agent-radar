@@ -77,3 +77,60 @@ The reviewed commit changes exactly these nine approved files: `AGENTS.md` and t
 ## Final Analyst Decision
 
 REVISE
+
+---
+
+## GOV-001 Revision 2 Independent Re-Review
+
+### Review Status
+
+PASS
+
+Cycle ID: GOV-001
+Plan revision: 2
+
+### Reviewed Commit
+
+`ab23e28d6d7e8c3a2d55ded8f81a5ce53e4d7744` (`docs: correct GOV-001 governance handoff evidence`)
+
+Direct parent and revision-2 baseline: `846392643d039f5304e118d7c87fb91c2a1aaed1`.
+
+### Reviewed Scope and Evidence
+
+Independent review covered the exact parent-to-commit diff, commit lineage, branch tips, current status, governance records, path allowlist, whitespace check, and a sensitive-value-pattern scan that did not print values. The preserved lineage is `71751da70ac15767fe1356dece3d719ee7f460a4` → `846392643d039f5304e118d7c87fb91c2a1aaed1` → `ab23e28d6d7e8c3a2d55ded8f81a5ce53e4d7744`; no history rewrite or squash was found.
+
+The revision-2 commit changes exactly the five authorized files: `ARCHITECT.md`, `ARCHITECT_PLAN.md`, `PROJECT_STATE.md`, `DAILY_SUMMARY.md`, and `CHANGELOG.md` under `docs/self-improvement/`. `ANALYST_REVIEW.md` is byte-identical between the revision-2 baseline and Builder commit. `self-improvement` contains the reviewed commit; `main` and `origin/main` remain at `3a6946fe07ea3838488c789cba4c69718b2ed328`.
+
+### Correctness
+
+PASS. The valid plan-status declaration now includes `EMPTY / READY / IN_PROGRESS / REVIEW / COMPLETE / BLOCKED`, and both the plan and Architect guide define `BLOCKED` consistently as an Architect-controlled stopped state. Revision-1 handoff evidence now records the Builder commit, message, branch, original baseline, separate Analyst checkpoint, Analyst `REVISE`, and Architect `REVISE`, while attributing execution claims to the Builder/human handoff rather than to Git alone.
+
+The human clarification is accurately recorded: `Без назви.md` was intentionally deleted by the human owner after the revision-1 Builder handoff, was empty and unrelated, is not a Builder failure, and has no current or future preservation, checksum, or recreation requirement. The revision-1 Analyst observation remains unchanged above as historical evidence.
+
+### Architecture
+
+PASS. Revision 2 preserves role separation and the single-cycle Human → Architect → Builder → Analyst → Architect → Human handoff. Architect retains planning, approval, final decision, and summary ownership; Builder remains limited to approved implementation on `self-improvement`; Analyst remains limited to independent review; and the human owner remains the only production-merge authority. The active cycle is GOV-001 revision 2 at `REVIEW`; the revision-2 Analyst result and Architect decision were pending before this review, and the plan is not marked `COMPLETE`.
+
+### Security
+
+PASS. The reviewed diff contains no secret value, private notification address, credential, authentication-boundary change, or deployment credential. The sensitive-value-pattern scan found no candidate secret value.
+
+### API Usage / Cost
+
+PASS. No provider integration, quota, model, retry behavior, Cloudflare Cron, or production execution path changed. No provider call, deployment, merge, or production-state mutation was run during this review.
+
+### Persistence / D1 and Git
+
+PASS. No production source, Cloudflare configuration, migration, D1 persistence behavior, deduplication, notification behavior, or provider-limit configuration changed. `git diff --check` for the revision-2 parent-to-commit diff passed with no whitespace errors. Tests, build, and typecheck were not run because this is a documentation-only correction and no reviewed change warrants them.
+
+### Required Changes
+
+None.
+
+### Recommendations
+
+None for GOV-001 revision 2.
+
+### Final Analyst Decision
+
+PASS
