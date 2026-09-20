@@ -69,7 +69,7 @@ test("all duplicates use zero analysis slots and still reach notification proces
   assert.equal(notificationCalls, 3);
 });
 
-test("only the first two unseen results reach analysis processing", async () => {
+test("two unseen results analyze only the first and stop at the one-analysis cap", async () => {
   const results = [searchResult("one"), searchResult("two"), searchResult("three")];
   const processedUrls: string[] = [];
   const outcome = await runMonitoringCycle("test", {
@@ -78,15 +78,35 @@ test("only the first two unseen results reach analysis processing", async () => 
     process: async (item) => { processedUrls.push(item.url); return processed(item, "new"); },
     notify: async () => notification("not_eligible"),
   });
-  assert.equal(MAX_NEW_ANALYSES_PER_CYCLE, 2);
-  assert.equal(outcome.analysesAttempted, 2);
-  assert.equal(outcome.newDiscoveries, 2);
+  assert.equal(MAX_NEW_ANALYSES_PER_CYCLE, 1);
+  assert.equal(outcome.analysesAttempted, 1);
+  assert.equal(outcome.newDiscoveries, 1);
   assert.equal(outcome.stoppedByAnalysisCap, true);
-  assert.deepEqual(processedUrls, results.slice(0, 2).map((item) => item.url));
+  assert.deepEqual(processedUrls, results.slice(0, 1).map((item) => item.url));
 });
 
-test("duplicates do not consume the budget before two new discoveries", async () => {
-  const results = [searchResult("duplicate-one"), searchResult("new-one"), searchResult("duplicate-two"), searchResult("new-two"), searchResult("new-three")];
+test("many duplicates consume zero slots before one unseen result", async () => {
+  const results = [searchResult("duplicate-one"), searchResult("duplicate-two"), searchResult("duplicate-three"), searchResult("new-one")];
+  const duplicateUrls = new Set(results.slice(0, 3).map((item) => item.url));
+  const processedUrls: string[] = [];
+  const outcome = await runMonitoringCycle("test", {
+    search: async () => results,
+    hasDiscovery: async (url) => duplicateUrls.has(url),
+    process: async (item) => {
+      processedUrls.push(item.url);
+      return processed(item, duplicateUrls.has(item.url) ? "duplicate" : "new");
+    },
+    notify: async () => notification("not_eligible"),
+  });
+  assert.equal(outcome.duplicates, 3);
+  assert.equal(outcome.newDiscoveries, 1);
+  assert.equal(outcome.analysesAttempted, 1);
+  assert.equal(outcome.stoppedByAnalysisCap, false);
+  assert.deepEqual(processedUrls, results.map((item) => item.url));
+});
+
+test("duplicate, new, duplicate, new processes the later duplicate but not the second new result", async () => {
+  const results = [searchResult("duplicate-one"), searchResult("new-one"), searchResult("duplicate-two"), searchResult("new-two")];
   const duplicateUrls = new Set([results[0].url, results[2].url]);
   const processedUrls: string[] = [];
   const outcome = await runMonitoringCycle("test", {
@@ -99,10 +119,10 @@ test("duplicates do not consume the budget before two new discoveries", async ()
     notify: async () => notification("not_eligible"),
   });
   assert.equal(outcome.duplicates, 2);
-  assert.equal(outcome.newDiscoveries, 2);
-  assert.equal(outcome.analysesAttempted, 2);
+  assert.equal(outcome.newDiscoveries, 1);
+  assert.equal(outcome.analysesAttempted, 1);
   assert.equal(outcome.stoppedByAnalysisCap, true);
-  assert.deepEqual(processedUrls, results.slice(0, 4).map((item) => item.url));
+  assert.deepEqual(processedUrls, results.slice(0, 3).map((item) => item.url));
   assert.equal(outcome.resultsProcessed, outcome.duplicates + outcome.newDiscoveries);
 });
 
@@ -151,7 +171,7 @@ test("search failure aborts the cycle before processing starts", async () => {
   assert.equal(processCalls, 0);
 });
 
-test("failed new analysis consumes a slot and later safe results continue without retry", async () => {
+test("a failed first unseen analysis consumes the only slot and does not retry later unseen results", async () => {
   const results = [searchResult("failure"), searchResult("success"), searchResult("skipped")];
   let processCalls = 0;
   const outcome = await runMonitoringCycle("test", {
@@ -164,10 +184,10 @@ test("failed new analysis consumes a slot and later safe results continue withou
     },
     notify: async () => notification("not_eligible"),
   });
-  assert.equal(processCalls, 2);
-  assert.equal(outcome.analysesAttempted, 2);
+  assert.equal(processCalls, 1);
+  assert.equal(outcome.analysesAttempted, 1);
   assert.equal(outcome.failures, 1);
-  assert.equal(outcome.newDiscoveries, 1);
+  assert.equal(outcome.newDiscoveries, 0);
   assert.equal(outcome.stoppedByAnalysisCap, true);
 });
 

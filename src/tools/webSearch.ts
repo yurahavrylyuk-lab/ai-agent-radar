@@ -1,6 +1,7 @@
 import type { SearchResult } from "../types/index.js";
 import { checkBraveSearchUsage } from "../services/usageGuard.js";
-import { JsonUsageTracker, type UsageTracker } from "../services/usageTracker.js";
+import { LocalJsonBraveUsageStore } from "../services/localJsonBraveUsageStore.js";
+import type { BraveUsageStore } from "../services/usageTracker.js";
 
 const BRAVE_WEB_SEARCH_URL = "https://api.search.brave.com/res/v1/web/search";
 
@@ -18,7 +19,7 @@ interface BraveWebResult {
 }
 
 interface SearchWebDependencies {
-  usageTracker?: UsageTracker;
+  usageTracker?: BraveUsageStore;
   fetchImplementation?: typeof fetch;
 }
 
@@ -59,7 +60,7 @@ export async function searchWeb(
     throw new Error("A non-empty search query is required.");
   }
 
-  const usageTracker = dependencies.usageTracker ?? new JsonUsageTracker();
+  const usageTracker = dependencies.usageTracker ?? new LocalJsonBraveUsageStore();
   const usageCheck = await checkBraveSearchUsage(usageTracker);
   if (!usageCheck.allowed) {
     throw new Error("Brave search request blocked by usage guard.");

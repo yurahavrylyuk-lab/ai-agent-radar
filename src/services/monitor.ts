@@ -1,12 +1,12 @@
-import { JsonDiscoveryHistory, DiscoveryHistoryError } from "./discoveryHistory.js";
+import { JsonDiscoveryHistory, DiscoveryHistoryError, type DiscoveryHistory } from "./discoveryHistory.js";
 import { processSearchResult } from "./discoveryProcessor.js";
 import { NotificationHistoryError } from "./notificationHistory.js";
-import { notifyDiscovery } from "./notificationOrchestrator.js";
+import { notifyDiscovery, type NotificationOrchestratorDependencies } from "./notificationOrchestrator.js";
 import { searchWeb } from "../tools/webSearch.js";
 import type { DiscoveryProcessingResult, MonitoringCycleResult, NotificationResult, SearchResult } from "../types/index.js";
 
 export const MONITORING_QUERY = "new AI agent developer tool framework release";
-export const MAX_NEW_ANALYSES_PER_CYCLE = 2;
+export const MAX_NEW_ANALYSES_PER_CYCLE = 1;
 
 type WebSearch = (query: string) => Promise<SearchResult[]>;
 type DiscoveryLookup = (url: string) => Promise<boolean>;
@@ -15,8 +15,12 @@ type NotificationProcessor = (result: DiscoveryProcessingResult) => Promise<Noti
 
 export interface MonitoringCycleDependencies {
   search?: WebSearch;
+  /** Optional persistence adapter shared by duplicate checks and discovery processing. */
+  history?: DiscoveryHistory;
   hasDiscovery?: DiscoveryLookup;
   process?: DiscoveryProcessor;
+  /** Optional dependencies for the provider-independent notification orchestration. */
+  notification?: NotificationOrchestratorDependencies;
   notify?: NotificationProcessor;
 }
 
@@ -61,10 +65,10 @@ export async function runMonitoringCycle(
   }
 
   const result = emptyResult(query, searchResults.length);
-  const discoveryHistory = new JsonDiscoveryHistory();
-  const hasDiscovery = dependencies.hasDiscovery ?? ((url: string) => discoveryHistory.hasDiscovery(url));
-  const process = dependencies.process ?? processSearchResult;
-  const notify = dependencies.notify ?? notifyDiscovery;
+  const discoveryHistory = dependencies.history ?? new JsonDiscoveryHistory();
+  const hasDiscovery = dependencies.hasDiscovery ?? (async (url: string) => (await discoveryHistory.getDiscovery(url)) !== undefined);
+  const process = dependencies.process ?? ((searchResult: SearchResult) => processSearchResult(searchResult, { history: discoveryHistory }));
+  const notify = dependencies.notify ?? ((processingResult: DiscoveryProcessingResult) => notifyDiscovery(processingResult, dependencies.notification));
 
   for (const searchResult of searchResults) {
     let knownDiscovery: boolean;

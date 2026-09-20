@@ -1,5 +1,6 @@
 import { checkGeminiUsage } from "../../services/geminiUsageGuard.js";
-import { JsonGeminiUsageTracker, type GeminiUsageTracker } from "../../services/geminiUsageTracker.js";
+import { LocalJsonGeminiUsageStore } from "../../services/localJsonGeminiUsageStore.js";
+import type { GeminiUsageStore } from "../../services/geminiUsageTracker.js";
 import type { LlmResult } from "./types.js";
 
 const GEMINI_INTERACTIONS_URL = "https://generativelanguage.googleapis.com/v1beta/interactions";
@@ -17,7 +18,7 @@ interface GeminiResponse {
 }
 
 interface GeminiDependencies {
-  usageTracker?: GeminiUsageTracker;
+  usageTracker?: GeminiUsageStore;
   fetchImplementation?: typeof fetch;
   timeoutMs?: number;
 }
@@ -69,7 +70,7 @@ async function safeErrorMessage(response: Response, apiKey: string): Promise<str
 export async function generateWithGemini(input: string, dependencies: GeminiDependencies = {}): Promise<LlmResult> {
   const apiKey = required("GEMINI_API_KEY");
   const model = required("GEMINI_MODEL");
-  const tracker = dependencies.usageTracker ?? new JsonGeminiUsageTracker();
+  const tracker = dependencies.usageTracker ?? new LocalJsonGeminiUsageStore();
   const fetchImplementation = dependencies.fetchImplementation ?? fetch;
 
   if (!(await checkGeminiUsage(tracker)).allowed) throw new Error("Gemini request blocked by usage guard.");
