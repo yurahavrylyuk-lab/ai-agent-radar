@@ -163,9 +163,9 @@ Explicit human approval is required for autonomous changes to:
 ## Bootstrap status and local baseline
 
 - This task is explicitly authorized documentation/governance setup only; it does not authorize future governance changes.
-- Current governance cycle: GOV-001, revision 1, documentation/governance only. Plan status: REVIEW; Analyst review: NOT STARTED.
-- Initial Analyst review: NOT STARTED.
-- No autonomous self-improvement cycle has run yet.
-- At initial inspection, the checkout was on `main` at `be1c03a`, with no tracked changes and one pre-existing untracked file, `Без назви.md`. Preserve that file; it is outside bootstrap scope.
+- GOV-001 revision 1 completed at Builder commit `71751da70ac15767fe1356dece3d719ee7f460a4` and was reviewed as `REVISE` in Analyst checkpoint `846392643d039f5304e118d7c87fb91c2a1aaed1`; the revision-1 Architect decision is `REVISE`.
+- GOV-001 revision 2 is the active documentation-only correction at baseline `846392643d039f5304e118d7c87fb91c2a1aaed1`. Builder-side plan status is REVIEW; revision-2 Analyst result and Architect decision are pending.
+- The Analyst historically observed that `Без назви.md` was absent during revision-1 review. The human owner later clarified that they intentionally deleted the empty, unrelated file after the Builder handoff. That resolves the uncertainty; its absence is not a Builder failure and it has no preservation, checksum, or recreation requirement.
+- No autonomous production change is authorized by GOV-001.
 - Deployed production checkpoint remains `be1c03a`; no deployment occurred during governance setup.
 - Older README statements about a future Worker or pushing checkpoints to `main` do not override this verified production state or AGENTS.md approval boundaries.

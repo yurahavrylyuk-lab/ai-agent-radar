@@ -1,5 +1,13 @@
 # Self-improvement changelog
 
+## 2026-09-20 — GOV-001 revision 2 governance correction
+
+- Corrected the valid plan-status declaration and added consistent `BLOCKED` semantics.
+- Captured revision-1 Builder handoff evidence and preserved the separate revision-1 Analyst checkpoint/result.
+- Recorded the human clarification that the empty unrelated `Без назви.md` was intentionally deleted and requires no preservation or recreation.
+- Completed the Builder side of revision 2 at REVIEW; revision-2 Analyst and Architect decisions remain pending.
+- No production behavior, Cloudflare/Cron, provider-limit, deployment, provider-call, merge, or automation changes occurred, per the Builder/human handoff evidence.
+
 ## 2026-09-20 — Permanent handoff protocol (GOV-001)
 
 - Defined the Human → Architect → Builder → Analyst → Architect → Human handoff protocol and role-owned state machines.

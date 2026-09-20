@@ -25,6 +25,7 @@ The Architect owns planning, architecture, technical decisions, risk analysis, a
 - IN_PROGRESS: Builder is implementing the approved scope.
 - REVIEW: Builder evidence is ready for independent Analyst review.
 - COMPLETE: Architect has accepted the reviewed scope and required checks. This is not a production merge or deployment authorization.
+- BLOCKED: work is stopped because of an unresolved obstacle, rejection, or required human decision.
 - Return revised work to READY only after updating the plan and resolving applicable approvals. Never treat rejected work as approved.
 
 Allowed transitions are Architect: EMPTY → READY, REVIEW → READY/COMPLETE/BLOCKED, READY/IN_PROGRESS → BLOCKED, BLOCKED → READY, and COMPLETE → READY for a new cycle. The permanent handoff is Human → Architect → Builder → Analyst → Architect → Human; one cycle only.

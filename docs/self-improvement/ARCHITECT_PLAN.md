@@ -1,76 +1,109 @@
 # Architect Plan
 
-## Status
+## Active Cycle
 
-REVIEW
+- Cycle ID: `GOV-001`
+- Revision: `2`
+- Status: `REVIEW`
+- Revision-2 baseline: `846392643d039f5304e118d7c87fb91c2a1aaed1`
+- Original governance baseline: `3a6946fe07ea3838488c789cba4c69718b2ed328`
 
-Allowed statuses: EMPTY / READY / IN_PROGRESS / REVIEW / COMPLETE.
-No implementation work is currently approved.
+Valid plan statuses: EMPTY / READY / IN_PROGRESS / REVIEW / COMPLETE / BLOCKED.
 
-## Improvement Title
+`BLOCKED` means work is stopped because of an unresolved obstacle, rejection, or required human decision.
 
-GOV-001 — Define the permanent self-improvement handoff protocol
+## Revision 1 History
 
-## Motivation
+- Builder commit: `71751da70ac15767fe1356dece3d719ee7f460a4`
+- Commit message: `docs: define self-improvement handoff protocol`
+- Branch: `self-improvement`
+- Original baseline: `3a6946fe07ea3838488c789cba4c69718b2ed328`
+- Analyst checkpoint: `846392643d039f5304e118d7c87fb91c2a1aaed1`
+- Analyst result: `REVISE`
+- Architect decision: `REVISE`
 
-Make role ownership, state transitions, branch policy, and durable handoffs unambiguous.
+The completed revision-1 Builder and human handoff records that the push and validation succeeded; exactly the nine authorized governance documents changed; tests/build/typecheck were `not run — documentation-only scope`; and there were no production code/configuration, Cloudflare, Cron, provider-limit, deployment, provider-call, merge, or production-behavior changes. These execution facts are attributed to that handoff, not inferred from Git alone.
 
-## Current Problem
+Revision-1 changed files:
 
-Bootstrap wording incorrectly described `self-improvement` as future work and lacked a concrete active-cycle record.
+- `AGENTS.md`
+- `docs/self-improvement/PROJECT_STATE.md`
+- `docs/self-improvement/ARCHITECT.md`
+- `docs/self-improvement/BUILDER.md`
+- `docs/self-improvement/ANALYST.md`
+- `docs/self-improvement/ARCHITECT_PLAN.md`
+- `docs/self-improvement/ANALYST_REVIEW.md`
+- `docs/self-improvement/DAILY_SUMMARY.md`
+- `docs/self-improvement/CHANGELOG.md`
 
-## Proposed Change
+The Analyst observed that `Без назви.md` was absent during review. The human owner later clarified that, after the revision-1 Builder handoff, they intentionally deleted it because it was empty and unrelated. Its absence is not a Builder failure, and there is no current or future preservation, checksum, or recreation requirement.
 
-Update the approved governance documents only.
+## Revision 2 Active Correction
 
-## In Scope
+### Motivation
 
-AGENTS.md and the eight listed docs/self-improvement Markdown files.
+Resolve revision-1 governance evidence gaps without changing production behavior or broadening role authority.
 
-## Out of Scope
+### Current Problem
 
-Production code/config, Cloudflare/Cron, secrets, providers, deployments, tests/build/typecheck, and `Без назви.md`.
+Revision 1 omitted `BLOCKED` from one valid-status declaration, retained completed-work placeholders, did not reconcile the later human deletion clarification, and did not distinguish historical revision-1 evidence from active revision-2 work.
 
-## Files Expected to Change
+### Proposed Correction
 
-Only the nine in-scope documentation files.
+Correct the status declaration and durable handoff evidence in the five approved governance documents while leaving the Analyst checkpoint unchanged.
 
-## Risks
+### Allowed Files
 
-Stale or ambiguous ownership could permit unsafe autonomous work.
+- `docs/self-improvement/ARCHITECT.md`
+- `docs/self-improvement/ARCHITECT_PLAN.md`
+- `docs/self-improvement/PROJECT_STATE.md`
+- `docs/self-improvement/DAILY_SUMMARY.md`
+- `docs/self-improvement/CHANGELOG.md`
 
-## Safety Constraints
+### Out of Scope
 
-No production behavior, deployment, provider calls, merge to main, or changes outside scope.
+`ANALYST_REVIEW.md`, all other files, production code/configuration, Cloudflare, Cron, provider limits, secrets, deployments, provider calls, merges, branches, history rewriting, and recreation of the deleted unrelated file.
 
-## Required Tests
+### Risks
 
-Full diff/path audit; `git diff --check`; staged-diff audit; preserve untracked file checksum. Tests/build/typecheck not run — documentation-only scope.
+Conflating revisions could allow stale evidence to approve later work; incomplete states could make a blocked cycle appear actionable.
 
-## Acceptance Criteria
+### Safety Constraints
 
-All role/state/branch requirements transcribed, only allowed paths changed, no secrets, and Builder handoff recorded.
+Keep both historical commits separate, preserve role authority and production invariants, and make documentation-only changes on `self-improvement`.
 
-## Builder Instructions
+### Required Validation
 
-Baseline `3a6946fe07ea3838488c789cba4c69718b2ed328`; transition READY → IN_PROGRESS → REVIEW; commit/push only documentation scope. Record changed files, validation, deviations, blockers, and exact review target.
+Inspect full and staged diffs; run `git diff --check` and `git diff --cached --check`; verify only the five allowed paths changed; verify `ANALYST_REVIEW.md` is byte-identical to the revision-2 baseline; check status declarations, revision separation, secrets, and production boundaries. Tests/build/typecheck: `not run — documentation-only scope`.
 
-## Analyst Focus Areas
+### Acceptance Criteria
 
-Check exact commit, state machine, scope, stale claims, secret exposure, Git cleanliness, and no production effects.
+All revision-2 requirements are recorded accurately, the final Builder-side state is REVIEW, no contradictory current statement remains, and no unauthorized file or operational action occurs.
 
-## Human Approval Required?
+### Builder Instructions
 
-Yes — explicit bounded governance-update approval conveyed in this task.
+Implement only this correction at the stated baseline. Record the Architect transition REVIEW → READY and Builder transitions READY → IN_PROGRESS → REVIEW. Commit and push normally without rewriting either prior commit.
 
-## Architect Decision
+### Analyst Focus Areas
 
-Pending Analyst review. Lifecycle: EMPTY → READY → IN_PROGRESS → REVIEW. Architect decision pending.
+Verify the exact revision-2 commit and baseline, complete status list, revision separation, historical evidence attribution, deleted-file clarification, allowed paths, unchanged Analyst checkpoint, and absence of production effects.
 
-## Builder Handoff
+### Human Approval
 
-- Changed files: pending Builder record.
-- Validation: pending Builder record.
-- Deviations: pending Builder record.
-- Blockers: none reported.
-- Review target: exact Builder commit to be added after commit creation.
+Explicitly approved for this bounded documentation-only revision-2 correction.
+
+### Lifecycle and Decisions
+
+- Architect-authorized revision-2 transition: REVIEW → READY.
+- Builder transitions: READY → IN_PROGRESS → REVIEW.
+- Final Builder-side status: REVIEW.
+- Revision-2 Analyst result: pending.
+- Revision-2 Architect decision: pending.
+
+## Revision 2 Builder Handoff
+
+- Changed files: the five allowed governance documents listed above.
+- Validation: full/staged diff inspection, allowlist and Analyst-checkpoint verification, whitespace and secret checks passed; tests/build/typecheck: `not run — documentation-only scope`.
+- Deviations: none.
+- Blockers: none.
+- Review target: the revision-2 Builder commit created from this handoff; exact SHA is reported after commit creation and must be used by Analyst.

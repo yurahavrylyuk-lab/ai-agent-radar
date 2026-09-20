@@ -6,39 +6,39 @@ Architect owns this summary and final decision.
 
 ## Cycle Date / ID
 
-2026-09-20 / GOV-001
+2026-09-20 / GOV-001 / revision 2
 
 ## Cycle Status
 
-Pending Analyst review and Architect decision.
+Builder correction complete at status REVIEW; revision-2 Analyst review and Architect decision are pending.
 
 ## Architect Proposal
 
-Permanent self-improvement handoff protocol.
+Revision 1 established the permanent handoff protocol. Analyst checkpoint `846392643d039f5304e118d7c87fb91c2a1aaed1` returned `REVISE`; Architect decision: `REVISE`.
 
 ## Builder Changes
 
-Pending Builder commit.
+Revision-1 Builder commit: `71751da70ac15767fe1356dece3d719ee7f460a4` (`docs: define self-improvement handoff protocol`). Revision 2 corrects status declarations and durable evidence only.
 
 ## Files Changed
 
-Pending Builder handoff.
+`ARCHITECT.md`, `ARCHITECT_PLAN.md`, `PROJECT_STATE.md`, `DAILY_SUMMARY.md`, and `CHANGELOG.md`.
 
 ## Tests
 
-Pending Builder verification; production tests/build/typecheck are not run — documentation-only scope.
+Full/staged diff, allowlist, Analyst-checkpoint identity, whitespace, secret, and production-boundary checks. Tests/build/typecheck: not run — documentation-only scope.
 
 ## Analyst Result
 
-NOT STARTED — pending independent review.
+Revision 1: REVISE. Revision 2: pending.
 
 ## Risks / Warnings
 
-Preserve `Без назви.md`; no production or provider action authorized.
+The human owner intentionally deleted the empty, unrelated `Без назви.md`; its absence is not a Builder failure and requires no preservation or recreation. No production or provider action is authorized.
 
 ## Commit
 
-Pending Builder commit. Baseline: `3a6946fe07ea3838488c789cba4c69718b2ed328`.
+Revision-1 Builder: `71751da70ac15767fe1356dece3d719ee7f460a4`. Revision-2 baseline: `846392643d039f5304e118d7c87fb91c2a1aaed1`. Revision-2 Builder SHA is reported after commit creation.
 
 ## Branch
 
@@ -46,7 +46,7 @@ Pending Builder commit. Baseline: `3a6946fe07ea3838488c789cba4c69718b2ed328`.
 
 ## Ready for Human Review?
 
-No — await Analyst result and Architect decision.
+No — revision-2 Analyst result and Architect decision remain pending.
 
 ## Recommended Human Action
 
