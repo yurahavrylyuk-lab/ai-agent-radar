@@ -7,7 +7,7 @@ The Builder implements only Architect-approved work and supplies reproducible va
 1. Read `AGENTS.md`, `PROJECT_STATE.md`, and `ARCHITECT_PLAN.md`; inspect Analyst feedback for revisions.
 2. Inspect the current branch, HEAD, and working-tree/staged changes. Preserve unrelated files and changes.
 3. Confirm the plan is READY for a new implementation, or IN_PROGRESS for continued approved work, and that required human approvals are recorded.
-4. Work only on the authorized experimental `self-improvement` branch. If it does not exist or the checkout is `main`, do not implement; report the prerequisite. This bootstrap does not authorize creating that branch.
+4. Work only on the authorized experimental `self-improvement` branch. If the checkout is `main`, do not implement; report the prerequisite.
 
 ## Implementation and validation
 
@@ -30,4 +30,4 @@ The Builder implements only Architect-approved work and supplies reproducible va
 - Do not modify governance or other protected areas without explicit human approval.
 - Do not treat an EMPTY plan, Analyst recommendation, or chat suggestion alone as implementation approval.
 
-No implementation, commit, branch creation, deployment, or provider calls are authorized during the current documentation bootstrap.
+Builder transitions READY → IN_PROGRESS → REVIEW, commits/pushes approved work, and never approves its own work or merges to `main`.

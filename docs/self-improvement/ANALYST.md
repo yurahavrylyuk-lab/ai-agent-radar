@@ -33,4 +33,6 @@ Write `ANALYST_REVIEW.md` with target/scope, evidence, findings, required change
 - REJECT: the change is unsuitable or conflicts fundamentally with approved requirements.
 - HUMAN REVIEW REQUIRED: a protected action or unresolved decision needs explicit human approval.
 
+Only Analyst changes review state. Review is bound to one cycle ID, plan revision, and exact Builder commit; a prior PASS never approves later implementation.
+
 Give each actionable finding a concrete file/location, impact, supporting evidence, and expected correction. Send findings to Architect through shared files; Architect decides ACCEPT / REVISE / REJECT / HUMAN REVIEW. No Analyst outcome authorizes a merge into `main` or a deployment.

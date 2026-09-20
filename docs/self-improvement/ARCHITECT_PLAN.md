@@ -2,67 +2,75 @@
 
 ## Status
 
-EMPTY
+REVIEW
 
 Allowed statuses: EMPTY / READY / IN_PROGRESS / REVIEW / COMPLETE.
 No implementation work is currently approved.
 
 ## Improvement Title
 
-Not proposed.
+GOV-001 — Define the permanent self-improvement handoff protocol
 
 ## Motivation
 
-To be completed for one bounded improvement.
+Make role ownership, state transitions, branch policy, and durable handoffs unambiguous.
 
 ## Current Problem
 
-To be completed with repository evidence.
+Bootstrap wording incorrectly described `self-improvement` as future work and lacked a concrete active-cycle record.
 
 ## Proposed Change
 
-To be completed.
+Update the approved governance documents only.
 
 ## In Scope
 
-None approved.
+AGENTS.md and the eight listed docs/self-improvement Markdown files.
 
 ## Out of Scope
 
-All implementation work until an approved plan is READY. Protected actions require explicit human approval.
+Production code/config, Cloudflare/Cron, secrets, providers, deployments, tests/build/typecheck, and `Без назви.md`.
 
 ## Files Expected to Change
 
-None approved.
+Only the nine in-scope documentation files.
 
 ## Risks
 
-To be assessed.
+Stale or ambiguous ownership could permit unsafe autonomous work.
 
 ## Safety Constraints
 
-Preserve AGENTS.md and PROJECT_STATE.md invariants and approval boundaries. No production merge or deployment is authorized by this template.
+No production behavior, deployment, provider calls, merge to main, or changes outside scope.
 
 ## Required Tests
 
-To be specified before READY, including exact commands, expected results, and any provider/resource side effects.
+Full diff/path audit; `git diff --check`; staged-diff audit; preserve untracked file checksum. Tests/build/typecheck not run — documentation-only scope.
 
 ## Acceptance Criteria
 
-To be defined as verifiable outcomes before READY.
+All role/state/branch requirements transcribed, only allowed paths changed, no secrets, and Builder handoff recorded.
 
 ## Builder Instructions
 
-Do not implement while status is EMPTY. Future instructions must identify the baseline, approved scope, branch, and handoff evidence.
+Baseline `3a6946fe07ea3838488c789cba4c69718b2ed328`; transition READY → IN_PROGRESS → REVIEW; commit/push only documentation scope. Record changed files, validation, deviations, blockers, and exact review target.
 
 ## Analyst Focus Areas
 
-To be specified for the change; apply all required checks from ANALYST.md.
+Check exact commit, state machine, scope, stale claims, secret exposure, Git cleanliness, and no production effects.
 
 ## Human Approval Required?
 
-Yes / No — select and justify before READY; not yet assessed because no improvement is proposed. If Yes, record the explicit human approval and scope before dependent work. This placeholder grants no approval.
+Yes — explicit bounded governance-update approval conveyed in this task.
 
 ## Architect Decision
 
-Pending. After Analyst review, record ACCEPT / REVISE / REJECT / HUMAN REVIEW with rationale and reviewed target.
+Pending Analyst review. Lifecycle: EMPTY → READY → IN_PROGRESS → REVIEW. Architect decision pending.
+
+## Builder Handoff
+
+- Changed files: pending Builder record.
+- Validation: pending Builder record.
+- Deviations: pending Builder record.
+- Blockers: none reported.
+- Review target: exact Builder commit to be added after commit creation.

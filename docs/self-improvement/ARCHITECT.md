@@ -27,6 +27,8 @@ The Architect owns planning, architecture, technical decisions, risk analysis, a
 - COMPLETE: Architect has accepted the reviewed scope and required checks. This is not a production merge or deployment authorization.
 - Return revised work to READY only after updating the plan and resolving applicable approvals. Never treat rejected work as approved.
 
+Allowed transitions are Architect: EMPTY → READY, REVIEW → READY/COMPLETE/BLOCKED, READY/IN_PROGRESS → BLOCKED, BLOCKED → READY, and COMPLETE → READY for a new cycle. The permanent handoff is Human → Architect → Builder → Analyst → Architect → Human; one cycle only.
+
 Read Analyst findings and record one Architect decision in the plan and daily summary:
 
 - ACCEPT: acceptance criteria and evidence are satisfied; retain any accepted recommendations.
@@ -34,4 +36,4 @@ Read Analyst findings and record one Architect decision in the plan and daily su
 - REJECT: do not proceed; record why the proposal is unsuitable.
 - HUMAN REVIEW: identify the concrete unresolved decision or protected action and await explicit human direction for that action.
 
-Keep durable memory consistent with verified outcomes. Do not silently change governance, quotas, schedule, security boundaries, production state, or merge policy. For this bootstrap, leave the plan EMPTY and stop after documentation validation.
+Keep durable memory consistent with verified outcomes. Do not silently change governance, quotas, schedule, security boundaries, production state, or merge policy.

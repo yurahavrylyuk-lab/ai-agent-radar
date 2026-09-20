@@ -4,7 +4,10 @@
 
 NOT STARTED
 
-Allowed statuses: NOT STARTED / PASS / PASS WITH RECOMMENDATIONS / REVISE / REJECT / HUMAN REVIEW REQUIRED.
+Cycle ID: GOV-001
+Plan revision: 1
+
+Allowed statuses: NOT STARTED / IN REVIEW / PASS / PASS WITH RECOMMENDATIONS / REVISE / REJECT / HUMAN REVIEW REQUIRED. Only Analyst changes review state; results apply to one cycle, revision, and exact Builder commit.
 
 ## Reviewed Commit
 

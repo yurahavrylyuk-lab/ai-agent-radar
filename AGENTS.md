@@ -18,11 +18,10 @@ Applies to the entire repository and all Architect, Builder, and Analyst work.
 
 ## Branches and approval
 
-- `main` is production. `self-improvement` will be the experimental branch; this bootstrap does not create it.
-- Future Builder implementation belongs on `self-improvement`, once its creation is authorized. Never merge into `main` without explicit human approval. Builder never merges into `main`.
+- `main` is production. `self-improvement` exists as the experimental working branch for all autonomous Builder work. Never merge into `main` without explicit human approval.
 - Explicit human approval is required for autonomous changes to: `main`, production secrets, Cloudflare resource creation/deletion, destructive D1 migrations, production Cron, provider quotas, authentication/security boundaries, GitHub automation affecting production, deployment credentials, merge policy, and self-improvement governance rules.
 - These governance restrictions supersede older README checkpoint instructions to commit or push to `main` for autonomous work.
-- The current human authorization covers only creating these nine governance documents as uncommitted working-tree additions on the existing checkout. No implementation work is approved; do not commit, create a branch, deploy, change Cloudflare configuration/Cron, or call providers during this bootstrap.
+- The permanent handoff is Human → Architect → Builder → Analyst → Architect → Human. Only one cycle may be active; repository files are the durable channel.
 
 ## Production invariants
 

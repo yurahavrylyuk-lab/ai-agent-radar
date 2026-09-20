@@ -143,7 +143,7 @@ Brave → Gemini → D1 discovery → relevance gate → Resend → D1 notificat
 - Builder implements only Architect-approved scope, runs required tests/build/typecheck, works on the experimental branch, and never merges into `main`.
 - Analyst independently checks correctness, architecture, security, regressions, API limits, cost, D1 integrity, and Git cleanliness; returns findings without directly fixing implementation.
 - `main` = production.
-- `self-improvement` = future experimental autonomous work. It has not been created by this bootstrap.
+- `self-improvement` = experimental autonomous work; it exists at governance checkpoint `3a6946fe07ea3838488c789cba4c69718b2ed328`.
 - Nothing merges into `main` without explicit human approval. Architect acceptance and Analyst PASS are not merge or deployment permission.
 
 Explicit human approval is required for autonomous changes to:
@@ -163,9 +163,9 @@ Explicit human approval is required for autonomous changes to:
 ## Bootstrap status and local baseline
 
 - This task is explicitly authorized documentation/governance setup only; it does not authorize future governance changes.
-- Initial Architect plan: EMPTY. No implementation work is approved.
+- Current governance cycle: GOV-001, revision 1, documentation/governance only. Plan status: REVIEW; Analyst review: NOT STARTED.
 - Initial Analyst review: NOT STARTED.
 - No autonomous self-improvement cycle has run yet.
 - At initial inspection, the checkout was on `main` at `be1c03a`, with no tracked changes and one pre-existing untracked file, `Без назви.md`. Preserve that file; it is outside bootstrap scope.
-- The bootstrap creates only `AGENTS.md` and the eight Markdown files in `docs/self-improvement/`. It makes no commit, deployment, provider call, production-code/configuration change, or experimental branch.
+- Deployed production checkpoint remains `be1c03a`; no deployment occurred during governance setup.
 - Older README statements about a future Worker or pushing checkpoints to `main` do not override this verified production state or AGENTS.md approval boundaries.
