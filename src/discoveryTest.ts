@@ -1,6 +1,7 @@
 import "dotenv/config";
 import { analyzeSearchResult } from "./services/analysisAgent.js";
 import { searchWeb } from "./tools/webSearch.js";
+import { LocalJsonBraveUsageStore } from "./services/localJsonBraveUsageStore.js";
 import type { AgentAnalysis, SearchResult } from "./types/index.js";
 
 const DISCOVERY_QUERY = "new AI agent developer tool framework release";
@@ -27,7 +28,7 @@ function printAnalysis(analysis: AgentAnalysis): void {
 }
 
 try {
-  const results = await searchWeb(DISCOVERY_QUERY);
+  const results = await searchWeb(DISCOVERY_QUERY, { usageTracker: new LocalJsonBraveUsageStore() });
   const selectedResult = results[0];
   if (!selectedResult) throw new Error("Brave Search returned no valid results to analyze.");
 

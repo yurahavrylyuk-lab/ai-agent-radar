@@ -2,6 +2,13 @@ import "dotenv/config";
 import { notifyDiscovery } from "./services/notificationOrchestrator.js";
 import { processSearchResult } from "./services/discoveryProcessor.js";
 import { searchWeb } from "./tools/webSearch.js";
+import { LocalJsonBraveUsageStore } from "./services/localJsonBraveUsageStore.js";
+import { JsonDiscoveryHistory } from "./services/discoveryHistory.js";
+import { JsonNotificationHistory } from "./services/notificationHistory.js";
+import { LocalJsonGeminiUsageStore } from "./services/localJsonGeminiUsageStore.js";
+import { analyzeSearchResult } from "./services/analysisAgent.js";
+import { sendWithResend } from "./tools/email/resend.js";
+import { generateWithGemini } from "./tools/llm/gemini.js";
 import type { AgentAnalysis, SearchResult } from "./types/index.js";
 
 const DISCOVERY_QUERY = "new AI agent developer tool framework release";
@@ -28,12 +35,12 @@ function printAnalysis(analysis: AgentAnalysis): void {
 }
 
 try {
-  const results = await searchWeb(DISCOVERY_QUERY);
+  const results = await searchWeb(DISCOVERY_QUERY, { usageTracker: new LocalJsonBraveUsageStore() });
   const selectedResult = results[0];
   if (!selectedResult) throw new Error("Brave Search returned no valid results to process.");
   printSelectedResult(selectedResult);
 
-  const processing = await processSearchResult(selectedResult);
+  const processing = await processSearchResult(selectedResult, { history: new JsonDiscoveryHistory(), analyze: (result) => analyzeSearchResult(result, { generate: (input) => generateWithGemini(input, { usageTracker: new LocalJsonGeminiUsageStore() }) }) });
   console.info(`\nDiscovery processing status: ${processing.status}`);
 
   if (processing.status === "new") {
@@ -44,7 +51,7 @@ try {
     printAnalysis(analysis);
   }
 
-  const notification = await notifyDiscovery(processing);
+  const notification = await notifyDiscovery(processing, { history: new JsonNotificationHistory(), sendEmail: sendWithResend });
   console.info(`\nNotification status: ${notification.status}`);
   if (notification.status !== "not_eligible") {
     console.info(`Notification sent at: ${notification.record.sentAt}`);

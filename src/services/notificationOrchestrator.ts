@@ -1,6 +1,6 @@
 import { formatDiscoveryEmail } from "./discoveryEmailFormatter.js";
 import { isNotificationEligible } from "./notificationEligibility.js";
-import { JsonNotificationHistory, type NotificationHistory } from "./notificationHistory.js";
+import type { NotificationHistory } from "./notificationHistoryCore.js";
 import { sendWithResend } from "../tools/email/resend.js";
 import type { DiscoveryEmailContent, DiscoveryProcessingResult, EmailSendResult, NotificationRecord, NotificationResult, StoredDiscovery } from "../types/index.js";
 
@@ -26,7 +26,8 @@ export async function notifyDiscovery(
   const isEligible = dependencies.isEligible ?? isNotificationEligible;
   if (!isEligible(result)) return { status: "not_eligible" };
 
-  const history = dependencies.history ?? new JsonNotificationHistory();
+  const history = dependencies.history;
+  if (!history) throw new Error("Notification history is required.");
   const sourceUrl = result.discovery.analysis.sourceUrl;
   if (await history.hasNotificationBeenSent(sourceUrl, "email")) {
     const record = await history.getNotificationRecord(sourceUrl, "email");

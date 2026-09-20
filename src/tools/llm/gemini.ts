@@ -1,6 +1,6 @@
 import { checkGeminiUsage } from "../../services/geminiUsageGuard.js";
-import { LocalJsonGeminiUsageStore } from "../../services/localJsonGeminiUsageStore.js";
 import type { GeminiUsageStore } from "../../services/geminiUsageTracker.js";
+import type { RuntimeEnvironment } from "../../services/radarRuntimeConfiguration.js";
 import type { LlmResult } from "./types.js";
 
 const GEMINI_INTERACTIONS_URL = "https://generativelanguage.googleapis.com/v1beta/interactions";
@@ -17,14 +17,15 @@ interface GeminiResponse {
   };
 }
 
-interface GeminiDependencies {
+export interface GeminiDependencies {
   usageTracker?: GeminiUsageStore;
+  environment?: RuntimeEnvironment;
   fetchImplementation?: typeof fetch;
   timeoutMs?: number;
 }
 
-function required(name: "GEMINI_API_KEY" | "GEMINI_MODEL"): string {
-  const value = process.env[name]?.trim();
+function required(name: "GEMINI_API_KEY" | "GEMINI_MODEL", environment: RuntimeEnvironment): string {
+  const value = environment[name]?.trim();
   if (!value) throw new Error(`${name} is not configured. Add it to your .env file.`);
   return value;
 }
@@ -68,12 +69,14 @@ async function safeErrorMessage(response: Response, apiKey: string): Promise<str
 }
 
 export async function generateWithGemini(input: string, dependencies: GeminiDependencies = {}): Promise<LlmResult> {
-  const apiKey = required("GEMINI_API_KEY");
-  const model = required("GEMINI_MODEL");
-  const tracker = dependencies.usageTracker ?? new LocalJsonGeminiUsageStore();
+  const environment = dependencies.environment ?? process.env;
+  const apiKey = required("GEMINI_API_KEY", environment);
+  const model = required("GEMINI_MODEL", environment);
+  const tracker = dependencies.usageTracker;
+  if (!tracker) throw new Error("Gemini usage tracker is required.");
   const fetchImplementation = dependencies.fetchImplementation ?? fetch;
 
-  if (!(await checkGeminiUsage(tracker)).allowed) throw new Error("Gemini request blocked by usage guard.");
+  if (!(await checkGeminiUsage(tracker, environment)).allowed) throw new Error("Gemini request blocked by usage guard.");
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), dependencies.timeoutMs ?? GEMINI_TIMEOUT_MS);

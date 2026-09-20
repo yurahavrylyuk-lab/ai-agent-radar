@@ -1,18 +1,12 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
-import { normalizeDiscoveryUrl } from "./discoveryHistory.js";
+import { normalizeDiscoveryUrl } from "./discoveryHistoryCore.js";
 import { notificationChannels, type NotificationChannel, type NotificationRecord } from "../types/index.js";
+import { NotificationHistoryError, type NotificationHistory } from "./notificationHistoryCore.js";
+export { NotificationHistoryError, type NotificationHistory } from "./notificationHistoryCore.js";
 
 interface NotificationHistoryData {
   records: NotificationRecord[];
-}
-
-export class NotificationHistoryError extends Error {}
-
-export interface NotificationHistory {
-  getNotificationRecord(url: string, channel: NotificationChannel): Promise<NotificationRecord | undefined>;
-  hasNotificationBeenSent(url: string, channel: NotificationChannel): Promise<boolean>;
-  recordNotificationSent(url: string, channel: NotificationChannel, providerMessageId?: string, sentAt?: Date): Promise<NotificationRecord>;
 }
 
 function validTimestamp(value: unknown): value is string {

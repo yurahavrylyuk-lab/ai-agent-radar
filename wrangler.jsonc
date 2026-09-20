@@ -7,7 +7,20 @@
     {
       "binding": "DB",
       "database_name": "ai-agent-radar",
+      "database_id": "9fb545e2-2f43-4922-8b21-2d79a8de9556",
       "migrations_dir": "migrations"
     }
-  ]
+  ],
+  "vars": {
+    "BRAVE_DAILY_SEARCH_LIMIT": "10",
+    "BRAVE_WEEKLY_SEARCH_LIMIT": "50",
+    "BRAVE_MONTHLY_SEARCH_LIMIT": "200",
+    "GEMINI_MODEL": "gemini-3.6-flash",
+    "GEMINI_DAILY_REQUEST_LIMIT": "5",
+    "GEMINI_WEEKLY_REQUEST_LIMIT": "20",
+    "GEMINI_MONTHLY_REQUEST_LIMIT": "50",
+    "GEMINI_DAILY_TOKEN_LIMIT": "10000",
+    "GEMINI_WEEKLY_TOKEN_LIMIT": "30000",
+    "GEMINI_MONTHLY_TOKEN_LIMIT": "100000"
+  }
 }

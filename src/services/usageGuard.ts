@@ -31,7 +31,7 @@ function parsePositiveInteger(name: string, value: string | undefined): number {
   return parsedValue;
 }
 
-export function getBraveUsageLimits(environment = process.env): BraveUsageLimits {
+export function getBraveUsageLimits(environment: Record<string, string | undefined> = process.env): BraveUsageLimits {
   return {
     daily: parsePositiveInteger("BRAVE_DAILY_SEARCH_LIMIT", environment.BRAVE_DAILY_SEARCH_LIMIT),
     weekly: parsePositiveInteger("BRAVE_WEEKLY_SEARCH_LIMIT", environment.BRAVE_WEEKLY_SEARCH_LIMIT),
@@ -118,7 +118,7 @@ export function evaluateBraveUsage(
 
 export async function checkBraveSearchUsage(
   tracker: UsageTracker,
-  environment = process.env,
+  environment: Record<string, string | undefined> = process.env,
   now = new Date()
 ): Promise<UsageCheck> {
   try {

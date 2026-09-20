@@ -2,6 +2,11 @@ import { JsonDiscoveryHistory, DiscoveryHistoryError, type DiscoveryHistory } fr
 import { processSearchResult } from "./discoveryProcessor.js";
 import { NotificationHistoryError } from "./notificationHistory.js";
 import { notifyDiscovery, type NotificationOrchestratorDependencies } from "./notificationOrchestrator.js";
+import { LocalJsonBraveUsageStore } from "./localJsonBraveUsageStore.js";
+import { LocalJsonGeminiUsageStore } from "./localJsonGeminiUsageStore.js";
+import { JsonNotificationHistory } from "./notificationHistory.js";
+import { generateWithGemini } from "../tools/llm/gemini.js";
+import { analyzeSearchResult } from "./analysisAgent.js";
 import { searchWeb } from "../tools/webSearch.js";
 import type { DiscoveryProcessingResult, MonitoringCycleResult, NotificationResult, SearchResult } from "../types/index.js";
 
@@ -56,7 +61,7 @@ export async function runMonitoringCycle(
   query = MONITORING_QUERY,
   dependencies: MonitoringCycleDependencies = {},
 ): Promise<MonitoringCycleResult> {
-  const search = dependencies.search ?? searchWeb;
+  const search = dependencies.search ?? ((searchQuery: string) => searchWeb(searchQuery, { usageTracker: new LocalJsonBraveUsageStore() }));
   let searchResults: SearchResult[];
   try {
     searchResults = await search(query);
@@ -67,8 +72,12 @@ export async function runMonitoringCycle(
   const result = emptyResult(query, searchResults.length);
   const discoveryHistory = dependencies.history ?? new JsonDiscoveryHistory();
   const hasDiscovery = dependencies.hasDiscovery ?? (async (url: string) => (await discoveryHistory.getDiscovery(url)) !== undefined);
-  const process = dependencies.process ?? ((searchResult: SearchResult) => processSearchResult(searchResult, { history: discoveryHistory }));
-  const notify = dependencies.notify ?? ((processingResult: DiscoveryProcessingResult) => notifyDiscovery(processingResult, dependencies.notification));
+  const process = dependencies.process ?? ((searchResult: SearchResult) => processSearchResult(searchResult, {
+    history: discoveryHistory,
+    analyze: (result) => analyzeSearchResult(result, { generate: (input) => generateWithGemini(input, { usageTracker: new LocalJsonGeminiUsageStore() }) }),
+  }));
+  const notification = dependencies.notification ?? { history: new JsonNotificationHistory() };
+  const notify = dependencies.notify ?? ((processingResult: DiscoveryProcessingResult) => notifyDiscovery(processingResult, notification));
 
   for (const searchResult of searchResults) {
     let knownDiscovery: boolean;

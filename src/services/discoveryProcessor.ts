@@ -1,5 +1,5 @@
 import { analyzeSearchResult } from "./analysisAgent.js";
-import { JsonDiscoveryHistory, type DiscoveryHistory } from "./discoveryHistory.js";
+import type { DiscoveryHistory } from "./discoveryHistoryCore.js";
 import type { AgentAnalysis, DiscoveryProcessingResult, SearchResult } from "../types/index.js";
 
 type AnalyzeSearchResult = (result: SearchResult) => Promise<AgentAnalysis>;
@@ -20,7 +20,8 @@ export async function processSearchResult(
   result: SearchResult,
   dependencies: DiscoveryProcessorDependencies = {},
 ): Promise<DiscoveryProcessingResult> {
-  const history = dependencies.history ?? new JsonDiscoveryHistory();
+  const history = dependencies.history;
+  if (!history) throw new Error("Discovery history is required.");
   const existing = await history.getDiscovery(result.url);
   const now = dependencies.now ?? (() => new Date());
 

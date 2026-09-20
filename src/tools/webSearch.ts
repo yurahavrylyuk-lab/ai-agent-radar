@@ -1,7 +1,7 @@
 import type { SearchResult } from "../types/index.js";
 import { checkBraveSearchUsage } from "../services/usageGuard.js";
-import { LocalJsonBraveUsageStore } from "../services/localJsonBraveUsageStore.js";
 import type { BraveUsageStore } from "../services/usageTracker.js";
+import type { RuntimeEnvironment } from "../services/radarRuntimeConfiguration.js";
 
 const BRAVE_WEB_SEARCH_URL = "https://api.search.brave.com/res/v1/web/search";
 
@@ -18,8 +18,9 @@ interface BraveWebResult {
   page_age?: string;
 }
 
-interface SearchWebDependencies {
+export interface SearchWebDependencies {
   usageTracker?: BraveUsageStore;
+  environment?: RuntimeEnvironment;
   fetchImplementation?: typeof fetch;
 }
 
@@ -50,7 +51,8 @@ export async function searchWeb(
   query: string,
   dependencies: SearchWebDependencies = {}
 ): Promise<SearchResult[]> {
-  const apiKey = process.env.BRAVE_SEARCH_API_KEY?.trim();
+  const environment = dependencies.environment ?? process.env;
+  const apiKey = environment.BRAVE_SEARCH_API_KEY?.trim();
 
   if (!apiKey) {
     throw new Error("BRAVE_SEARCH_API_KEY is not configured. Add it to your .env file.");
@@ -60,8 +62,9 @@ export async function searchWeb(
     throw new Error("A non-empty search query is required.");
   }
 
-  const usageTracker = dependencies.usageTracker ?? new LocalJsonBraveUsageStore();
-  const usageCheck = await checkBraveSearchUsage(usageTracker);
+  const usageTracker = dependencies.usageTracker;
+  if (!usageTracker) throw new Error("Brave usage tracker is required.");
+  const usageCheck = await checkBraveSearchUsage(usageTracker, environment);
   if (!usageCheck.allowed) {
     throw new Error("Brave search request blocked by usage guard.");
   }

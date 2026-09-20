@@ -1,8 +1,9 @@
 import "dotenv/config";
 import { generateWithGemini } from "./tools/llm/gemini.js";
+import { LocalJsonGeminiUsageStore } from "./services/localJsonGeminiUsageStore.js";
 
 try {
-  const result = await generateWithGemini("Reply with exactly: GEMINI_OK");
+  const result = await generateWithGemini("Reply with exactly: GEMINI_OK", { usageTracker: new LocalJsonGeminiUsageStore() });
   console.info(result.outputText);
   console.info(`Input tokens: ${result.usage.inputTokens}`);
   console.info(`Output tokens: ${result.usage.outputTokens}`);

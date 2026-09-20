@@ -7,7 +7,7 @@ export class InvalidGeminiUsageLimitError extends Error {}
 
 const names = ["GEMINI_DAILY_REQUEST_LIMIT", "GEMINI_WEEKLY_REQUEST_LIMIT", "GEMINI_MONTHLY_REQUEST_LIMIT", "GEMINI_DAILY_TOKEN_LIMIT", "GEMINI_WEEKLY_TOKEN_LIMIT", "GEMINI_MONTHLY_TOKEN_LIMIT"] as const;
 function positive(name: string, value: string | undefined): number { if (!value || !/^\d+$/.test(value.trim()) || !Number.isSafeInteger(Number(value)) || Number(value) <= 0) throw new InvalidGeminiUsageLimitError(`${name} must be a positive integer.`); return Number(value); }
-export function getGeminiUsageLimits(env = process.env): GeminiUsageLimits {
+export function getGeminiUsageLimits(env: Record<string, string | undefined> = process.env): GeminiUsageLimits {
   const values = names.map((name) => positive(name, env[name]));
   return { dailyRequests: values[0], weeklyRequests: values[1], monthlyRequests: values[2], dailyTokens: values[3], weeklyTokens: values[4], monthlyTokens: values[5] };
 }
@@ -27,7 +27,7 @@ export function reachedGeminiLimit(c: GeminiUsageCounts, l: GeminiUsageLimits): 
   if (c.dailyRequests >= l.dailyRequests) return "daily request"; if (c.weeklyRequests >= l.weeklyRequests) return "weekly request"; if (c.monthlyRequests >= l.monthlyRequests) return "monthly request";
   if (c.dailyTokens >= l.dailyTokens) return "daily token"; if (c.weeklyTokens >= l.weeklyTokens) return "weekly token"; if (c.monthlyTokens >= l.monthlyTokens) return "monthly token";
 }
-export async function checkGeminiUsage(tracker: GeminiUsageTracker, env = process.env): Promise<GeminiUsageCheck> {
+export async function checkGeminiUsage(tracker: GeminiUsageTracker, env: Record<string, string | undefined> = process.env): Promise<GeminiUsageCheck> {
   try {
     const limits = getGeminiUsageLimits(env); const data: GeminiUsageData = await tracker.getUsageData(); if (data.usageUnknown) throw new Error("Unknown Gemini token usage.");
     const counts = getGeminiUsageCounts(data.records); const limit = reachedGeminiLimit(counts, limits);

@@ -1,5 +1,5 @@
-import { normalizeDiscoveryUrl } from "./discoveryHistory.js";
-import { NotificationHistoryError, type NotificationHistory } from "./notificationHistory.js";
+import { normalizeDiscoveryUrl } from "./discoveryHistoryCore.js";
+import { NotificationHistoryError, type NotificationHistory } from "./notificationHistoryCore.js";
 import { notificationChannels, type NotificationChannel, type NotificationRecord } from "../types/index.js";
 
 interface NotificationRow {

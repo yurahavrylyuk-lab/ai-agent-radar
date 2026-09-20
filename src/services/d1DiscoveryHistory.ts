@@ -3,7 +3,7 @@ import {
   isValidAgentAnalysis,
   normalizeDiscoveryUrl,
   type DiscoveryHistory,
-} from "./discoveryHistory.js";
+} from "./discoveryHistoryCore.js";
 import type { AgentAnalysis, StoredDiscovery } from "../types/index.js";
 
 interface DiscoveryRow {

@@ -1,16 +1,17 @@
 import type { DiscoveryEmailContent, EmailSendResult } from "../../types/index.js";
+import type { RuntimeEnvironment } from "../../services/radarRuntimeConfiguration.js";
 
 const RESEND_EMAILS_URL = "https://api.resend.com/emails";
 const RESEND_TIMEOUT_MS = 30_000;
 export const RESEND_ONBOARDING_SENDER = "AI Agent Radar <onboarding@resend.dev>";
 
 interface ResendDependencies {
-  environment?: NodeJS.ProcessEnv;
+  environment?: RuntimeEnvironment;
   fetchImplementation?: typeof fetch;
   timeoutMs?: number;
 }
 
-function required(name: "RESEND_API_KEY" | "NOTIFICATION_EMAIL", environment: NodeJS.ProcessEnv): string {
+function required(name: "RESEND_API_KEY" | "NOTIFICATION_EMAIL", environment: RuntimeEnvironment): string {
   const value = environment[name]?.trim();
   if (!value) throw new Error(`${name} is not configured. Add it to your .env file.`);
   return value;
