@@ -18,7 +18,10 @@
     "discovery:test": "tsx src/discoveryTest.ts",
     "email:test": "tsx src/emailTest.ts",
     "e2e:test": "tsx src/endToEndTest.ts",
-    "monitor:test": "tsx src/monitoringCycleTest.ts"
+    "monitor:test": "tsx src/monitoringCycleTest.ts",
+    "worker:types": "wrangler types",
+    "worker:typecheck": "npm run worker:types && tsc -p tsconfig.worker.json",
+    "d1:migrate:local": "wrangler d1 migrations apply DB --local"
   },
   "dependencies": {
     "better-sqlite3": "^12.0.0",
@@ -29,6 +32,7 @@
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22.15.30",
     "tsx": "^4.20.3",
-    "typescript": "^5.8.3"
+    "typescript": "^5.8.3",
+    "wrangler": "^4.135.0"
   }
 }

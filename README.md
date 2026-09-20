@@ -19,6 +19,33 @@ The project is an educational discovery and project-idea radar: its aim is not j
 
 Cloudflare deployment has not been implemented yet. The monitor runs locally when invoked.
 
+## Cloudflare Worker and D1 foundation
+
+The repository now contains the code foundation for a future Cloudflare Worker with D1-backed persistence. The Worker has a harmless health response only; it does not run monitoring from HTTP requests.
+
+Current:
+
+- Local JSON runtime state remains the default local implementation.
+- D1 adapters exist for discoveries, notifications, Brave usage, and Gemini usage.
+- The versioned D1 schema lives in `migrations/`.
+
+Not yet done:
+
+- A remote D1 database and its binding ID.
+- Cloudflare production secrets.
+- Worker deployment.
+- A Cron Trigger.
+- Autonomous cloud monitoring execution.
+
+For safe local D1 development only:
+
+```bash
+npm run d1:migrate:local
+npm run worker:typecheck
+```
+
+`d1:migrate:local` explicitly uses Wrangler's `--local` option. Do not add `--remote` until a later deployment step.
+
 ## Local setup
 
 1. Use Node.js 24 (see `.nvmrc`).

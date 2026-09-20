@@ -22,7 +22,7 @@ function stringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === "string");
 }
 
-function validAnalysis(value: unknown): value is AgentAnalysis {
+export function isValidAgentAnalysis(value: unknown): value is AgentAnalysis {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const analysis = value as Record<string, unknown>;
   return nonEmptyString(analysis.name) &&
@@ -54,7 +54,7 @@ export function normalizeDiscoveryUrl(value: string): string {
 function validDiscovery(value: unknown): value is StoredDiscovery {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const discovery = value as Record<string, unknown>;
-  if (!nonEmptyString(discovery.normalizedUrl) || !validTimestamp(discovery.firstSeenAt) || !validTimestamp(discovery.lastSeenAt) || !validAnalysis(discovery.analysis)) {
+  if (!nonEmptyString(discovery.normalizedUrl) || !validTimestamp(discovery.firstSeenAt) || !validTimestamp(discovery.lastSeenAt) || !isValidAgentAnalysis(discovery.analysis)) {
     return false;
   }
 
@@ -98,7 +98,7 @@ export class JsonDiscoveryHistory implements DiscoveryHistory {
   }
 
   async recordDiscovery(analysis: AgentAnalysis, seenAt = new Date()): Promise<StoredDiscovery> {
-    if (!validAnalysis(analysis)) throw new DiscoveryHistoryError("Discovery analysis is invalid and cannot be recorded.");
+    if (!isValidAgentAnalysis(analysis)) throw new DiscoveryHistoryError("Discovery analysis is invalid and cannot be recorded.");
     if (Number.isNaN(seenAt.getTime())) throw new DiscoveryHistoryError("Discovery timestamp is invalid.");
 
     const normalizedUrl = normalizeDiscoveryUrl(analysis.sourceUrl);
