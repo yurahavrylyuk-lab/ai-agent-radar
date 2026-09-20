@@ -17,7 +17,7 @@ The project is an educational discovery and project-idea radar: its aim is not j
 - The original source title and URL are preserved through analysis and notification formatting.
 - Local discovery and notification history preserve operational state across runs.
 
-Cloudflare deployment has not been implemented yet. The monitor runs locally when invoked.
+Production runs in Cloudflare Workers with D1-backed persistence. Public HTTP remains health-only; monitoring runs only from the daily Cloudflare Cron Trigger.
 
 ## Cloudflare Worker and D1 foundation
 
@@ -29,13 +29,7 @@ Current:
 - D1 adapters exist for discoveries, notifications, Brave usage, and Gemini usage.
 - The versioned D1 schema lives in `migrations/`.
 
-Not yet done:
-
-- A remote D1 database and its binding ID.
-- Cloudflare production secrets.
-- Worker deployment.
-- A Cron Trigger.
-- Autonomous cloud monitoring execution.
+Production schedule: `0 8 * * *` UTC (daily at 08:00 UTC). Each scheduled event runs one bounded monitoring cycle: one Brave search, at most one new Gemini analysis, and at most one Resend notification. D1 preserves deduplication, usage, discoveries, and notification history.
 
 For safe local D1 development only:
 

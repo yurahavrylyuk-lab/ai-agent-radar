@@ -9,7 +9,7 @@ import { createRadarRuntimeConfiguration } from "./services/radarRuntimeConfigur
 import { generateWithGemini } from "./tools/llm/gemini.js";
 import { sendWithResend } from "./tools/email/resend.js";
 import { searchWeb } from "./tools/webSearch.js";
-import type { MonitoringCycleDependencies } from "./services/monitor.js";
+import { runMonitoringCycle, type MonitoringCycleDependencies } from "./services/monitor.js";
 
 /** Worker binding names only. Secret values are configured outside source control in Step 8.3. */
 export interface RadarWorkerEnv {
@@ -74,11 +74,19 @@ export function createWorkerMonitoringDependencies(env: RadarWorkerEnv): Monitor
   };
 }
 
+/** Executes one bounded monitoring cycle only when Cloudflare delivers a scheduled event. */
+export function runScheduledMonitoring(env: RadarWorkerEnv): Promise<unknown> {
+  return runMonitoringCycle(undefined, createWorkerMonitoringDependencies(env));
+}
+
 export default {
   fetch(_request: Request, env: RadarWorkerEnv): Response {
     createWorkerPersistence(env);
     return new Response("AI Agent Radar worker ready", {
       headers: { "content-type": "text/plain; charset=UTF-8" },
     });
+  },
+  scheduled(_event: ScheduledEvent, env: RadarWorkerEnv, context: ExecutionContext): void {
+    context.waitUntil(runScheduledMonitoring(env));
   },
 };

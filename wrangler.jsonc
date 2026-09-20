@@ -3,6 +3,7 @@
   "name": "ai-agent-radar",
   "main": "src/worker.ts",
   "compatibility_date": "2026-09-20",
+  "triggers": { "crons": ["0 8 * * *"] },
   "d1_databases": [
     {
       "binding": "DB",

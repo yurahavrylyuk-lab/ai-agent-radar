@@ -36,7 +36,7 @@ test("Worker runtime configuration preserves configured limits and rejects missi
   assert.throws(() => createRadarRuntimeConfiguration(missing), /GEMINI_API_KEY is required/);
 });
 
-test("Worker composition uses D1 stores and does not schedule or start monitoring", () => {
+test("Worker composition uses D1 stores and exposes a scheduled handler without invoking it from fetch", async () => {
   const persistence = createWorkerPersistence(environment());
   const dependencies = createWorkerMonitoringDependencies(environment());
   assert.ok(persistence.discoveryHistory instanceof D1DiscoveryHistory);
@@ -46,5 +46,7 @@ test("Worker composition uses D1 stores and does not schedule or start monitorin
   assert.equal(typeof dependencies.search, "function");
   assert.equal(typeof dependencies.process, "function");
   assert.equal(typeof dependencies.notify, "function");
-  assert.equal("scheduled" in worker, false);
+  assert.equal(typeof worker.scheduled, "function");
+  const response = await worker.fetch(new Request("https://worker.example"), environment());
+  assert.equal(await response.text(), "AI Agent Radar worker ready");
 });
