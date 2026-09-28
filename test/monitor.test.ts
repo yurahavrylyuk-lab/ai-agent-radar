@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { MAX_NEW_ANALYSES_PER_CYCLE, MONITORING_QUERY, runMonitoringCycle } from "../src/services/monitor.js";
+import { MAX_NEW_ANALYSES_PER_CYCLE, MONITORING_QUERIES, MONITORING_QUERY, runMonitoringCycle } from "../src/services/monitor.js";
+import { BraveUsageGuardDeniedError } from "../src/tools/webSearch.js";
 import type { DiscoveryProcessingResult, NotificationResult, SearchResult } from "../src/types/index.js";
 
 function searchResult(id: string): SearchResult {
@@ -34,6 +35,92 @@ const notification = (status: NotificationResult["status"]): NotificationResult 
   if (status === "not_eligible") return { status };
   return { status, record: { normalizedUrl: "https://example.com/record", channel: "email", sentAt: "2026-09-19T14:00:00.000Z", providerMessageId: "email_123" } };
 };
+
+test("default monitoring invokes the exact ten reviewed queries once and in order", async () => {
+  const queries: string[] = [];
+  await runMonitoringCycle(undefined, {
+    search: async (query) => { queries.push(query); return []; },
+  });
+  assert.deepEqual(queries, [...MONITORING_QUERIES]);
+  assert.equal(new Set(queries).size, 10);
+});
+
+test("an explicit query preserves single-search behavior", async () => {
+  const queries: string[] = [];
+  await runMonitoringCycle("some query", {
+    search: async (query) => { queries.push(query); return []; },
+  });
+  assert.deepEqual(queries, ["some query"]);
+});
+
+test("guard denial preserves earlier query results and stops later collection", async () => {
+  const first = searchResult("first-query");
+  const second = searchResult("second-query");
+  const searches: string[] = [];
+  const processedUrls: string[] = [];
+  const outcome = await runMonitoringCycle(undefined, {
+    search: async (query) => {
+      searches.push(query);
+      if (searches.length === 1) return [first];
+      if (searches.length === 2) return [second];
+      throw new BraveUsageGuardDeniedError();
+    },
+    hasDiscovery: async () => true,
+    process: async (item) => { processedUrls.push(item.url); return processed(item, "duplicate"); },
+    notify: async () => notification("not_eligible"),
+  });
+  assert.deepEqual(searches, [...MONITORING_QUERIES.slice(0, 3)]);
+  assert.deepEqual(processedUrls, [first.url, second.url]);
+  assert.equal(outcome.searchResultsReceived, 2);
+  assert.equal(outcome.resultsProcessed, 2);
+});
+
+test("cross-query results reach the existing processing loop in query and provider order", async () => {
+  const processedUrls: string[] = [];
+  const outcome = await runMonitoringCycle(undefined, {
+    search: async (query) => {
+      const index = MONITORING_QUERIES.indexOf(query as (typeof MONITORING_QUERIES)[number]);
+      return [searchResult(String(index) + "-a"), searchResult(String(index) + "-b")];
+    },
+    hasDiscovery: async () => true,
+    process: async (item) => { processedUrls.push(item.url); return processed(item, "duplicate"); },
+    notify: async () => notification("not_eligible"),
+  });
+  assert.equal(outcome.searchResultsReceived, 20);
+  assert.deepEqual(processedUrls, Array.from({ length: 10 }, (_, index) => [
+    "https://example.com/" + index + "-a",
+    "https://example.com/" + index + "-b",
+  ]).flat());
+});
+
+test("the one-analysis cap applies across the full default query batch", async () => {
+  let processCalls = 0;
+  const outcome = await runMonitoringCycle(undefined, {
+    search: async (query) => [searchResult(String(MONITORING_QUERIES.indexOf(query as (typeof MONITORING_QUERIES)[number])))],
+    hasDiscovery: async () => false,
+    process: async (item) => { processCalls += 1; return processed(item, "new"); },
+    notify: async () => notification("not_eligible"),
+  });
+  assert.equal(MAX_NEW_ANALYSES_PER_CYCLE, 1);
+  assert.equal(processCalls, 1);
+  assert.equal(outcome.analysesAttempted, 1);
+  assert.equal(outcome.stoppedByAnalysisCap, true);
+});
+
+test("a non-guard failure during default collection retains abort behavior", async () => {
+  let searches = 0;
+  let processCalls = 0;
+  await assert.rejects(runMonitoringCycle(undefined, {
+    search: async () => {
+      searches += 1;
+      if (searches === 2) throw new Error("Brave unavailable");
+      return [searchResult("collected-before-failure")];
+    },
+    process: async (item) => { processCalls += 1; return processed(item, "new"); },
+  }), /Monitoring cycle search failed: Brave unavailable/);
+  assert.equal(searches, 2);
+  assert.equal(processCalls, 0);
+});
 
 test("zero search results return a clean summary without processing or notification", async () => {
   let processCalls = 0;

@@ -7,10 +7,22 @@ import { LocalJsonGeminiUsageStore } from "./localJsonGeminiUsageStore.js";
 import { JsonNotificationHistory } from "./notificationHistory.js";
 import { generateWithGemini } from "../tools/llm/gemini.js";
 import { analyzeSearchResult } from "./analysisAgent.js";
-import { searchWeb } from "../tools/webSearch.js";
+import { BraveUsageGuardDeniedError, searchWeb } from "../tools/webSearch.js";
 import type { DiscoveryProcessingResult, MonitoringCycleResult, NotificationResult, SearchResult } from "../types/index.js";
 
 export const MONITORING_QUERY = "new AI agent developer tool framework release";
+export const MONITORING_QUERIES = [
+  "AI news research product announcements",
+  "AI agent framework releases",
+  "AI model releases capabilities",
+  "AI programming software development techniques",
+  "AI developer tools releases",
+  "Claude developer features releases",
+  "Codex coding features releases",
+  "AI coding tools releases",
+  "AI assisted development workflow examples",
+  "useful AI IT tools workflow tutorials",
+] as const;
 export const MAX_NEW_ANALYSES_PER_CYCLE = 1;
 
 type WebSearch = (query: string) => Promise<SearchResult[]>;
@@ -58,18 +70,22 @@ function recordNotification(result: MonitoringCycleResult, notification: Notific
 
 /** Runs one sequential discovery, analysis, and notification cycle. */
 export async function runMonitoringCycle(
-  query = MONITORING_QUERY,
+  query: string | undefined = undefined,
   dependencies: MonitoringCycleDependencies = {},
 ): Promise<MonitoringCycleResult> {
   const search = dependencies.search ?? ((searchQuery: string) => searchWeb(searchQuery, { usageTracker: new LocalJsonBraveUsageStore() }));
-  let searchResults: SearchResult[];
-  try {
-    searchResults = await search(query);
-  } catch (error) {
-    throw new Error(`Monitoring cycle search failed: ${errorMessage(error)}`);
+  const queries = query === undefined ? MONITORING_QUERIES : [query];
+  const searchResults: SearchResult[] = [];
+  for (const searchQuery of queries) {
+    try {
+      searchResults.push(...await search(searchQuery));
+    } catch (error) {
+      if (query === undefined && error instanceof BraveUsageGuardDeniedError) break;
+      throw new Error(`Monitoring cycle search failed: ${errorMessage(error)}`);
+    }
   }
 
-  const result = emptyResult(query, searchResults.length);
+  const result = emptyResult(query ?? MONITORING_QUERIES.join(" | "), searchResults.length);
   const discoveryHistory = dependencies.history ?? new JsonDiscoveryHistory();
   const hasDiscovery = dependencies.hasDiscovery ?? (async (url: string) => (await discoveryHistory.getDiscovery(url)) !== undefined);
   const process = dependencies.process ?? ((searchResult: SearchResult) => processSearchResult(searchResult, {

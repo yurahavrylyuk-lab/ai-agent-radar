@@ -24,6 +24,14 @@ export interface SearchWebDependencies {
   fetchImplementation?: typeof fetch;
 }
 
+/** Signals that the existing Brave usage guard denied a request. */
+export class BraveUsageGuardDeniedError extends Error {
+  constructor() {
+    super("Brave search request blocked by usage guard.");
+    this.name = "BraveUsageGuardDeniedError";
+  }
+}
+
 function getSourceName(url: string): string | undefined {
   try {
     return new URL(url).hostname.replace(/^www\./, "");
@@ -66,7 +74,7 @@ export async function searchWeb(
   if (!usageTracker) throw new Error("Brave usage tracker is required.");
   const usageCheck = await checkBraveSearchUsage(usageTracker, environment);
   if (!usageCheck.allowed) {
-    throw new Error("Brave search request blocked by usage guard.");
+    throw new BraveUsageGuardDeniedError();
   }
 
   const fetchImplementation = dependencies.fetchImplementation ?? fetch;
