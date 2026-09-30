@@ -43,10 +43,10 @@ test("uses output_text when provided", async () => {
   const result = await generateWithGemini("test", { usageTracker: tracker, fetchImplementation: (async () => jsonResponse({ output_text: "GEMINI_OK", usage: { total_input_tokens: 1, total_output_tokens: 1, total_tokens: 2 } })) as typeof fetch });
   assert.equal(result.outputText, "GEMINI_OK");
 });
-test("does not record an HTTP error", async () => {
+test("records zero tokens for HTTP error and does not retry", async () => {
   const tracker = new MemoryTracker({ records: [], usageUnknown: false });
-  await assert.rejects(generateWithGemini("test", { usageTracker: tracker, fetchImplementation: (async () => jsonResponse({ error: { message: "Invalid request" } }, 400, "Bad Request")) as typeof fetch }), /HTTP 400 Bad Request: Invalid request/);
-  assert.equal(tracker.recordCalls, 0);
+  await assert.rejects(generateWithGemini("test", { usageTracker: tracker, retryDelayMs: 0, fetchImplementation: (async () => jsonResponse({ error: { message: "Invalid request" } }, 400, "Bad Request")) as typeof fetch }), /HTTP 400 Bad Request: Invalid request/);
+  assert.equal(tracker.recordCalls, 1);
 });
 test("does not record a network error", async () => {
   const tracker = new MemoryTracker({ records: [], usageUnknown: false });
@@ -61,4 +61,63 @@ test("does not record an aborted request", async () => {
     throw new Error("unreachable");
   }) as typeof fetch }), /Gemini request timed out after 30 seconds/);
   assert.equal(tracker.recordCalls, 0);
+});
+test("records zero tokens on 503 and retries, succeeds on second attempt", async () => {
+  const tracker = new MemoryTracker({ records: [], usageUnknown: false });
+  let fetchCalls = 0;
+  const result = await generateWithGemini("test", {
+    usageTracker: tracker,
+    retryDelayMs: 0,
+    fetchImplementation: (async () => {
+      fetchCalls++;
+      if (fetchCalls === 1) return jsonResponse({}, 503, "Service Unavailable");
+      return jsonResponse(successfulBody);
+    }) as typeof fetch,
+  });
+  assert.equal(fetchCalls, 2);
+  assert.equal(tracker.recordCalls, 2); // zero-token for the 503, actual-token for the success
+  assert.equal(result.outputText, "GEMINI_OK");
+  assert.deepEqual(result.usage, { inputTokens: 9, outputTokens: 4, thoughtTokens: 99, totalTokens: 112 });
+});
+test("records once per attempt and fails permanently after exhausting all 503 retries", async () => {
+  const tracker = new MemoryTracker({ records: [], usageUnknown: false });
+  let fetchCalls = 0;
+  await assert.rejects(
+    generateWithGemini("test", {
+      usageTracker: tracker,
+      retryDelayMs: 0,
+      fetchImplementation: (async () => { fetchCalls++; return jsonResponse({}, 503, "Service Unavailable"); }) as typeof fetch,
+    }),
+    /HTTP 503 Service Unavailable/,
+  );
+  assert.equal(fetchCalls, 4); // 1 initial attempt + 3 retries
+  assert.equal(tracker.recordCalls, 4); // every completed HTTP response recorded exactly once
+});
+test("does not retry on 429", async () => {
+  const tracker = new MemoryTracker({ records: [], usageUnknown: false });
+  let fetchCalls = 0;
+  await assert.rejects(
+    generateWithGemini("test", {
+      usageTracker: tracker,
+      retryDelayMs: 0,
+      fetchImplementation: (async () => { fetchCalls++; return jsonResponse({ error: { message: "Rate limited" } }, 429, "Too Many Requests"); }) as typeof fetch,
+    }),
+    /HTTP 429 Too Many Requests: Rate limited/,
+  );
+  assert.equal(fetchCalls, 1);
+  assert.equal(tracker.recordCalls, 1);
+});
+test("does not retry on 500", async () => {
+  const tracker = new MemoryTracker({ records: [], usageUnknown: false });
+  let fetchCalls = 0;
+  await assert.rejects(
+    generateWithGemini("test", {
+      usageTracker: tracker,
+      retryDelayMs: 0,
+      fetchImplementation: (async () => { fetchCalls++; return jsonResponse({ error: { message: "Internal error" } }, 500, "Internal Server Error"); }) as typeof fetch,
+    }),
+    /HTTP 500 Internal Server Error: Internal error/,
+  );
+  assert.equal(fetchCalls, 1);
+  assert.equal(tracker.recordCalls, 1);
 });
