@@ -1,7 +1,7 @@
 import { JsonDiscoveryHistory, DiscoveryHistoryError, type DiscoveryHistory } from "./discoveryHistory.js";
 import { processSearchResult } from "./discoveryProcessor.js";
 import { NotificationHistoryError } from "./notificationHistory.js";
-import { notifyDiscovery, type NotificationOrchestratorDependencies } from "./notificationOrchestrator.js";
+import { notifyDigest, type NotificationOrchestratorDependencies } from "./notificationOrchestrator.js";
 import { LocalJsonBraveUsageStore } from "./localJsonBraveUsageStore.js";
 import { LocalJsonGeminiUsageStore } from "./localJsonGeminiUsageStore.js";
 import { JsonNotificationHistory } from "./notificationHistory.js";
@@ -23,12 +23,12 @@ export const MONITORING_QUERIES = [
   "AI assisted development workflow examples",
   "useful AI IT tools workflow tutorials",
 ] as const;
-export const MAX_NEW_ANALYSES_PER_CYCLE = 1;
+export const MAX_NEW_ANALYSES_PER_CYCLE = 4;
 
 type WebSearch = (query: string) => Promise<SearchResult[]>;
 type DiscoveryLookup = (url: string) => Promise<boolean>;
 type DiscoveryProcessor = (result: SearchResult) => Promise<DiscoveryProcessingResult>;
-type NotificationProcessor = (result: DiscoveryProcessingResult) => Promise<NotificationResult>;
+type NotificationProcessor = (results: DiscoveryProcessingResult[]) => Promise<Map<string, NotificationResult>>;
 
 export interface MonitoringCycleDependencies {
   search?: WebSearch;
@@ -68,7 +68,7 @@ function recordNotification(result: MonitoringCycleResult, notification: Notific
   if (notification.status === "not_eligible") result.notificationsNotEligible += 1;
 }
 
-/** Runs one sequential discovery, analysis, and notification cycle. */
+/** Runs one sequential discovery, analysis, and digest-notification cycle. */
 export async function runMonitoringCycle(
   query: string | undefined = undefined,
   dependencies: MonitoringCycleDependencies = {},
@@ -90,10 +90,14 @@ export async function runMonitoringCycle(
   const hasDiscovery = dependencies.hasDiscovery ?? (async (url: string) => (await discoveryHistory.getDiscovery(url)) !== undefined);
   const process = dependencies.process ?? ((searchResult: SearchResult) => processSearchResult(searchResult, {
     history: discoveryHistory,
-    analyze: (result) => analyzeSearchResult(result, { generate: (input) => generateWithGemini(input, { usageTracker: new LocalJsonGeminiUsageStore() }) }),
+    analyze: (r) => analyzeSearchResult(r, { generate: (input) => generateWithGemini(input, { usageTracker: new LocalJsonGeminiUsageStore() }) }),
   }));
   const notification = dependencies.notification ?? { history: new JsonNotificationHistory() };
-  const notify = dependencies.notify ?? ((processingResult: DiscoveryProcessingResult) => notifyDiscovery(processingResult, notification));
+  const notify = dependencies.notify ?? ((results: DiscoveryProcessingResult[]) => notifyDigest(results, notification));
+
+  // Phase 1: Process all search results sequentially.
+  type ProcessedItem = { searchResult: SearchResult; processed: DiscoveryProcessingResult };
+  const processedItems: ProcessedItem[] = [];
 
   for (const searchResult of searchResults) {
     let knownDiscovery: boolean;
@@ -125,26 +129,39 @@ export async function runMonitoringCycle(
     result.resultsProcessed += 1;
     if (processed.status === "new") result.newDiscoveries += 1;
     if (processed.status === "duplicate") result.duplicates += 1;
+    processedItems.push({ searchResult, processed });
+  }
 
+  // Phase 2: Send one digest notification for all processed items.
+  if (processedItems.length > 0) {
+    let notificationResults: Map<string, NotificationResult>;
     try {
-      const notification = await notify(processed);
-      recordNotification(result, notification);
-      result.outcomes.push({
-        sourceTitle: searchResult.title,
-        sourceUrl: searchResult.url,
-        discoveryStatus: processed.status,
-        notificationStatus: notification.status,
-      });
+      notificationResults = await notify(processedItems.map(({ processed }) => processed));
     } catch (error) {
       if (error instanceof NotificationHistoryError) {
         throw new Error(`Monitoring cycle aborted: notification history is unavailable: ${errorMessage(error)}`);
       }
-      result.failures += 1;
+      result.failures += processedItems.length;
+      for (const { searchResult, processed } of processedItems) {
+        result.outcomes.push({
+          sourceTitle: searchResult.title,
+          sourceUrl: searchResult.url,
+          discoveryStatus: processed.status,
+          error: errorMessage(error),
+        });
+      }
+      return result;
+    }
+
+    for (const { searchResult, processed } of processedItems) {
+      const url = processed.discovery.analysis.sourceUrl;
+      const notif = notificationResults.get(url) ?? { status: "not_eligible" as const };
+      recordNotification(result, notif);
       result.outcomes.push({
         sourceTitle: searchResult.title,
         sourceUrl: searchResult.url,
         discoveryStatus: processed.status,
-        error: errorMessage(error),
+        notificationStatus: notif.status,
       });
     }
   }

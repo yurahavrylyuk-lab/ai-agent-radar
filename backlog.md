@@ -21,7 +21,7 @@ Detailed implementation requirements live in [`plan.md`](./plan.md).
 
 ## P1 — Four-Story Daily Digest
 
-**Status:** TODO  
+**Status:** DONE  
 **Priority:** High
 
 - Send one combined daily email.

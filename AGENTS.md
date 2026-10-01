@@ -26,7 +26,7 @@ Applies to the entire repository and all Architect, Builder, and Analyst work.
 ## Production invariants
 
 - Cloudflare Cron runs daily at `0 8 * * *` UTC. HTTP returns only `AI Agent Radar worker ready` and must never start monitoring; no manual monitoring endpoint.
-- Per cycle: at most 1 Brave request, 1 new Gemini analysis, 1 Resend email, and 0 OpenAI calls. No automatic full-cycle retries.
+- Per cycle: at most 1 Brave request, up to 4 new Gemini analyses, 1 Resend email, and 0 OpenAI calls. No automatic full-cycle retries.
 - Deduplicate discoveries before Gemini; known URLs update `lastSeenAt` without analysis. Email requires a new discovery, relevance score >= 7, and no previous email notification for the normalized URL/channel.
 - Production persistence is D1. The Worker bundle must exclude local JSON persistence, Node filesystem modules, dotenv, and OpenAI cloud dependencies.
 - Secrets belong in Worker secret bindings. Never commit API keys, the notification email address, temporary authentication secrets, or deployment credentials. See PROJECT_STATE.md for all limits and safety rules.
