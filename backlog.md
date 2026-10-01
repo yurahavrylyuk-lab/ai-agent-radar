@@ -4,7 +4,7 @@ Detailed implementation requirements live in [`plan.md`](./plan.md).
 
 ## P0 — Gemini 503 Retry
 
-**Status:** TODO  
+**Status:** DONE — implemented in commit `9d545f1` (PR #1, merged 2026-09-30)  
 **Priority:** Critical
 
 - Retry only HTTP 503.
