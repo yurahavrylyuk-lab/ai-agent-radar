@@ -1,6 +1,6 @@
 # AI Agent Radar — Implementation Plan
 
-## P0 · Gemini 503 Retry
+## P0 · Gemini 503 Retry ✅ DONE
 
 **Goal:** After a 503 response from the Gemini API, wait 5 seconds and retry the same request up to 3 times (i.e., 1 initial attempt + 3 retries = 4 total attempts maximum).
 
@@ -25,7 +25,7 @@
 
 ---
 
-## P1 · Four-Story Combined Daily Email
+## P1 · Four-Story Combined Daily Email ✅ DONE
 
 **Goal:** Replace the current one-analysis-per-cycle email with a single daily email containing four stories in a defined format.
 

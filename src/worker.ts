@@ -4,7 +4,6 @@ import { D1GeminiUsageStore } from "./services/d1GeminiUsageStore.js";
 import { D1NotificationHistory } from "./services/d1NotificationHistory.js";
 import { analyzeSearchResult } from "./services/analysisAgent.js";
 import { processSearchResult } from "./services/discoveryProcessor.js";
-import { notifyDiscovery } from "./services/notificationOrchestrator.js";
 import { createRadarRuntimeConfiguration } from "./services/radarRuntimeConfiguration.js";
 import { generateWithGemini } from "./tools/llm/gemini.js";
 import { sendWithResend } from "./tools/email/resend.js";
@@ -65,12 +64,6 @@ export function createWorkerMonitoringDependencies(env: RadarWorkerEnv): Monitor
         environment: configuration.environment,
       }),
     },
-    notify: (result) => notifyDiscovery(result, {
-      history: persistence.notificationHistory,
-      sendEmail: (content) => sendWithResend(content, {
-        environment: configuration.environment,
-      }),
-    }),
   };
 }
 

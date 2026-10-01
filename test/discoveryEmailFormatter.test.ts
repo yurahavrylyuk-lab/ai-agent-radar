@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { formatDiscoveryEmail } from "../src/services/discoveryEmailFormatter.js";
+import { formatDiscoveryEmail, formatDigestEmail } from "../src/services/discoveryEmailFormatter.js";
 import type { StoredDiscovery } from "../src/types/index.js";
 
 function discovery(): StoredDiscovery {
@@ -102,4 +102,112 @@ test("does not mutate the stored discovery", () => {
   formatDiscoveryEmail(input);
 
   assert.deepEqual(input, original);
+});
+
+// ── formatDigestEmail ─────────────────────────────────────────────────────────
+
+function digestStory(id: string, relevanceScore = 8): StoredDiscovery {
+  return {
+    normalizedUrl: `https://example.com/${id}`,
+    firstSeenAt: "2026-09-19T12:00:00.000Z",
+    lastSeenAt: "2026-09-19T12:00:00.000Z",
+    analysis: {
+      name: `Story ${id}`,
+      category: "new_agent",
+      summary: `Summary of ${id}.`,
+      relevanceScore,
+      whyItMatters: `Why ${id} matters.`,
+      educationalValue: `Learn from ${id}.`,
+      projectOpportunities: [`Build with ${id}`, `Extend ${id}`],
+      technologies: ["TypeScript"],
+      sourceTitle: `Source ${id}`,
+      sourceUrl: `https://example.com/${id}`,
+    },
+  };
+}
+
+test("digest lead story renders an h2 with the story name, summary, why-it-matters, and key-points list", () => {
+  const content = formatDigestEmail([digestStory("lead"), digestStory("two")]);
+
+  assert.match(content.html, /<h2[^>]*>[\s\S]*?Story lead[\s\S]*?<\/h2>/);
+  assert.match(content.html, /Summary of lead\./);
+  assert.match(content.html, /[Ww]hy it matters/);
+  assert.match(content.html, /Why lead matters\./);
+  assert.match(content.html, /<ul/);
+  assert.match(content.html, /<li[^>]*>[\s\S]*?Build with lead/);
+});
+
+test("digest concise stories render story name, summary, and source link without h2", () => {
+  const content = formatDigestEmail([digestStory("lead"), digestStory("two"), digestStory("three")]);
+
+  assert.match(content.html, /Story two/);
+  assert.match(content.html, /Summary of two\./);
+  assert.match(content.html, /href="https:\/\/example\.com\/two"/);
+  assert.doesNotMatch(content.html, /<h2[^>]*>[\s\S]*?Story two[\s\S]*?<\/h2>/);
+});
+
+test("digest subject includes the lead story name and a count of additional stories", () => {
+  const one = formatDigestEmail([digestStory("alpha")]);
+  assert.match(one.subject, /Story alpha/);
+  assert.doesNotMatch(one.subject, /\+ \d+ more/);
+
+  const four = formatDigestEmail([digestStory("alpha"), digestStory("beta"), digestStory("gamma"), digestStory("delta")]);
+  assert.match(four.subject, /Story alpha/);
+  assert.match(four.subject, /\+ 3 more/);
+});
+
+test("digest with one story renders only the lead format", () => {
+  const content = formatDigestEmail([digestStory("only")]);
+
+  assert.match(content.html, /<h2[^>]*>[\s\S]*?Story only[\s\S]*?<\/h2>/);
+  assert.doesNotMatch(content.html, /Story 2/);
+});
+
+test("digest with four stories renders one lead and three concise blocks", () => {
+  const content = formatDigestEmail([digestStory("a"), digestStory("b"), digestStory("c"), digestStory("d")]);
+
+  assert.match(content.html, /<h2[^>]*>[\s\S]*?Story a[\s\S]*?<\/h2>/);
+  assert.match(content.html, /Story 2/);
+  assert.match(content.html, /Story 3/);
+  assert.match(content.html, /Story 4/);
+});
+
+test("digest plain-text body contains lead detail and concise summaries", () => {
+  const content = formatDigestEmail([digestStory("alpha"), digestStory("beta")]);
+
+  assert.match(content.text, /STORY 1 — LEAD/);
+  assert.match(content.text, /Story alpha/);
+  assert.match(content.text, /WHY IT MATTERS/);
+  assert.match(content.text, /Why alpha matters\./);
+  assert.match(content.text, /KEY POINTS/);
+  assert.match(content.text, /Build with alpha/);
+  assert.match(content.text, /STORY 2/);
+  assert.match(content.text, /Summary of beta\./);
+});
+
+test("digest escapes model-derived HTML in lead and concise slots", () => {
+  const lead = digestStory("lead");
+  lead.analysis.name = "<script>alert('xss')</script>";
+  lead.analysis.summary = "<img src=x onerror=alert(1)>";
+  lead.analysis.whyItMatters = "<b>bold</b>";
+  lead.analysis.projectOpportunities = ["<evil>point</evil>"];
+
+  const conciseStory = digestStory("two");
+  conciseStory.analysis.name = "<b>concise</b>";
+  conciseStory.analysis.summary = "<i>italic</i>";
+
+  const content = formatDigestEmail([lead, conciseStory]);
+
+  assert.doesNotMatch(content.html, /<script>|<img |<b>|<i>|<evil>/);
+  assert.match(content.html, /&lt;script&gt;/);
+  assert.match(content.html, /&lt;b&gt;concise&lt;\/b&gt;/);
+});
+
+test("formatDigestEmail does not mutate stored discoveries", () => {
+  const stories = [digestStory("a"), digestStory("b")];
+  const originals = stories.map((s) => structuredClone(s));
+
+  formatDigestEmail(stories);
+
+  assert.deepEqual(stories, originals);
 });

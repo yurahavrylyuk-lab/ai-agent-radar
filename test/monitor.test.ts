@@ -36,6 +36,15 @@ const notification = (status: NotificationResult["status"]): NotificationResult 
   return { status, record: { normalizedUrl: "https://example.com/record", channel: "email", sentAt: "2026-09-19T14:00:00.000Z", providerMessageId: "email_123" } };
 };
 
+/** Creates a batch notify stub that returns the given status for every result. */
+function batchNotify(status: NotificationResult["status"]) {
+  return async (results: DiscoveryProcessingResult[]): Promise<Map<string, NotificationResult>> => {
+    const map = new Map<string, NotificationResult>();
+    for (const r of results) map.set(r.discovery.analysis.sourceUrl, notification(status));
+    return map;
+  };
+}
+
 test("default monitoring invokes the exact ten reviewed queries once and in order", async () => {
   const queries: string[] = [];
   await runMonitoringCycle(undefined, {
@@ -67,7 +76,7 @@ test("guard denial preserves earlier query results and stops later collection", 
     },
     hasDiscovery: async () => true,
     process: async (item) => { processedUrls.push(item.url); return processed(item, "duplicate"); },
-    notify: async () => notification("not_eligible"),
+    notify: batchNotify("not_eligible"),
   });
   assert.deepEqual(searches, [...MONITORING_QUERIES.slice(0, 3)]);
   assert.deepEqual(processedUrls, [first.url, second.url]);
@@ -84,7 +93,7 @@ test("cross-query results reach the existing processing loop in query and provid
     },
     hasDiscovery: async () => true,
     process: async (item) => { processedUrls.push(item.url); return processed(item, "duplicate"); },
-    notify: async () => notification("not_eligible"),
+    notify: batchNotify("not_eligible"),
   });
   assert.equal(outcome.searchResultsReceived, 20);
   assert.deepEqual(processedUrls, Array.from({ length: 10 }, (_, index) => [
@@ -93,17 +102,17 @@ test("cross-query results reach the existing processing loop in query and provid
   ]).flat());
 });
 
-test("the one-analysis cap applies across the full default query batch", async () => {
+test("the four-analysis cap applies across the full default query batch", async () => {
   let processCalls = 0;
   const outcome = await runMonitoringCycle(undefined, {
     search: async (query) => [searchResult(String(MONITORING_QUERIES.indexOf(query as (typeof MONITORING_QUERIES)[number])))],
     hasDiscovery: async () => false,
     process: async (item) => { processCalls += 1; return processed(item, "new"); },
-    notify: async () => notification("not_eligible"),
+    notify: batchNotify("not_eligible"),
   });
-  assert.equal(MAX_NEW_ANALYSES_PER_CYCLE, 1);
-  assert.equal(processCalls, 1);
-  assert.equal(outcome.analysesAttempted, 1);
+  assert.equal(MAX_NEW_ANALYSES_PER_CYCLE, 4);
+  assert.equal(processCalls, 4);
+  assert.equal(outcome.analysesAttempted, 4);
   assert.equal(outcome.stoppedByAnalysisCap, true);
 });
 
@@ -129,7 +138,7 @@ test("zero search results return a clean summary without processing or notificat
     search: async () => [],
     hasDiscovery: async () => { throw new Error("should not inspect history"); },
     process: async () => { processCalls++; throw new Error("unreachable"); },
-    notify: async () => { notificationCalls++; return notification("not_eligible"); },
+    notify: async (_results) => { notificationCalls++; return new Map(); },
   });
   assert.equal(outcome.searchResultsReceived, 0);
   assert.equal(outcome.resultsProcessed, 0);
@@ -138,38 +147,43 @@ test("zero search results return a clean summary without processing or notificat
   assert.equal(notificationCalls, 0);
 });
 
-test("all duplicates use zero analysis slots and still reach notification processing", async () => {
+test("all duplicates use zero analysis slots and still reach batch notification", async () => {
   const results = [searchResult("one"), searchResult("two"), searchResult("three")];
   let processCalls = 0;
-  let notificationCalls = 0;
+  let notificationBatchCalls = 0;
   const outcome = await runMonitoringCycle("test", {
     search: async () => results,
     hasDiscovery: async () => true,
     process: async (item) => { processCalls++; return processed(item, "duplicate"); },
-    notify: async () => { notificationCalls++; return notification("not_eligible"); },
+    notify: async (items) => {
+      notificationBatchCalls++;
+      const map = new Map<string, NotificationResult>();
+      for (const r of items) map.set(r.discovery.analysis.sourceUrl, notification("not_eligible"));
+      return map;
+    },
   });
   assert.equal(outcome.analysesAttempted, 0);
   assert.equal(outcome.duplicates, 3);
   assert.equal(outcome.resultsProcessed, 3);
   assert.equal(outcome.notificationsNotEligible, 3);
   assert.equal(processCalls, 3);
-  assert.equal(notificationCalls, 3);
+  assert.equal(notificationBatchCalls, 1); // one batch call for all three items
 });
 
-test("two unseen results analyze only the first and stop at the one-analysis cap", async () => {
+test("with fewer new results than the cap all are analyzed without stopping", async () => {
   const results = [searchResult("one"), searchResult("two"), searchResult("three")];
   const processedUrls: string[] = [];
   const outcome = await runMonitoringCycle("test", {
     search: async () => results,
     hasDiscovery: async () => false,
     process: async (item) => { processedUrls.push(item.url); return processed(item, "new"); },
-    notify: async () => notification("not_eligible"),
+    notify: batchNotify("not_eligible"),
   });
-  assert.equal(MAX_NEW_ANALYSES_PER_CYCLE, 1);
-  assert.equal(outcome.analysesAttempted, 1);
-  assert.equal(outcome.newDiscoveries, 1);
-  assert.equal(outcome.stoppedByAnalysisCap, true);
-  assert.deepEqual(processedUrls, results.slice(0, 1).map((item) => item.url));
+  assert.equal(MAX_NEW_ANALYSES_PER_CYCLE, 4);
+  assert.equal(outcome.analysesAttempted, 3);
+  assert.equal(outcome.newDiscoveries, 3);
+  assert.equal(outcome.stoppedByAnalysisCap, false);
+  assert.deepEqual(processedUrls, results.map((item) => item.url));
 });
 
 test("many duplicates consume zero slots before one unseen result", async () => {
@@ -183,7 +197,7 @@ test("many duplicates consume zero slots before one unseen result", async () => 
       processedUrls.push(item.url);
       return processed(item, duplicateUrls.has(item.url) ? "duplicate" : "new");
     },
-    notify: async () => notification("not_eligible"),
+    notify: batchNotify("not_eligible"),
   });
   assert.equal(outcome.duplicates, 3);
   assert.equal(outcome.newDiscoveries, 1);
@@ -192,7 +206,7 @@ test("many duplicates consume zero slots before one unseen result", async () => 
   assert.deepEqual(processedUrls, results.map((item) => item.url));
 });
 
-test("duplicate, new, duplicate, new processes the later duplicate but not the second new result", async () => {
+test("duplicate, new, duplicate, new — all four items processed within the four-analysis cap", async () => {
   const results = [searchResult("duplicate-one"), searchResult("new-one"), searchResult("duplicate-two"), searchResult("new-two")];
   const duplicateUrls = new Set([results[0].url, results[2].url]);
   const processedUrls: string[] = [];
@@ -203,13 +217,13 @@ test("duplicate, new, duplicate, new processes the later duplicate but not the s
       processedUrls.push(item.url);
       return processed(item, duplicateUrls.has(item.url) ? "duplicate" : "new");
     },
-    notify: async () => notification("not_eligible"),
+    notify: batchNotify("not_eligible"),
   });
   assert.equal(outcome.duplicates, 2);
-  assert.equal(outcome.newDiscoveries, 1);
-  assert.equal(outcome.analysesAttempted, 1);
-  assert.equal(outcome.stoppedByAnalysisCap, true);
-  assert.deepEqual(processedUrls, results.slice(0, 3).map((item) => item.url));
+  assert.equal(outcome.newDiscoveries, 2);
+  assert.equal(outcome.analysesAttempted, 2);
+  assert.equal(outcome.stoppedByAnalysisCap, false);
+  assert.deepEqual(processedUrls, results.map((item) => item.url));
   assert.equal(outcome.resultsProcessed, outcome.duplicates + outcome.newDiscoveries);
 });
 
@@ -219,7 +233,7 @@ test("a new low-relevance discovery records a not-eligible notification outcome"
     search: async () => [item],
     hasDiscovery: async () => false,
     process: async () => processed(item, "new"),
-    notify: async () => notification("not_eligible"),
+    notify: batchNotify("not_eligible"),
   });
   assert.equal(outcome.notificationsNotEligible, 1);
   assert.deepEqual(outcome.outcomes[0].notificationStatus, "not_eligible");
@@ -231,7 +245,7 @@ test("an eligible new discovery increments sent notifications", async () => {
     search: async () => [item],
     hasDiscovery: async () => false,
     process: async () => processed(item, "new"),
-    notify: async () => notification("sent"),
+    notify: batchNotify("sent"),
   });
   assert.equal(outcome.notificationsSent, 1);
   assert.equal(outcome.notificationsAlreadySent, 0);
@@ -243,7 +257,7 @@ test("an already-sent outcome increments its dedicated summary count", async () 
     search: async () => [item],
     hasDiscovery: async () => false,
     process: async () => processed(item, "new"),
-    notify: async () => notification("already_sent"),
+    notify: batchNotify("already_sent"),
   });
   assert.equal(outcome.notificationsAlreadySent, 1);
   assert.equal(outcome.notificationsSent, 0);
@@ -258,7 +272,7 @@ test("search failure aborts the cycle before processing starts", async () => {
   assert.equal(processCalls, 0);
 });
 
-test("a failed first unseen analysis consumes the only slot and does not retry later unseen results", async () => {
+test("a failed analysis counts against the cap and the cycle continues with remaining capacity", async () => {
   const results = [searchResult("failure"), searchResult("success"), searchResult("skipped")];
   let processCalls = 0;
   const outcome = await runMonitoringCycle("test", {
@@ -269,13 +283,14 @@ test("a failed first unseen analysis consumes the only slot and does not retry l
       if (item.url === results[0].url) throw new Error("Gemini analysis failed");
       return processed(item, "new");
     },
-    notify: async () => notification("not_eligible"),
+    notify: batchNotify("not_eligible"),
   });
-  assert.equal(processCalls, 1);
-  assert.equal(outcome.analysesAttempted, 1);
+  // cap=4, 3 new results: failure consumes 1 slot, success and skipped consume 1 each
+  assert.equal(processCalls, 3);
+  assert.equal(outcome.analysesAttempted, 3);
   assert.equal(outcome.failures, 1);
-  assert.equal(outcome.newDiscoveries, 0);
-  assert.equal(outcome.stoppedByAnalysisCap, true);
+  assert.equal(outcome.newDiscoveries, 2);
+  assert.equal(outcome.stoppedByAnalysisCap, false);
 });
 
 test("notification failure is represented without retrying processing or notification", async () => {
@@ -285,7 +300,7 @@ test("notification failure is represented without retrying processing or notific
     search: async () => [item],
     hasDiscovery: async () => false,
     process: async () => processed(item, "new"),
-    notify: async () => { notificationCalls++; throw new Error("email delivery failed"); },
+    notify: async (_results) => { notificationCalls++; throw new Error("email delivery failed"); },
   });
   assert.equal(notificationCalls, 1);
   assert.equal(outcome.failures, 1);
@@ -309,7 +324,7 @@ test("the cycle does not mutate SearchResult inputs", async () => {
     search: async () => input,
     hasDiscovery: async () => true,
     process: async (item) => processed(item, "duplicate"),
-    notify: async () => notification("not_eligible"),
+    notify: batchNotify("not_eligible"),
   });
   assert.deepEqual(input, original);
 });

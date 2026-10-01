@@ -162,3 +162,102 @@ Automated AI discovery monitor`,
 </html>`,
   };
 }
+
+// ── Digest email ──────────────────────────────────────────────────────────────
+
+function digestSubject(stories: StoredDiscovery[]): string {
+  const lead = stories[0].analysis.name.replace(/[\r\n]+/g, " ").trim().slice(0, MAX_SUBJECT_NAME_LENGTH);
+  return stories.length > 1
+    ? `${SUBJECT_PREFIX}${lead} + ${stories.length - 1} more`
+    : subjectFor(stories[0].analysis.name);
+}
+
+function leadBlockHtml(story: StoredDiscovery): string {
+  const href = safeHref(story.analysis.sourceUrl);
+  const keyPointItems = story.analysis.projectOpportunities.length
+    ? story.analysis.projectOpportunities
+        .map((p) => `<li style="margin: 0 0 6px; color: ${PRIMARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 15px; line-height: 22px;">${escapeHtml(p)}</li>`)
+        .join("")
+    : `<li style="color: ${SECONDARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 15px; line-height: 22px;">None</li>`;
+  return `<tr>
+              <td style="padding: 24px 30px 28px; border-bottom: 1px solid #26344d;">
+                ${sectionLabel("Lead story")}
+                <h2 style="margin: 0 0 10px; color: ${PRIMARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 22px; font-weight: 700; line-height: 28px;">${escapeHtml(story.analysis.name)}</h2>
+                <p style="margin: 0 0 20px; color: ${SECONDARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 15px; line-height: 22px;">${escapeHtml(story.analysis.summary)}</p>
+                ${sectionLabel("Why it matters")}
+                <p style="margin: 0 0 20px; color: ${PRIMARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 15px; line-height: 22px;">${escapeHtml(story.analysis.whyItMatters)}</p>
+                ${sectionLabel("Key points")}
+                <ul style="margin: 0 0 20px; padding: 0 0 0 18px;"><ul style="margin: 0; padding: 0 0 0 18px;">${keyPointItems}</ul></ul>
+                ${sectionLabel("Source")}
+                <a href="${escapeHtml(href)}" style="display: inline-block; padding: 9px 14px; border-radius: 8px; background-color: ${ACCENT}; color: #07111f; font-family: Arial, Helvetica, sans-serif; font-size: 14px; font-weight: 700; line-height: 18px; text-decoration: none;">${escapeHtml(story.analysis.sourceTitle)} &#8594;</a>
+              </td>
+            </tr>`;
+}
+
+function conciseBlockHtml(story: StoredDiscovery, slot: number): string {
+  const href = safeHref(story.analysis.sourceUrl);
+  return `<tr>
+              <td style="padding: 20px 30px; border-top: 1px solid #26344d;">
+                <p style="margin: 0 0 4px; color: ${ACCENT}; font-family: Arial, Helvetica, sans-serif; font-size: 11px; font-weight: 700; letter-spacing: 1.1px; line-height: 16px; text-transform: uppercase;">Story ${slot}</p>
+                <p style="margin: 0 0 8px; color: ${PRIMARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 15px; font-weight: 700; line-height: 20px;">${escapeHtml(story.analysis.name)}</p>
+                <p style="margin: 0 0 10px; color: ${SECONDARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 14px; line-height: 20px;">${escapeHtml(story.analysis.summary)}</p>
+                <a href="${escapeHtml(href)}" style="color: ${ACCENT}; font-family: Arial, Helvetica, sans-serif; font-size: 13px; font-weight: 700; line-height: 18px; text-decoration: none;">${escapeHtml(story.analysis.sourceTitle)} &#8594;</a>
+              </td>
+            </tr>`;
+}
+
+/**
+ * Formats up to four ranked stories as one daily digest email.
+ * stories[0] is the lead (h2 + why-it-matters + key-points + source link).
+ * stories[1–3] are concise (summary + source link).
+ */
+export function formatDigestEmail(stories: StoredDiscovery[]): DiscoveryEmailContent {
+  if (stories.length === 0) throw new Error("Digest requires at least one story.");
+
+  const lead = stories[0];
+  const concise = stories.slice(1);
+
+  const textParts: string[] = [
+    "AI AGENT RADAR — DAILY DIGEST",
+    [
+      `STORY 1 — LEAD\n${lead.analysis.name}`,
+      `SUMMARY\n${lead.analysis.summary}`,
+      `WHY IT MATTERS\n${lead.analysis.whyItMatters}`,
+      `KEY POINTS\n${textList(lead.analysis.projectOpportunities)}`,
+      `SOURCE\n${lead.analysis.sourceTitle}\n${lead.analysis.sourceUrl}`,
+    ].join("\n\n"),
+    ...concise.map((story, i) =>
+      [`STORY ${i + 2}\n${story.analysis.name}`, story.analysis.summary, `SOURCE\n${story.analysis.sourceTitle}\n${story.analysis.sourceUrl}`].join("\n\n"),
+    ),
+    "AI Agent Radar\nAutomated AI discovery monitor",
+  ];
+
+  const html = `<!doctype html>
+<html lang="en">
+  <body style="margin: 0; padding: 0; background-color: ${EMAIL_BACKGROUND};">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width: 100%; background-color: ${EMAIL_BACKGROUND};">
+      <tr>
+        <td align="center" style="padding: 28px 14px;">
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width: 100%; max-width: 640px; border: 1px solid #26344d; border-radius: 16px; background-color: ${CARD_BACKGROUND}; overflow: hidden;">
+            <tr>
+              <td style="padding: 30px 30px 24px; border-bottom: 1px solid #26344d;">
+                <p style="margin: 0 0 6px; color: ${PRIMARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 18px; font-weight: 700; letter-spacing: 1.6px; line-height: 24px;">AI AGENT RADAR</p>
+                <p style="margin: 0; color: ${SECONDARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 14px; line-height: 20px;">Daily digest &middot; ${stories.length} ${stories.length === 1 ? "story" : "stories"}</p>
+              </td>
+            </tr>
+            ${leadBlockHtml(lead)}
+            ${concise.map((story, i) => conciseBlockHtml(story, i + 2)).join("\n            ")}
+            <tr>
+              <td style="padding: 18px 30px; border-top: 1px solid #26344d; background-color: #0d1422;">
+                <p style="margin: 0; color: ${SECONDARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 13px; line-height: 19px;">AI Agent Radar<br>Automated AI discovery monitor</p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>`;
+
+  return { subject: digestSubject(stories), text: textParts.join("\n\n---\n\n"), html };
+}

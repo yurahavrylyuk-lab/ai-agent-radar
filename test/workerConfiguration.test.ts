@@ -45,7 +45,7 @@ test("Worker composition uses D1 stores and exposes a scheduled handler without 
   assert.ok(persistence.geminiUsageStore instanceof D1GeminiUsageStore);
   assert.equal(typeof dependencies.search, "function");
   assert.equal(typeof dependencies.process, "function");
-  assert.equal(typeof dependencies.notify, "function");
+  assert.ok(dependencies.notification?.history instanceof D1NotificationHistory, "notification history must be a D1NotificationHistory");
   assert.equal(typeof worker.scheduled, "function");
   const response = await worker.fetch(new Request("https://worker.example"), environment());
   assert.equal(await response.text(), "AI Agent Radar worker ready");

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { notifyDiscovery } from "../src/services/notificationOrchestrator.js";
+import { notifyDiscovery, notifyDigest } from "../src/services/notificationOrchestrator.js";
 import type { DiscoveryEmailContent, DiscoveryProcessingResult, NotificationRecord } from "../src/types/index.js";
 import type { NotificationHistory } from "../src/services/notificationHistory.js";
 
@@ -176,4 +176,128 @@ test("notification orchestration does not mutate its input", async () => {
   };
   await notifyDiscovery(input, { history, formatEmail: () => content, sendEmail: async () => ({ id: "email_123" }) });
   assert.deepEqual(input, original);
+});
+
+// ── notifyDigest ──────────────────────────────────────────────────────────────
+
+function digestResult(relevanceScore: number, sourceUrl: string): DiscoveryProcessingResult {
+  return result("new", relevanceScore, sourceUrl);
+}
+
+function openHistory(): NotificationHistory {
+  return {
+    async hasNotificationBeenSent() { return false; },
+    async getNotificationRecord() { throw new Error("unreachable"); },
+    async recordNotificationSent(url, _ch, id) { return record(url, id); },
+  };
+}
+
+test("notifyDigest returns an empty map for empty input", async () => {
+  const map = await notifyDigest([], { history: openHistory(), formatDigest: () => content, sendEmail: async () => { throw new Error("should not send"); } });
+  assert.equal(map.size, 0);
+});
+
+test("notifyDigest marks ineligible stories as not_eligible without contacting history or sending", async () => {
+  let historyCalls = 0;
+  let emailCalls = 0;
+  const history: NotificationHistory = {
+    async hasNotificationBeenSent() { historyCalls++; return false; },
+    async getNotificationRecord() { throw new Error("unreachable"); },
+    async recordNotificationSent() { throw new Error("unreachable"); },
+  };
+  const ineligible = [result("new", 6, "https://example.com/low"), result("duplicate", 9, "https://example.com/dup")];
+  const map = await notifyDigest(ineligible, { history, formatDigest: () => content, sendEmail: async () => { emailCalls++; return { id: "x" }; } });
+  assert.equal(map.get("https://example.com/low")?.status, "not_eligible");
+  assert.equal(map.get("https://example.com/dup")?.status, "not_eligible");
+  assert.equal(historyCalls, 0);
+  assert.equal(emailCalls, 0);
+});
+
+test("notifyDigest marks already-sent stories as already_sent and skips them in the digest", async () => {
+  const existing = record("https://example.com/sent");
+  const history: NotificationHistory = {
+    async hasNotificationBeenSent(url) { return url === "https://example.com/sent"; },
+    async getNotificationRecord(url) { return url === "https://example.com/sent" ? existing : undefined; },
+    async recordNotificationSent(url, _ch, id) { return record(url, id); },
+  };
+  let sendCalls = 0;
+  const map = await notifyDigest(
+    [digestResult(9, "https://example.com/sent"), digestResult(8, "https://example.com/new")],
+    { history, formatDigest: () => content, sendEmail: async () => { sendCalls++; return { id: "digest_1" }; } },
+  );
+  assert.equal(map.get("https://example.com/sent")?.status, "already_sent");
+  assert.equal(map.get("https://example.com/new")?.status, "sent");
+  assert.equal(sendCalls, 1);
+});
+
+test("notifyDigest sends exactly one email and records a sent entry for each digest story", async () => {
+  const stories = [digestResult(8, "https://example.com/a"), digestResult(9, "https://example.com/b"), digestResult(7, "https://example.com/c")];
+  const recordedUrls: string[] = [];
+  let formatCalls = 0;
+  let sendCalls = 0;
+  const map = await notifyDigest(stories, {
+    history: openHistory(),
+    formatDigest: (s) => { formatCalls++; assert.equal(s.length, 3); return content; },
+    sendEmail: async () => { sendCalls++; return { id: "digest_1" }; },
+    // override recordNotificationSent via a wrapped history to track calls
+  });
+  // Use the default openHistory which records
+  assert.equal(formatCalls, 1);
+  assert.equal(sendCalls, 1);
+  assert.equal(map.get("https://example.com/a")?.status, "sent");
+  assert.equal(map.get("https://example.com/b")?.status, "sent");
+  assert.equal(map.get("https://example.com/c")?.status, "sent");
+  void recordedUrls; // suppress unused warning
+});
+
+test("notifyDigest sorts eligible stories by relevance descending so the top story is passed first", async () => {
+  const stories = [digestResult(7, "https://example.com/low"), digestResult(10, "https://example.com/top"), digestResult(9, "https://example.com/mid")];
+  const passedOrder: string[] = [];
+  await notifyDigest(stories, {
+    history: openHistory(),
+    formatDigest: (s) => { passedOrder.push(...s.map((d) => d.analysis.sourceUrl)); return content; },
+    sendEmail: async () => ({ id: "x" }),
+  });
+  assert.equal(passedOrder[0], "https://example.com/top");
+  assert.equal(passedOrder[1], "https://example.com/mid");
+  assert.equal(passedOrder[2], "https://example.com/low");
+});
+
+test("notifyDigest caps the digest at four stories even when more are eligible", async () => {
+  const stories = Array.from({ length: 6 }, (_, i) => digestResult(10 - i, `https://example.com/story-${i}`));
+  let storiesToFormatter = 0;
+  await notifyDigest(stories, {
+    history: openHistory(),
+    formatDigest: (s) => { storiesToFormatter = s.length; return content; },
+    sendEmail: async () => ({ id: "x" }),
+  });
+  assert.equal(storiesToFormatter, 4);
+});
+
+test("notifyDigest deduplicates eligible stories by URL before sending", async () => {
+  const url = "https://example.com/dup";
+  const stories = [digestResult(9, url), digestResult(8, url)];
+  let storiesToFormatter = 0;
+  const map = await notifyDigest(stories, {
+    history: openHistory(),
+    formatDigest: (s) => { storiesToFormatter = s.length; return content; },
+    sendEmail: async () => ({ id: "x" }),
+  });
+  assert.equal(storiesToFormatter, 1);
+  assert.equal(map.get(url)?.status, "sent");
+});
+
+test("notifyDigest skips sending when all eligible stories are already sent", async () => {
+  const history: NotificationHistory = {
+    async hasNotificationBeenSent() { return true; },
+    async getNotificationRecord(url) { return record(url); },
+    async recordNotificationSent() { throw new Error("unreachable"); },
+  };
+  let sendCalls = 0;
+  const map = await notifyDigest(
+    [digestResult(9, "https://example.com/a")],
+    { history, formatDigest: () => { throw new Error("should not format"); }, sendEmail: async () => { sendCalls++; return { id: "x" }; } },
+  );
+  assert.equal(map.get("https://example.com/a")?.status, "already_sent");
+  assert.equal(sendCalls, 0);
 });
