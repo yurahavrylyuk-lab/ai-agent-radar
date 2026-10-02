@@ -187,7 +187,7 @@ function leadBlockHtml(story: StoredDiscovery): string {
                 ${sectionLabel("Why it matters")}
                 <p style="margin: 0 0 20px; color: ${PRIMARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 15px; line-height: 22px;">${escapeHtml(story.analysis.whyItMatters)}</p>
                 ${sectionLabel("Key points")}
-                <ul style="margin: 0 0 20px; padding: 0 0 0 18px;"><ul style="margin: 0; padding: 0 0 0 18px;">${keyPointItems}</ul></ul>
+                <ul style="margin: 0 0 20px; padding: 0 0 0 18px;">${keyPointItems}</ul>
                 ${sectionLabel("Source")}
                 <a href="${escapeHtml(href)}" style="display: inline-block; padding: 9px 14px; border-radius: 8px; background-color: ${ACCENT}; color: #07111f; font-family: Arial, Helvetica, sans-serif; font-size: 14px; font-weight: 700; line-height: 18px; text-decoration: none;">${escapeHtml(story.analysis.sourceTitle)} &#8594;</a>
               </td>
