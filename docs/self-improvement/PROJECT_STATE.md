@@ -44,8 +44,8 @@ Cloudflare Cron
 
 Maximum per autonomous monitoring cycle:
 
-- Brave: 1 request.
-- Gemini: 1 new analysis.
+- Brave: up to 10 requests (one per `MONITORING_QUERIES` entry; the quota guard stops the loop early if a daily/weekly/monthly limit is reached).
+- Gemini: up to 4 new analyses (`MAX_NEW_ANALYSES_PER_CYCLE = 4`; known/duplicate URLs consume no analysis slot).
 - Resend: 1 email.
 - OpenAI: 0 calls.
 
