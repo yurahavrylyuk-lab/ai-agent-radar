@@ -135,6 +135,7 @@ test("digest lead story renders an h2 with the story name, summary, why-it-matte
   assert.match(content.html, /Why lead matters\./);
   assert.match(content.html, /<ul/);
   assert.match(content.html, /<li[^>]*>[\s\S]*?Build with lead/);
+  assert.doesNotMatch(content.html, /<ul[^>]*><ul/, "key-points list must not nest <ul> directly inside <ul>");
 });
 
 test("digest concise stories render story name, summary, and source link without h2", () => {
