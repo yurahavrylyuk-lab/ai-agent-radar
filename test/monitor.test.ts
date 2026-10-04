@@ -190,22 +190,41 @@ test("preferred candidates reserve bounded slots while generic candidates fill t
   assert.equal(outcome.newDiscoveries, 4);
 });
 
-test("pre-analysis priority cannot starve generic candidates when preferred results exceed the reservation", async () => {
-  const generics = Array.from({ length: 4 }, (_, index) => searchResult(`generic-bounded-${index}`));
+test("only two preferred candidates are selected before available generic candidates", async () => {
   const preferred = [
     preferredResult("codex-bounded-1", "Codex"),
     preferredResult("claude-bounded-1", "Claude Code"),
     preferredResult("codex-bounded-2", "Codex"),
     preferredResult("claude-bounded-2", "Claude Code"),
   ];
+  const generics = [searchResult("generic-bounded-1"), searchResult("generic-bounded-2")];
   const processedUrls: string[] = [];
   const outcome = await runMonitoringCycle("test", {
-    search: async () => [...generics, ...preferred],
+    search: async () => [...preferred, ...generics],
     hasDiscovery: async () => false,
     process: async (item) => { processedUrls.push(item.url); return processed(item, "new"); },
     notify: batchNotify("not_eligible"),
   });
-  assert.deepEqual(processedUrls, [...generics.slice(0, 2), ...preferred.slice(0, 2)].map((item) => item.url));
+  assert.deepEqual(processedUrls, [...preferred.slice(0, 2), ...generics].map((item) => item.url));
+  assert.equal(outcome.analysesAttempted, 4);
+});
+
+test("extra preferred candidates fill slots only when generic candidates are insufficient", async () => {
+  const preferred = [
+    preferredResult("codex-fallback-1", "Codex"),
+    preferredResult("claude-fallback-1", "Claude Code"),
+    preferredResult("codex-fallback-2", "Codex"),
+    preferredResult("claude-fallback-2", "Claude Code"),
+  ];
+  const generic = searchResult("generic-fallback-1");
+  const processedUrls: string[] = [];
+  const outcome = await runMonitoringCycle("test", {
+    search: async () => [...preferred, generic],
+    hasDiscovery: async () => false,
+    process: async (item) => { processedUrls.push(item.url); return processed(item, "new"); },
+    notify: batchNotify("not_eligible"),
+  });
+  assert.deepEqual(processedUrls, [...preferred.slice(0, 3), generic].map((item) => item.url));
   assert.equal(outcome.analysesAttempted, 4);
 });
 

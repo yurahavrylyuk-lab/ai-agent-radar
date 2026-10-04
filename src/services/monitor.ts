@@ -138,12 +138,19 @@ export async function runMonitoringCycle(
 
   const newCandidates = candidates
     .filter((candidate) => !candidate.knownDiscovery && !candidate.repeatedInBatch);
+  const preferredCandidates = newCandidates
+    .filter((candidate) => getPreAnalysisCandidatePriority(candidate.searchResult) > 0);
+  const nonPreferredCandidates = newCandidates
+    .filter((candidate) => getPreAnalysisCandidatePriority(candidate.searchResult) === 0);
   const selectedNewUrls = new Set<string>();
-  for (const candidate of newCandidates) {
-    if (selectedNewUrls.size >= MAX_PREFERRED_PRE_ANALYSIS_CANDIDATES) break;
-    if (getPreAnalysisCandidatePriority(candidate.searchResult) > 0) selectedNewUrls.add(candidate.normalizedUrl);
+  for (const candidate of preferredCandidates.slice(0, MAX_PREFERRED_PRE_ANALYSIS_CANDIDATES)) {
+    selectedNewUrls.add(candidate.normalizedUrl);
   }
-  for (const candidate of newCandidates) {
+  for (const candidate of nonPreferredCandidates) {
+    if (selectedNewUrls.size >= MAX_NEW_ANALYSES_PER_CYCLE) break;
+    selectedNewUrls.add(candidate.normalizedUrl);
+  }
+  for (const candidate of preferredCandidates.slice(MAX_PREFERRED_PRE_ANALYSIS_CANDIDATES)) {
     if (selectedNewUrls.size >= MAX_NEW_ANALYSES_PER_CYCLE) break;
     selectedNewUrls.add(candidate.normalizedUrl);
   }
