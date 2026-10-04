@@ -8,6 +8,10 @@ function searchResult(id: string): SearchResult {
   return { title: `Result ${id}`, url: `https://example.com/${id}`, snippet: `Snippet ${id}` };
 }
 
+function preferredResult(id: string, tool: "Codex" | "Claude Code"): SearchResult {
+  return { title: `${tool} release ${id}`, url: `https://example.com/${id}`, snippet: `New ${tool} developer feature.` };
+}
+
 function processed(result: SearchResult, status: DiscoveryProcessingResult["status"]): DiscoveryProcessingResult {
   return {
     status,
@@ -126,6 +130,108 @@ test("the four-analysis cap applies across the full default query batch", async 
   assert.equal(processCalls, 4);
   assert.equal(outcome.analysesAttempted, 4);
   assert.equal(outcome.stoppedByAnalysisCap, true);
+});
+
+test("a Codex candidate from a later query enters the four analysis slots", async () => {
+  const generics = Array.from({ length: 5 }, (_, index) => searchResult(`generic-${index}`));
+  const codex = preferredResult("codex-late", "Codex");
+  const processedUrls: string[] = [];
+  const outcome = await runMonitoringCycle(undefined, {
+    search: async (query) => {
+      if (query === MONITORING_QUERIES[0]) return generics;
+      if (query === MONITORING_QUERIES[5]) return [codex];
+      return [];
+    },
+    hasDiscovery: async () => false,
+    process: async (item) => { processedUrls.push(item.url); return processed(item, "new"); },
+    notify: batchNotify("not_eligible"),
+  });
+  assert.deepEqual(processedUrls, [...generics.slice(0, 3), codex].map((item) => item.url));
+  assert.equal(outcome.analysesAttempted, 4);
+  assert.equal(outcome.stoppedByAnalysisCap, true);
+});
+
+test("a Claude Code candidate from a later query enters the four analysis slots", async () => {
+  const generics = Array.from({ length: 5 }, (_, index) => searchResult(`generic-claude-${index}`));
+  const claudeCode = preferredResult("claude-code-late", "Claude Code");
+  const processedUrls: string[] = [];
+  const outcome = await runMonitoringCycle(undefined, {
+    search: async (query) => {
+      if (query === MONITORING_QUERIES[0]) return generics;
+      if (query === MONITORING_QUERIES[6]) return [claudeCode];
+      return [];
+    },
+    hasDiscovery: async () => false,
+    process: async (item) => { processedUrls.push(item.url); return processed(item, "new"); },
+    notify: batchNotify("not_eligible"),
+  });
+  assert.deepEqual(processedUrls, [...generics.slice(0, 3), claudeCode].map((item) => item.url));
+  assert.equal(outcome.analysesAttempted, 4);
+});
+
+test("preferred candidates reserve bounded slots while generic candidates fill the remainder", async () => {
+  const generics = Array.from({ length: 5 }, (_, index) => searchResult(`generic-mixed-${index}`));
+  const codex = preferredResult("codex-mixed", "Codex");
+  const claudeCode = preferredResult("claude-code-mixed", "Claude Code");
+  const processedUrls: string[] = [];
+  const outcome = await runMonitoringCycle(undefined, {
+    search: async (query) => {
+      if (query === MONITORING_QUERIES[0]) return generics;
+      if (query === MONITORING_QUERIES[5]) return [codex];
+      if (query === MONITORING_QUERIES[6]) return [claudeCode];
+      return [];
+    },
+    hasDiscovery: async () => false,
+    process: async (item) => { processedUrls.push(item.url); return processed(item, "new"); },
+    notify: batchNotify("not_eligible"),
+  });
+  assert.deepEqual(processedUrls, [...generics.slice(0, 2), codex, claudeCode].map((item) => item.url));
+  assert.equal(outcome.analysesAttempted, MAX_NEW_ANALYSES_PER_CYCLE);
+  assert.equal(outcome.newDiscoveries, 4);
+});
+
+test("pre-analysis priority cannot starve generic candidates when preferred results exceed the reservation", async () => {
+  const generics = Array.from({ length: 4 }, (_, index) => searchResult(`generic-bounded-${index}`));
+  const preferred = [
+    preferredResult("codex-bounded-1", "Codex"),
+    preferredResult("claude-bounded-1", "Claude Code"),
+    preferredResult("codex-bounded-2", "Codex"),
+    preferredResult("claude-bounded-2", "Claude Code"),
+  ];
+  const processedUrls: string[] = [];
+  const outcome = await runMonitoringCycle("test", {
+    search: async () => [...generics, ...preferred],
+    hasDiscovery: async () => false,
+    process: async (item) => { processedUrls.push(item.url); return processed(item, "new"); },
+    notify: batchNotify("not_eligible"),
+  });
+  assert.deepEqual(processedUrls, [...generics.slice(0, 2), ...preferred.slice(0, 2)].map((item) => item.url));
+  assert.equal(outcome.analysesAttempted, 4);
+});
+
+test("same-cycle duplicate URLs do not consume another analysis slot", async () => {
+  const repeated = searchResult("same-cycle");
+  const repeatedAgain = { ...repeated };
+  const generics = Array.from({ length: 4 }, (_, index) => searchResult(`generic-dedup-${index}`));
+  const codex = preferredResult("codex-dedup", "Codex");
+  const recorded = new Set<string>();
+  const processedUrls: string[] = [];
+  const outcome = await runMonitoringCycle("test", {
+    search: async () => [repeated, repeatedAgain, ...generics, codex],
+    hasDiscovery: async () => false,
+    process: async (item) => {
+      processedUrls.push(item.url);
+      const status = recorded.has(item.url) ? "duplicate" : "new";
+      recorded.add(item.url);
+      return processed(item, status);
+    },
+    notify: batchNotify("not_eligible"),
+  });
+  assert.equal(processedUrls.filter((url) => url === repeated.url).length, 2);
+  assert.ok(processedUrls.includes(codex.url));
+  assert.equal(outcome.analysesAttempted, 4);
+  assert.equal(outcome.newDiscoveries, 4);
+  assert.equal(outcome.duplicates, 1);
 });
 
 test("a non-guard failure during default collection retains abort behavior", async () => {

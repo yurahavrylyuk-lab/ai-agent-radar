@@ -1,5 +1,5 @@
 import { NOTIFICATION_RELEVANCE_THRESHOLD } from "./notificationEligibility.js";
-import type { AgentAnalysis, StoredDiscovery } from "../types/index.js";
+import type { AgentAnalysis, SearchResult, StoredDiscovery } from "../types/index.js";
 
 export const discoveryTopicTaxonomy = {
   ai_ml: [
@@ -37,6 +37,7 @@ export type DiscoveryTopic = keyof typeof discoveryTopicTaxonomy;
 
 export const PREFERRED_AI_CODING_TOOL_BONUS = 1;
 export const MAX_DISCOVERY_PRIORITY_SCORE = 10;
+export const MAX_PREFERRED_PRE_ANALYSIS_CANDIDATES = 2;
 
 const topicPatterns: Record<DiscoveryTopic, readonly RegExp[]> = {
   ai_ml: [
@@ -76,6 +77,19 @@ const topicPatterns: Record<DiscoveryTopic, readonly RegExp[]> = {
 
 const preferredToolPatterns = [/\bCodex\b/i, /\bClaude\s+Code\b/i] as const;
 
+function containsPreferredTool(value: string): boolean {
+  return preferredToolPatterns.some((pattern) => pattern.test(value));
+}
+
+/**
+ * Returns a small, deterministic pre-analysis signal from Brave result fields.
+ * It selects scarce analysis slots only; it never affects notification eligibility.
+ */
+export function getPreAnalysisCandidatePriority(result: SearchResult): number {
+  const candidateText = [result.title, result.snippet ?? "", result.source ?? ""].join("\n");
+  return containsPreferredTool(candidateText) ? PREFERRED_AI_CODING_TOOL_BONUS : 0;
+}
+
 function analysisText(analysis: AgentAnalysis): string {
   return [
     analysis.name,
@@ -111,7 +125,7 @@ export function getDiscoveryPriorityScore(analysis: AgentAnalysis): number {
 }
 
 function hasPreferredTool(analysis: AgentAnalysis): boolean {
-  return preferredToolPatterns.some((pattern) => pattern.test(analysisText(analysis)));
+  return containsPreferredTool(analysisText(analysis));
 }
 
 /** Orders eligible digest candidates without mutating their validated analyses. */

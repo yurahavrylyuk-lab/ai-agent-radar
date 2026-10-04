@@ -57,7 +57,16 @@ relevance score is not changed, and the bonus is never applied below the normal
 notification threshold, so keyword presence alone cannot make a story eligible.
 At the score ceiling, preferred-tool status breaks an otherwise exact tie.
 
-After P2 is merged, Cloudflare production must be updated separately to set `BRAVE_WEEKLY_SEARCH_LIMIT=100` and `BRAVE_MONTHLY_SEARCH_LIMIT=350`; the daily production value remains `BRAVE_DAILY_SEARCH_LIMIT=10`. Merging this repository configuration does not mutate deployed Worker variables.
+Before Gemini analysis, unique unseen Brave results with explicit Codex or Claude
+Code matches receive the same bounded priority signal when the four analysis
+slots are selected. At most two positions are reserved by this signal; other
+candidates retain their stable search order and fill the remaining slots. If
+generic candidates are unavailable, preferred candidates may use otherwise-empty
+slots. This selection does not bypass Gemini or change eligibility.
+
+P2 is merged and Cloudflare production is configured with
+`BRAVE_DAILY_SEARCH_LIMIT=10`, `BRAVE_WEEKLY_SEARCH_LIMIT=100`, and
+`BRAVE_MONTHLY_SEARCH_LIMIT=350`.
 
 For safe local D1 development only:
 

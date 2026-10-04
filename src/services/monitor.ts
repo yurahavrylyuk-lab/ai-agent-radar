@@ -1,4 +1,6 @@
 import { JsonDiscoveryHistory, DiscoveryHistoryError, type DiscoveryHistory } from "./discoveryHistory.js";
+import { normalizeDiscoveryUrl } from "./discoveryHistoryCore.js";
+import { getPreAnalysisCandidatePriority, MAX_PREFERRED_PRE_ANALYSIS_CANDIDATES } from "./discoveryPriority.js";
 import { processSearchResult } from "./discoveryProcessor.js";
 import { NotificationHistoryError } from "./notificationHistory.js";
 import { notifyDigest, type NotificationOrchestratorDependencies } from "./notificationOrchestrator.js";
@@ -95,24 +97,68 @@ export async function runMonitoringCycle(
   const notification = dependencies.notification ?? { history: new JsonNotificationHistory() };
   const notify = dependencies.notify ?? ((results: DiscoveryProcessingResult[]) => notifyDigest(results, notification));
 
-  // Phase 1: Process all search results sequentially.
-  type ProcessedItem = { searchResult: SearchResult; processed: DiscoveryProcessingResult };
-  const processedItems: ProcessedItem[] = [];
-
+  // Phase 1: Identify unique unseen candidates before assigning scarce analysis slots.
+  type Candidate = {
+    searchResult: SearchResult;
+    normalizedUrl: string;
+    knownDiscovery: boolean;
+    repeatedInBatch: boolean;
+  };
+  const candidates: Candidate[] = [];
+  const firstCandidateByUrl = new Map<string, Candidate>();
   for (const searchResult of searchResults) {
+    let normalizedUrl: string;
+    try {
+      normalizedUrl = normalizeDiscoveryUrl(searchResult.url);
+    } catch (error) {
+      throw new Error(`Monitoring cycle aborted: unable to verify discovery history: ${errorMessage(error)}`);
+    }
+
+    const firstCandidate = firstCandidateByUrl.get(normalizedUrl);
+    if (firstCandidate) {
+      candidates.push({
+        searchResult,
+        normalizedUrl,
+        knownDiscovery: firstCandidate.knownDiscovery,
+        repeatedInBatch: true,
+      });
+      continue;
+    }
+
     let knownDiscovery: boolean;
     try {
       knownDiscovery = await hasDiscovery(searchResult.url);
     } catch (error) {
       throw new Error(`Monitoring cycle aborted: unable to verify discovery history: ${errorMessage(error)}`);
     }
+    const candidate = { searchResult, normalizedUrl, knownDiscovery, repeatedInBatch: false };
+    candidates.push(candidate);
+    firstCandidateByUrl.set(normalizedUrl, candidate);
+  }
 
-    if (!knownDiscovery && result.analysesAttempted >= MAX_NEW_ANALYSES_PER_CYCLE) {
-      result.stoppedByAnalysisCap = true;
-      break;
-    }
+  const newCandidates = candidates
+    .filter((candidate) => !candidate.knownDiscovery && !candidate.repeatedInBatch);
+  const selectedNewUrls = new Set<string>();
+  for (const candidate of newCandidates) {
+    if (selectedNewUrls.size >= MAX_PREFERRED_PRE_ANALYSIS_CANDIDATES) break;
+    if (getPreAnalysisCandidatePriority(candidate.searchResult) > 0) selectedNewUrls.add(candidate.normalizedUrl);
+  }
+  for (const candidate of newCandidates) {
+    if (selectedNewUrls.size >= MAX_NEW_ANALYSES_PER_CYCLE) break;
+    selectedNewUrls.add(candidate.normalizedUrl);
+  }
+  result.stoppedByAnalysisCap = newCandidates.length > MAX_NEW_ANALYSES_PER_CYCLE;
 
-    if (!knownDiscovery) result.analysesAttempted += 1;
+  // Phase 2: Process known URLs and selected new URLs in stable provider order.
+  type ProcessedItem = { searchResult: SearchResult; processed: DiscoveryProcessingResult };
+  const processedItems: ProcessedItem[] = [];
+  const successfullyProcessedUrls = new Set<string>();
+
+  for (const candidate of candidates) {
+    const { searchResult } = candidate;
+    if (candidate.repeatedInBatch && !successfullyProcessedUrls.has(candidate.normalizedUrl)) continue;
+    if (!candidate.knownDiscovery && !candidate.repeatedInBatch && !selectedNewUrls.has(candidate.normalizedUrl)) continue;
+    if (!candidate.knownDiscovery && !candidate.repeatedInBatch) result.analysesAttempted += 1;
 
     let processed: DiscoveryProcessingResult;
     try {
@@ -130,9 +176,10 @@ export async function runMonitoringCycle(
     if (processed.status === "new") result.newDiscoveries += 1;
     if (processed.status === "duplicate") result.duplicates += 1;
     processedItems.push({ searchResult, processed });
+    successfullyProcessedUrls.add(candidate.normalizedUrl);
   }
 
-  // Phase 2: Send one digest notification for all processed items.
+  // Phase 3: Send one digest notification for all processed items.
   if (processedItems.length > 0) {
     let notificationResults: Map<string, NotificationResult>;
     try {

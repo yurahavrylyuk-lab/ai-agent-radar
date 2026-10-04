@@ -3,10 +3,13 @@ import test from "node:test";
 import {
   classifyDiscoveryTopics,
   compareDiscoveryPriority,
+  getPreAnalysisCandidatePriority,
   getDiscoveryPriorityScore,
   MAX_DISCOVERY_PRIORITY_SCORE,
+  MAX_PREFERRED_PRE_ANALYSIS_CANDIDATES,
   PREFERRED_AI_CODING_TOOL_BONUS,
 } from "../src/services/discoveryPriority.js";
+import { isNotificationEligible } from "../src/services/notificationEligibility.js";
 import type { AgentAnalysis, StoredDiscovery } from "../src/types/index.js";
 
 function analysis(overrides: Partial<AgentAnalysis> = {}): AgentAnalysis {
@@ -53,7 +56,29 @@ test("preferred keywords cannot make low-relevance content eligible or raise its
     summary: "A retail promotion unrelated to AI or software development.",
     relevanceScore: 2,
   });
+  assert.equal(getPreAnalysisCandidatePriority({
+    title: irrelevantCodexMention.name,
+    snippet: irrelevantCodexMention.summary,
+    url: irrelevantCodexMention.sourceUrl,
+  }), 1);
   assert.equal(getDiscoveryPriorityScore(irrelevantCodexMention), 2);
+  assert.equal(isNotificationEligible({
+    status: "new",
+    discovery: {
+      normalizedUrl: irrelevantCodexMention.sourceUrl,
+      firstSeenAt: "2026-10-04T00:00:00.000Z",
+      lastSeenAt: "2026-10-04T00:00:00.000Z",
+      analysis: irrelevantCodexMention,
+    },
+  }), false);
+});
+
+test("pre-analysis priority requires explicit Codex or Claude Code wording", () => {
+  assert.equal(MAX_PREFERRED_PRE_ANALYSIS_CANDIDATES, 2);
+  assert.equal(getPreAnalysisCandidatePriority({ title: "Codex release", url: "https://example.com/codex" }), 1);
+  assert.equal(getPreAnalysisCandidatePriority({ title: "Claude Code release", url: "https://example.com/claude-code" }), 1);
+  assert.equal(getPreAnalysisCandidatePriority({ title: "Claude developer release", url: "https://example.com/claude" }), 0);
+  assert.equal(getPreAnalysisCandidatePriority({ title: "Generic CLI release", url: "https://example.com/cli" }), 0);
 });
 
 test("priority scores remain capped at ten", () => {
