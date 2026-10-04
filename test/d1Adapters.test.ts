@@ -131,8 +131,8 @@ test("D1 Brave usage records round-trip and remain usable by the existing guard"
     assert.equal((await store.getRecords()).length, 1);
     assert.equal((await checkBraveSearchUsage(store, {
       BRAVE_DAILY_SEARCH_LIMIT: "10",
-      BRAVE_WEEKLY_SEARCH_LIMIT: "50",
-      BRAVE_MONTHLY_SEARCH_LIMIT: "200",
+      BRAVE_WEEKLY_SEARCH_LIMIT: "100",
+      BRAVE_MONTHLY_SEARCH_LIMIT: "350",
     }, new Date("2026-09-20T12:00:00.000Z"))).allowed, true);
 
     database.prepare("INSERT INTO brave_usage (timestamp, provider, operation, request_count) VALUES (?, ?, ?, ?)").run(
@@ -140,8 +140,8 @@ test("D1 Brave usage records round-trip and remain usable by the existing guard"
     );
     assert.equal((await checkBraveSearchUsage(store, {
       BRAVE_DAILY_SEARCH_LIMIT: "10",
-      BRAVE_WEEKLY_SEARCH_LIMIT: "50",
-      BRAVE_MONTHLY_SEARCH_LIMIT: "200",
+      BRAVE_WEEKLY_SEARCH_LIMIT: "100",
+      BRAVE_MONTHLY_SEARCH_LIMIT: "350",
     })).allowed, false);
   });
 });

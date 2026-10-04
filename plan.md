@@ -51,7 +51,7 @@
 
 ---
 
-## P2 · Increase Brave Search Limits (100/week · 350/month · 10/day)
+## P2 · Increase Brave Search Limits (100/week · 350/month · 10/day) ✅ DONE
 
 **Goal:** Raise weekly quota to 100 and monthly quota to 350 while keeping the daily limit at 10.
 

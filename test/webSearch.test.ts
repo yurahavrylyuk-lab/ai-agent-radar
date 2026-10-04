@@ -8,8 +8,8 @@ import type { UsageRecord, UsageTracker } from "../src/services/usageTracker.js"
 const baseEnvironment = {
   BRAVE_SEARCH_API_KEY: "test-key",
   BRAVE_DAILY_SEARCH_LIMIT: "10",
-  BRAVE_WEEKLY_SEARCH_LIMIT: "50",
-  BRAVE_MONTHLY_SEARCH_LIMIT: "200",
+  BRAVE_WEEKLY_SEARCH_LIMIT: "100",
+  BRAVE_MONTHLY_SEARCH_LIMIT: "350",
 };
 
 class InMemoryUsageTracker implements UsageTracker {
