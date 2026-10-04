@@ -49,11 +49,13 @@ Maximum per autonomous monitoring cycle:
 - Resend: 1 email.
 - OpenAI: 0 calls.
 
-Configured Brave request limits:
+Approved repository Brave request limits for P2:
 
 - Daily: 10.
-- Weekly: 50.
-- Monthly: 200.
+- Weekly: 100.
+- Monthly: 350.
+
+Cloudflare production variables are not changed by the P2 implementation task. After merge, a separate authorized production update must change `BRAVE_WEEKLY_SEARCH_LIMIT` from 50 to 100 and `BRAVE_MONTHLY_SEARCH_LIMIT` from 200 to 350; `BRAVE_DAILY_SEARCH_LIMIT` remains 10.
 
 Configured Gemini request limits:
 

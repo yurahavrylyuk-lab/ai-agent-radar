@@ -12,8 +12,8 @@ function environment(): RadarWorkerEnv {
     DB: {} as D1Database,
     BRAVE_SEARCH_API_KEY: "brave-test-key",
     BRAVE_DAILY_SEARCH_LIMIT: "10",
-    BRAVE_WEEKLY_SEARCH_LIMIT: "50",
-    BRAVE_MONTHLY_SEARCH_LIMIT: "200",
+    BRAVE_WEEKLY_SEARCH_LIMIT: "100",
+    BRAVE_MONTHLY_SEARCH_LIMIT: "350",
     GEMINI_API_KEY: "gemini-test-key",
     GEMINI_MODEL: "gemini-3.6-flash",
     GEMINI_DAILY_REQUEST_LIMIT: "5",
@@ -30,6 +30,8 @@ function environment(): RadarWorkerEnv {
 test("Worker runtime configuration preserves configured limits and rejects missing secrets", () => {
   const configuration = createRadarRuntimeConfiguration(environment());
   assert.equal(configuration.environment.BRAVE_DAILY_SEARCH_LIMIT, "10");
+  assert.equal(configuration.environment.BRAVE_WEEKLY_SEARCH_LIMIT, "100");
+  assert.equal(configuration.environment.BRAVE_MONTHLY_SEARCH_LIMIT, "350");
   assert.equal(configuration.environment.GEMINI_MONTHLY_TOKEN_LIMIT, "100000");
   const missing = environment();
   missing.GEMINI_API_KEY = "";

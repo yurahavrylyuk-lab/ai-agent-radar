@@ -42,7 +42,7 @@ Detailed implementation requirements live in [`plan.md`](./plan.md).
 
 ## P2 — Increase Brave Search Limits
 
-**Status:** TODO  
+**Status:** DONE
 **Priority:** High
 
 Target limits:

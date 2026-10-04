@@ -11,12 +11,12 @@ import {
 import type { UsageRecord, UsageTracker } from "../src/services/usageTracker.js";
 
 const now = new Date("2026-09-17T12:00:00");
-const limits: BraveUsageLimits = { daily: 10, weekly: 50, monthly: 200 };
+const limits: BraveUsageLimits = { daily: 10, weekly: 100, monthly: 350 };
 
 process.env.BRAVE_SEARCH_API_KEY = "test-key";
 process.env.BRAVE_DAILY_SEARCH_LIMIT = "10";
-process.env.BRAVE_WEEKLY_SEARCH_LIMIT = "50";
-process.env.BRAVE_MONTHLY_SEARCH_LIMIT = "200";
+process.env.BRAVE_WEEKLY_SEARCH_LIMIT = "100";
+process.env.BRAVE_MONTHLY_SEARCH_LIMIT = "350";
 
 function recordsForCount(count: number): UsageRecord[] {
   return [
@@ -54,11 +54,11 @@ test("blocks a request when the daily limit is reached", () => {
 });
 
 test("blocks a request when the weekly limit is reached", () => {
-  assert.equal(evaluateBraveUsage({ daily: 3, weekly: 50, monthly: 80 }, limits), "weekly");
+  assert.equal(evaluateBraveUsage({ daily: 3, weekly: 100, monthly: 200 }, limits), "weekly");
 });
 
 test("blocks a request when the monthly limit is reached", () => {
-  assert.equal(evaluateBraveUsage({ daily: 3, weekly: 20, monthly: 200 }, limits), "monthly");
+  assert.equal(evaluateBraveUsage({ daily: 3, weekly: 20, monthly: 350 }, limits), "monthly");
 });
 
 test("blocks when the usage tracker is unavailable", async () => {
@@ -71,8 +71,8 @@ test("blocks when the usage tracker is unavailable", async () => {
 
   const result = await checkBraveSearchUsage(unavailableTracker, {
     BRAVE_DAILY_SEARCH_LIMIT: "10",
-    BRAVE_WEEKLY_SEARCH_LIMIT: "50",
-    BRAVE_MONTHLY_SEARCH_LIMIT: "200"
+    BRAVE_WEEKLY_SEARCH_LIMIT: "100",
+    BRAVE_MONTHLY_SEARCH_LIMIT: "350"
   });
 
   assert.equal(result.allowed, false);
@@ -82,8 +82,8 @@ test("blocks when a Brave usage limit is invalid", async () => {
   const tracker = new InMemoryUsageTracker([]);
   const result = await checkBraveSearchUsage(tracker, {
     BRAVE_DAILY_SEARCH_LIMIT: "0",
-    BRAVE_WEEKLY_SEARCH_LIMIT: "50",
-    BRAVE_MONTHLY_SEARCH_LIMIT: "200"
+    BRAVE_WEEKLY_SEARCH_LIMIT: "100",
+    BRAVE_MONTHLY_SEARCH_LIMIT: "350"
   });
 
   assert.equal(result.allowed, false);

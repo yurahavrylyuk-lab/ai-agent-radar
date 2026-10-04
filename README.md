@@ -29,7 +29,15 @@ Current:
 - D1 adapters exist for discoveries, notifications, Brave usage, and Gemini usage.
 - The versioned D1 schema lives in `migrations/`.
 
-Production schedule: `0 8 * * *` UTC (daily at 08:00 UTC). Each scheduled event runs one bounded monitoring cycle: one Brave search, at most one new Gemini analysis, and at most one Resend notification. D1 preserves deduplication, usage, discoveries, and notification history.
+Production schedule: `0 8 * * *` UTC (daily at 08:00 UTC). Each scheduled event runs one bounded monitoring cycle: up to ten quota-guarded Brave searches, up to four new Gemini analyses, and at most one Resend notification. D1 preserves deduplication, usage, discoveries, and notification history.
+
+Repository Brave request limits are configured as:
+
+- `BRAVE_DAILY_SEARCH_LIMIT=10`
+- `BRAVE_WEEKLY_SEARCH_LIMIT=100`
+- `BRAVE_MONTHLY_SEARCH_LIMIT=350`
+
+After P2 is merged, Cloudflare production must be updated separately to set `BRAVE_WEEKLY_SEARCH_LIMIT=100` and `BRAVE_MONTHLY_SEARCH_LIMIT=350`; the daily production value remains `BRAVE_DAILY_SEARCH_LIMIT=10`. Merging this repository configuration does not mutate deployed Worker variables.
 
 For safe local D1 development only:
 
