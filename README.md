@@ -37,7 +37,36 @@ Repository Brave request limits are configured as:
 - `BRAVE_WEEKLY_SEARCH_LIMIT=100`
 - `BRAVE_MONTHLY_SEARCH_LIMIT=350`
 
-After P2 is merged, Cloudflare production must be updated separately to set `BRAVE_WEEKLY_SEARCH_LIMIT=100` and `BRAVE_MONTHLY_SEARCH_LIMIT=350`; the daily production value remains `BRAVE_DAILY_SEARCH_LIMIT=10`. Merging this repository configuration does not mutate deployed Worker variables.
+## Discovery coverage and priority
+
+The ten daily search slots cover four P3 topic groups without increasing the
+Brave request budget:
+
+- AI and ML: large language models, AI agents and coding assistants, Codex,
+  Claude Code, Gemini, GPT, and open-source models.
+- IT and infrastructure: cloud platforms, DevOps, Kubernetes, networking, and
+  security advisories.
+- Programming: language releases, compiler updates, and standard-library
+  changes.
+- Developer tools and workflow: IDEs, CLI tools, CI/CD, code review, productivity
+  tooling, development techniques, and tutorials.
+
+After the normal relevance threshold is met, Codex and Claude Code each receive
+a deterministic `+1` digest-ordering bonus capped at `10`. The original Gemini
+relevance score is not changed, and the bonus is never applied below the normal
+notification threshold, so keyword presence alone cannot make a story eligible.
+At the score ceiling, preferred-tool status breaks an otherwise exact tie.
+
+Before Gemini analysis, unique unseen Brave results with explicit Codex or Claude
+Code matches receive the same bounded priority signal when the four analysis
+slots are selected. At most two positions are reserved by this signal; other
+candidates retain their stable search order and fill the remaining slots. If
+generic candidates are unavailable, preferred candidates may use otherwise-empty
+slots. This selection does not bypass Gemini or change eligibility.
+
+P2 is merged and Cloudflare production is configured with
+`BRAVE_DAILY_SEARCH_LIMIT=10`, `BRAVE_WEEKLY_SEARCH_LIMIT=100`, and
+`BRAVE_MONTHLY_SEARCH_LIMIT=350`.
 
 For safe local D1 development only:
 

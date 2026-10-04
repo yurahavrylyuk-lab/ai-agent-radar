@@ -10,7 +10,7 @@ Bootstrap date: 2026-09-20. The human-provided production handoff supplies the v
 
 - Project: AI Agent Radar.
 - Repository: `ai-agent-radar`.
-- Autonomous monitoring discovers useful developments in AI agents, AI products, developer tools, APIs, frameworks, SDKs, MCP tooling, open-source AI projects, major AI updates, and important AI-agent industry news.
+- Autonomous monitoring discovers useful developments across AI/ML, AI agents and products, model releases, programming, IT/infrastructure, developer tools, and development workflows while preserving API, framework, SDK, MCP, open-source, major-update, and AI-industry coverage.
 - Core analysis question: “What can someone learn or build because this exists?”
 
 ## Production architecture
@@ -75,10 +75,13 @@ These are ceilings, not consumption targets. Provider quota changes require expl
 
 - Discovery deduplication happens before Gemini.
 - Known discovery: update `lastSeenAt`; no Gemini request.
-- New discovery: may consume the single Gemini analysis slot.
+- New discovery: may consume one of up to four Gemini analysis slots.
 - Notification identity: normalized URL + notification channel.
 - A previously notified discovery must not generate another email.
 - Email eligibility requires all three: new discovery, `relevanceScore >= 7`, and no previously recorded email notification.
+- Before analysis slots are assigned, P3 gives unique unseen Brave candidates with explicit Codex or Claude Code matches a bounded deterministic priority signal. At most two of four positions are reserved by this signal; generic candidates retain stable search order and fill remaining slots, while preferred candidates may use otherwise-empty positions. This selection never changes eligibility or stored relevance.
+- P3 digest ordering gives relevant Codex and Claude Code discoveries a deterministic `+1` priority bonus capped at `10`, with preferred-tool status breaking an otherwise exact tie at the ceiling. This is a post-eligibility ordering signal: it does not mutate the stored Gemini relevance score and never makes a below-threshold story eligible.
+- P3 topic coverage includes AI/ML (including Gemini, GPT, and open-source models), IT/infrastructure (cloud, DevOps, Kubernetes, networking, and security advisories), programming releases, and developer tools/workflows (IDEs, CLI, CI/CD, code review, productivity tooling, techniques, and tutorials).
 
 ## Persistence
 

@@ -1,4 +1,5 @@
 import { formatDiscoveryEmail, formatDigestEmail } from "./discoveryEmailFormatter.js";
+import { compareDiscoveryPriority } from "./discoveryPriority.js";
 import { isNotificationEligible } from "./notificationEligibility.js";
 import type { NotificationHistory } from "./notificationHistoryCore.js";
 import { sendWithResend } from "../tools/email/resend.js";
@@ -54,7 +55,8 @@ export async function notifyDiscovery(
 }
 
 /**
- * Sends one digest email containing up to four eligible stories ranked by relevance.
+ * Sends one digest email containing up to four eligible stories ranked by the
+ * bounded P3 priority score and then by original relevance.
  * Returns a map of sourceUrl → NotificationResult for every result in the input.
  *
  * Accepted trade-off (consistent with notifyDiscovery): the email is sent before
@@ -110,9 +112,9 @@ export async function notifyDigest(
 
   if (unsentResults.length === 0) return notificationMap;
 
-  // Sort by relevance descending and cap at four stories.
+  // Apply bounded post-eligibility priority, then cap at four stories.
   const digest = [...unsentResults]
-    .sort((a, b) => b.discovery.analysis.relevanceScore - a.discovery.analysis.relevanceScore)
+    .sort((a, b) => compareDiscoveryPriority(a.discovery, b.discovery))
     .slice(0, 4);
 
   // Format and send one digest email.

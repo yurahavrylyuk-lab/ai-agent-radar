@@ -75,7 +75,7 @@
 
 ---
 
-## P3 · Broaden AI, IT, Programming, and Developer-Tool Coverage
+## P3 · Broaden AI, IT, Programming, and Developer-Tool Coverage ✅ DONE
 
 **Goal:** Expand topic coverage to include AI, IT, programming, developer tools, and workflows, with explicit priority for **Codex** and **Claude Code**.
 

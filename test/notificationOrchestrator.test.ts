@@ -184,6 +184,13 @@ function digestResult(relevanceScore: number, sourceUrl: string): DiscoveryProce
   return result("new", relevanceScore, sourceUrl);
 }
 
+function namedDigestResult(relevanceScore: number, sourceUrl: string, name: string): DiscoveryProcessingResult {
+  const item = digestResult(relevanceScore, sourceUrl);
+  item.discovery.analysis.name = name;
+  item.discovery.analysis.sourceTitle = name;
+  return item;
+}
+
 function openHistory(): NotificationHistory {
   return {
     async hasNotificationBeenSent() { return false; },
@@ -261,6 +268,22 @@ test("notifyDigest sorts eligible stories by relevance descending so the top sto
   assert.equal(passedOrder[0], "https://example.com/top");
   assert.equal(passedOrder[1], "https://example.com/mid");
   assert.equal(passedOrder[2], "https://example.com/low");
+});
+
+test("notifyDigest applies Codex and Claude Code priority after normal eligibility", async () => {
+  const stories = [
+    namedDigestResult(7, "https://example.com/generic-tool", "Generic developer tool"),
+    namedDigestResult(7, "https://example.com/codex", "Codex developer tool"),
+    namedDigestResult(7, "https://example.com/generic-language", "Generic programming update"),
+    namedDigestResult(7, "https://example.com/claude-code", "Claude Code programming update"),
+  ];
+  const passedOrder: string[] = [];
+  await notifyDigest(stories, {
+    history: openHistory(),
+    formatDigest: (items) => { passedOrder.push(...items.map((item) => item.analysis.sourceUrl)); return content; },
+    sendEmail: async () => ({ id: "x" }),
+  });
+  assert.deepEqual(passedOrder.slice(0, 2), ["https://example.com/codex", "https://example.com/claude-code"]);
 });
 
 test("notifyDigest caps the digest at four stories even when more are eligible", async () => {

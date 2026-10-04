@@ -86,3 +86,18 @@ test("instruction-like source content cannot replace source integrity fields", a
   assert.equal(analysis.sourceTitle, untrustedResult.title);
   assert.equal(analysis.sourceUrl, untrustedResult.url);
 });
+
+test("analysis prompt covers the P3 taxonomy and rejects keyword-only relevance", async () => {
+  let prompt = "";
+  await analyzeSearchResult(result, {
+    generate: async (input) => {
+      prompt = input;
+      return { outputText: JSON.stringify(validAnalysis) };
+    },
+  });
+  assert.match(prompt, /Codex, Claude Code, Gemini, GPT, and open-source models/);
+  assert.match(prompt, /cloud platforms, DevOps, Kubernetes, networking, and security advisories/);
+  assert.match(prompt, /language releases, compiler updates, and standard library changes/);
+  assert.match(prompt, /IDEs, CLI tools, CI\/CD, code review tools, productivity tooling/);
+  assert.match(prompt, /Score practical learning or project-building value, not keyword presence/);
+});
