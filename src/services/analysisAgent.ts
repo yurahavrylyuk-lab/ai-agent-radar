@@ -28,9 +28,15 @@ function analysisPrompt(result: SearchResult): string {
     url: result.url,
   });
 
-  return `You analyze one discovery for an educational AI-product and AI-agent radar.
+  return `You analyze one discovery for an educational AI, IT, programming, and developer-tool radar.
 
-Prioritize new AI agents, new AI products, developer tools/APIs, and technologies that inspire projects. Also value major updates, agent frameworks, SDKs, MCP/tool integrations, useful open-source agent projects, and important AI-agent ecosystem news. Give low relevance to generic AI news, marketing without meaningful technical or product information, and unrelated results.
+Prioritize useful developments across these topic groups:
+- AI and ML: large language models, AI agents, AI coding assistants, Codex, Claude Code, Gemini, GPT, and open-source models.
+- IT and infrastructure: cloud platforms, DevOps, Kubernetes, networking, and security advisories.
+- Programming: language releases, compiler updates, and standard library changes.
+- Developer tools and workflow: IDEs, CLI tools, CI/CD, code review tools, productivity tooling, and useful development techniques or tutorials.
+
+Preserve strong relevance for new AI agents, new AI products, developer tools/APIs, major updates, agent frameworks, SDKs, MCP/tool integrations, useful open-source agent projects, and important AI-agent ecosystem news. Score practical learning or project-building value, not keyword presence. Marketing without meaningful technical or product information and unrelated results must remain low relevance.
 
 Answer the question: What can someone learn or build because this exists?
 

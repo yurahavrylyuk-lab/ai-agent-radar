@@ -52,6 +52,18 @@ test("default monitoring invokes the exact ten reviewed queries once and in orde
   });
   assert.deepEqual(queries, [...MONITORING_QUERIES]);
   assert.equal(new Set(queries).size, 10);
+  assert.deepEqual(MONITORING_QUERIES, [
+    "AI news research product announcements",
+    "AI agent framework releases",
+    "AI model releases GPT Gemini open-source models capabilities",
+    "programming language compiler standard library releases",
+    "cloud DevOps Kubernetes networking security advisories",
+    "Codex AI coding assistant developer features releases",
+    "Claude Code AI coding assistant developer features releases",
+    "IDE CLI CI/CD code review developer tools releases",
+    "AI assisted software development workflow productivity examples",
+    "useful AI IT tools techniques workflow tutorials",
+  ]);
 });
 
 test("an explicit query preserves single-search behavior", async () => {

@@ -14,14 +14,14 @@ export const MONITORING_QUERY = "new AI agent developer tool framework release";
 export const MONITORING_QUERIES = [
   "AI news research product announcements",
   "AI agent framework releases",
-  "AI model releases capabilities",
-  "AI programming software development techniques",
-  "AI developer tools releases",
-  "Claude developer features releases",
-  "Codex coding features releases",
-  "AI coding tools releases",
-  "AI assisted development workflow examples",
-  "useful AI IT tools workflow tutorials",
+  "AI model releases GPT Gemini open-source models capabilities",
+  "programming language compiler standard library releases",
+  "cloud DevOps Kubernetes networking security advisories",
+  "Codex AI coding assistant developer features releases",
+  "Claude Code AI coding assistant developer features releases",
+  "IDE CLI CI/CD code review developer tools releases",
+  "AI assisted software development workflow productivity examples",
+  "useful AI IT tools techniques workflow tutorials",
 ] as const;
 export const MAX_NEW_ANALYSES_PER_CYCLE = 4;
 
