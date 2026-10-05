@@ -1,5 +1,11 @@
 import type { DiscoveryEmailContent, StoredDiscovery } from "../types/index.js";
 
+export type DigestEmailMode = "normal" | "fallback";
+
+export interface DigestEmailOptions {
+  mode?: DigestEmailMode;
+}
+
 const SUBJECT_PREFIX = "AI Agent Radar: ";
 const MAX_SUBJECT_NAME_LENGTH = 100;
 const EMAIL_BACKGROUND = "#090d16";
@@ -211,14 +217,19 @@ function conciseBlockHtml(story: StoredDiscovery, slot: number): string {
  * stories[0] is the lead (h2 + why-it-matters + key-points + source link).
  * stories[1–3] are concise (summary + source link).
  */
-export function formatDigestEmail(stories: StoredDiscovery[]): DiscoveryEmailContent {
+export function formatDigestEmail(
+  stories: StoredDiscovery[],
+  options: DigestEmailOptions = {},
+): DiscoveryEmailContent {
   if (stories.length === 0) throw new Error("Digest requires at least one story.");
 
   const lead = stories[0];
   const concise = stories.slice(1);
+  const isFallback = options.mode === "fallback";
 
   const textParts: string[] = [
     "AI AGENT RADAR — DAILY DIGEST",
+    ...(isFallback ? ["It could be relevant"] : []),
     [
       `STORY 1 — LEAD\n${lead.analysis.name}`,
       `SUMMARY\n${lead.analysis.summary}`,
@@ -243,6 +254,7 @@ export function formatDigestEmail(stories: StoredDiscovery[]): DiscoveryEmailCon
               <td style="padding: 30px 30px 24px; border-bottom: 1px solid #26344d;">
                 <p style="margin: 0 0 6px; color: ${PRIMARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 18px; font-weight: 700; letter-spacing: 1.6px; line-height: 24px;">AI AGENT RADAR</p>
                 <p style="margin: 0; color: ${SECONDARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 14px; line-height: 20px;">Daily digest &middot; ${stories.length} ${stories.length === 1 ? "story" : "stories"}</p>
+                ${isFallback ? `<p style="margin: 14px 0 0; color: ${ACCENT}; font-family: Arial, Helvetica, sans-serif; font-size: 15px; font-weight: 700; line-height: 20px;">It could be relevant</p>` : ""}
               </td>
             </tr>
             ${leadBlockHtml(lead)}

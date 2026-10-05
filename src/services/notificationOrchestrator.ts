@@ -1,13 +1,14 @@
-import { formatDiscoveryEmail, formatDigestEmail } from "./discoveryEmailFormatter.js";
+import { formatDiscoveryEmail, formatDigestEmail, type DigestEmailOptions } from "./discoveryEmailFormatter.js";
 import { compareDiscoveryPriority } from "./discoveryPriority.js";
 import { isNotificationEligible } from "./notificationEligibility.js";
+import { isTrustedFallbackSource } from "./sourceTrust.js";
 import type { NotificationHistory } from "./notificationHistoryCore.js";
 import { sendWithResend } from "../tools/email/resend.js";
 import type { DiscoveryEmailContent, DiscoveryProcessingResult, EmailSendResult, NotificationRecord, NotificationResult, StoredDiscovery } from "../types/index.js";
 
 type EligibilityCheck = (result: DiscoveryProcessingResult) => boolean;
 type DiscoveryEmailFormatter = (discovery: StoredDiscovery) => DiscoveryEmailContent;
-type DigestEmailFormatter = (stories: StoredDiscovery[]) => DiscoveryEmailContent;
+type DigestEmailFormatter = (stories: StoredDiscovery[], options?: DigestEmailOptions) => DiscoveryEmailContent;
 type EmailSender = (content: DiscoveryEmailContent) => Promise<EmailSendResult>;
 
 export interface NotificationOrchestratorDependencies {
@@ -74,22 +75,22 @@ export async function notifyDigest(
 
   const notificationMap = new Map<string, NotificationResult>();
 
-  // Partition into eligible and ineligible.
-  const eligibleResults: DiscoveryProcessingResult[] = [];
+  // Only new discoveries can enter either the normal or fallback path.
+  const newResults: DiscoveryProcessingResult[] = [];
   for (const result of results) {
-    if (!isEligible(result)) {
+    if (result.status !== "new") {
       notificationMap.set(result.discovery.analysis.sourceUrl, { status: "not_eligible" });
     } else {
-      eligibleResults.push(result);
+      newResults.push(result);
     }
   }
 
-  if (eligibleResults.length === 0) return notificationMap;
+  if (newResults.length === 0) return notificationMap;
 
-  // Deduplicate eligible stories by source URL (first occurrence wins).
+  // Deduplicate new stories by source URL (first occurrence wins).
   const seenUrls = new Set<string>();
   const deduped: DiscoveryProcessingResult[] = [];
-  for (const result of eligibleResults) {
+  for (const result of newResults) {
     const url = result.discovery.analysis.sourceUrl;
     if (!seenUrls.has(url)) {
       seenUrls.add(url);
@@ -112,15 +113,32 @@ export async function notifyDigest(
 
   if (unsentResults.length === 0) return notificationMap;
 
-  // Apply bounded post-eligibility priority, then cap at four stories.
-  const digest = [...unsentResults]
+  // Default every unsent discovery to not eligible; selected digest stories are
+  // replaced with sent records below.
+  for (const result of unsentResults) {
+    notificationMap.set(result.discovery.analysis.sourceUrl, { status: "not_eligible" });
+  }
+
+  const normalResults = unsentResults.filter(isEligible);
+  const fallback = normalResults.length === 0;
+  const candidateResults = fallback
+    ? unsentResults.filter((result) => isTrustedFallbackSource(result.discovery.analysis.sourceUrl))
+    : normalResults;
+
+  if (candidateResults.length === 0) return notificationMap;
+
+  // Apply existing bounded P3 ordering, then cap either path at four stories.
+  const digest = [...candidateResults]
     .sort((a, b) => compareDiscoveryPriority(a.discovery, b.discovery))
     .slice(0, 4);
 
   // Format and send one digest email.
   const formatDigest = dependencies.formatDigest ?? formatDigestEmail;
   const sendEmail = dependencies.sendEmail ?? sendWithResend;
-  const emailResult = await sendEmail(formatDigest(digest.map((r) => r.discovery)));
+  const emailResult = await sendEmail(formatDigest(
+    digest.map((r) => r.discovery),
+    { mode: fallback ? "fallback" : "normal" },
+  ));
 
   // Record a notification entry for every story in the digest.
   // Attempt all recordings before throwing so a single write failure does not
