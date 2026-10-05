@@ -212,3 +212,19 @@ test("formatDigestEmail does not mutate stored discoveries", () => {
 
   assert.deepEqual(stories, originals);
 });
+
+test("fallback digest visibly labels both HTML and plain text", () => {
+  const content = formatDigestEmail([digestStory("fallback")], { mode: "fallback" });
+
+  assert.match(content.html, />It could be relevant</);
+  assert.match(content.text, /It could be relevant/);
+});
+
+test("normal digest formatting does not include the fallback label", () => {
+  const defaultContent = formatDigestEmail([digestStory("normal")]);
+  const explicitContent = formatDigestEmail([digestStory("normal")], { mode: "normal" });
+
+  assert.doesNotMatch(defaultContent.html, /It could be relevant/);
+  assert.doesNotMatch(defaultContent.text, /It could be relevant/);
+  assert.deepEqual(explicitContent, defaultContent);
+});

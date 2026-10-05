@@ -27,7 +27,8 @@ Applies to the entire repository and all Architect, Builder, and Analyst work.
 
 - Cloudflare Cron runs daily at `0 8 * * *` UTC. HTTP returns only `AI Agent Radar worker ready` and must never start monitoring; no manual monitoring endpoint.
 - Per cycle: up to 10 Brave requests (one per `MONITORING_QUERIES` entry, quota-guarded), up to 4 new Gemini analyses, 1 Resend email, and 0 OpenAI calls. No automatic full-cycle retries.
-- Deduplicate discoveries before Gemini; known URLs update `lastSeenAt` without analysis. Email requires a new discovery, relevance score >= 7, and no previous email notification for the normalized URL/channel.
+- Deduplicate discoveries before Gemini; known URLs update `lastSeenAt` without analysis. Normal email eligibility requires a new discovery, relevance score >= 7, and no previous email notification for the normalized URL/channel.
+- P4 exception: only when zero NEW, unsent stories meet the normal threshold, up to four below-threshold NEW, unsent stories whose exact hostname is in the human-approved trusted-source registry may be sent in a digest labelled `It could be relevant`. Unknown or untrusted fallback sources are excluded; previously notified discoveries are never resent; source trust does not affect normal eligibility.
 - Production persistence is D1. The Worker bundle must exclude local JSON persistence, Node filesystem modules, dotenv, and OpenAI cloud dependencies.
 - Secrets belong in Worker secret bindings. Never commit API keys, the notification email address, temporary authentication secrets, or deployment credentials. See PROJECT_STATE.md for all limits and safety rules.
 - Inspect scripts before execution. Live monitoring/provider test commands are not offline validation and must not run during this bootstrap.

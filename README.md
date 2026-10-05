@@ -64,6 +64,22 @@ candidates retain their stable search order and fill the remaining slots. If
 generic candidates are unavailable, preferred candidates may use otherwise-empty
 slots. This selection does not bypass Gemini or change eligibility.
 
+## Fallback digest and source trust
+
+The normal notification threshold remains `7`. If at least one NEW, unsent
+analysis reaches that threshold, the normal digest contains only normally
+eligible stories; lower-scored stories never pad it.
+
+Only when zero NEW, unsent analyses reach the normal threshold may the radar
+send a fallback digest. Fallback candidates must have an exact hostname match
+in the human-maintained registry in `src/config/trustedSources.ts`. Parent
+domains do not approve subdomains, `www` variants are not inferred, and unknown,
+malformed, or unsupported sources fail closed. Trusted fallback candidates use
+the existing ranking and notification-history behavior, retain their original
+Gemini relevance scores, and are visibly labelled `It could be relevant` in
+both HTML and plain text. If no trusted fallback candidate exists, no email is
+sent. Source trust has no effect on normal eligibility.
+
 P2 is merged and Cloudflare production is configured with
 `BRAVE_DAILY_SEARCH_LIMIT=10`, `BRAVE_WEEKLY_SEARCH_LIMIT=100`, and
 `BRAVE_MONTHLY_SEARCH_LIMIT=350`.

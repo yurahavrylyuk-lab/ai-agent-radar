@@ -92,18 +92,22 @@ Explicitly prioritize:
 
 ## P4 — Fallback Relevant Story
 
-**Status:** TODO  
+**Status:** DONE
 **Priority:** Medium
 
-If no trustworthy story reaches the normal relevance threshold:
+If no NEW, unsent story reaches the normal relevance threshold:
 
-- select the best trustworthy available story or stories
+- select up to four available stories from the human-approved exact-host registry
 - send them instead of sending nothing
 - visibly label the fallback section:
 
 `It could be relevant`
 
 Do not send when no trustworthy candidate exists.
+
+Normal qualifying stories always take precedence and are never padded with
+fallback stories. Source trust applies only to fallback selection and does not
+alter Gemini relevance scores or the normal threshold of 7.
 
 **Done when:** normal-threshold and fallback paths are both covered by tests.
 
