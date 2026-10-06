@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { MAX_NEW_ANALYSES_PER_CYCLE, MONITORING_QUERIES, MONITORING_QUERY, runMonitoringCycle } from "../src/services/monitor.js";
+import { MAX_NEW_ANALYSES_PER_CYCLE, MAX_SEARCH_FAILURE_ERROR_LENGTH, MONITORING_QUERIES, MONITORING_QUERY, runMonitoringCycle } from "../src/services/monitor.js";
 import { BraveUsageGuardDeniedError } from "../src/tools/webSearch.js";
 import type { DiscoveryProcessingResult, NotificationResult, SearchResult } from "../src/types/index.js";
 
@@ -98,6 +98,25 @@ test("guard denial preserves earlier query results and stops later collection", 
   assert.deepEqual(processedUrls, [first.url, second.url]);
   assert.equal(outcome.searchResultsReceived, 2);
   assert.equal(outcome.resultsProcessed, 2);
+  assert.deepEqual(outcome.searchFailures, []);
+  assert.equal(outcome.failures, 0);
+});
+
+test("guard denial before any result preserves the existing clean stop behavior", async () => {
+  let searches = 0;
+  let processCalls = 0;
+  const outcome = await runMonitoringCycle(undefined, {
+    search: async () => {
+      searches += 1;
+      throw new BraveUsageGuardDeniedError();
+    },
+    process: async (item) => { processCalls += 1; return processed(item, "new"); },
+  });
+  assert.equal(searches, 1);
+  assert.equal(processCalls, 0);
+  assert.equal(outcome.searchResultsReceived, 0);
+  assert.deepEqual(outcome.searchFailures, []);
+  assert.equal(outcome.failures, 0);
 });
 
 test("cross-query results reach the existing processing loop in query and provider order", async () => {
@@ -253,19 +272,94 @@ test("same-cycle duplicate URLs do not consume another analysis slot", async () 
   assert.equal(outcome.duplicates, 1);
 });
 
-test("a non-guard failure during default collection retains abort behavior", async () => {
-  let searches = 0;
-  let processCalls = 0;
-  await assert.rejects(runMonitoringCycle(undefined, {
-    search: async () => {
-      searches += 1;
-      if (searches === 2) throw new Error("Brave unavailable");
-      return [searchResult("collected-before-failure")];
+test("a failed default query is recorded while earlier and later results are processed", async () => {
+  const attempts: string[] = [];
+  const processedUrls: string[] = [];
+  const first = searchResult("before-search-failure");
+  const later = searchResult("after-search-failure");
+  const outcome = await runMonitoringCycle(undefined, {
+    search: async (query) => {
+      attempts.push(query);
+      if (query === MONITORING_QUERIES[0]) return [first];
+      if (query === MONITORING_QUERIES[1]) throw new Error("Brave temporarily unavailable");
+      if (query === MONITORING_QUERIES[2]) return [later];
+      return [];
     },
-    process: async (item) => { processCalls += 1; return processed(item, "new"); },
-  }), /Monitoring cycle search failed: Brave unavailable/);
-  assert.equal(searches, 2);
-  assert.equal(processCalls, 0);
+    hasDiscovery: async () => true,
+    process: async (item) => { processedUrls.push(item.url); return processed(item, "duplicate"); },
+    notify: batchNotify("not_eligible"),
+  });
+  assert.deepEqual(attempts, [...MONITORING_QUERIES]);
+  assert.deepEqual(processedUrls, [first.url, later.url]);
+  assert.deepEqual(outcome.searchFailures, [{ queryOrdinal: 2, error: "Brave temporarily unavailable" }]);
+  assert.equal(outcome.searchResultsReceived, 2);
+  assert.equal(outcome.resultsProcessed, 2);
+  assert.equal(outcome.failures, 1);
+});
+
+test("multiple default-query failures complete when at least one usable result exists", async () => {
+  const attempts = new Map<string, number>();
+  const usable = searchResult("usable-after-multiple-failures");
+  const outcome = await runMonitoringCycle(undefined, {
+    search: async (query) => {
+      attempts.set(query, (attempts.get(query) ?? 0) + 1);
+      if (query === MONITORING_QUERIES[1]) throw new Error("First transient failure");
+      if (query === MONITORING_QUERIES[7]) throw new Error("Second transient failure");
+      if (query === MONITORING_QUERIES[9]) return [usable];
+      return [];
+    },
+    hasDiscovery: async () => true,
+    process: async (item) => processed(item, "duplicate"),
+    notify: batchNotify("not_eligible"),
+  });
+  assert.equal(attempts.size, MONITORING_QUERIES.length);
+  assert.ok([...attempts.values()].every((count) => count === 1));
+  assert.deepEqual(outcome.searchFailures, [
+    { queryOrdinal: 2, error: "First transient failure" },
+    { queryOrdinal: 8, error: "Second transient failure" },
+  ]);
+  assert.equal(outcome.searchResultsReceived, 1);
+  assert.equal(outcome.resultsProcessed, 1);
+  assert.equal(outcome.failures, 2);
+});
+
+test("recorded search-failure diagnostics are bounded and redact credential-shaped content", async () => {
+  const outcome = await runMonitoringCycle(undefined, {
+    search: async (query) => {
+      if (query === MONITORING_QUERIES[0]) return [searchResult("usable-for-safe-error")];
+      if (query === MONITORING_QUERIES[1]) {
+        throw new Error(
+          "Request https://example.test/private failed for person@example.test "
+          + "Bearer bearer-value api_key=credential-value "
+          + "x".repeat(MAX_SEARCH_FAILURE_ERROR_LENGTH + 40),
+        );
+      }
+      return [];
+    },
+    hasDiscovery: async () => true,
+    process: async (item) => processed(item, "duplicate"),
+    notify: batchNotify("not_eligible"),
+  });
+  const diagnostic = outcome.searchFailures[0]?.error ?? "";
+  assert.ok(diagnostic.length <= MAX_SEARCH_FAILURE_ERROR_LENGTH);
+  for (const forbidden of ["example.test", "person@example.test", "bearer-value", "credential-value"]) {
+    assert.equal(diagnostic.includes(forbidden), false);
+  }
+});
+
+test("default monitoring rejects when non-quota failures leave zero usable results without retrying", async () => {
+  const attempts = new Map<string, number>();
+  await assert.rejects(
+    runMonitoringCycle(undefined, {
+      search: async (query) => {
+        attempts.set(query, (attempts.get(query) ?? 0) + 1);
+        throw new Error(`Failure for ${query}`);
+      },
+    }),
+    /no usable results after 10 non-quota failure\(s\).*First failure at query 1/,
+  );
+  assert.equal(attempts.size, MONITORING_QUERIES.length);
+  assert.ok([...attempts.values()].every((count) => count === 1));
 });
 
 test("zero search results return a clean summary without processing or notification", async () => {

@@ -10,7 +10,7 @@ import { JsonNotificationHistory } from "./notificationHistory.js";
 import { generateWithGemini } from "../tools/llm/gemini.js";
 import { analyzeSearchResult } from "./analysisAgent.js";
 import { BraveUsageGuardDeniedError, searchWeb } from "../tools/webSearch.js";
-import type { DiscoveryProcessingResult, MonitoringCycleResult, NotificationResult, SearchResult } from "../types/index.js";
+import type { DiscoveryProcessingResult, MonitoringCycleResult, MonitoringSearchFailure, NotificationResult, SearchResult } from "../types/index.js";
 
 export const MONITORING_QUERY = "new AI agent developer tool framework release";
 export const MONITORING_QUERIES = [
@@ -26,6 +26,7 @@ export const MONITORING_QUERIES = [
   "useful AI IT tools techniques workflow tutorials",
 ] as const;
 export const MAX_NEW_ANALYSES_PER_CYCLE = 4;
+export const MAX_SEARCH_FAILURE_ERROR_LENGTH = 240;
 
 type WebSearch = (query: string) => Promise<SearchResult[]>;
 type DiscoveryLookup = (url: string) => Promise<boolean>;
@@ -47,10 +48,25 @@ function errorMessage(error: unknown): string {
   return (error instanceof Error ? error.message : "Unknown error").slice(0, 500);
 }
 
-function emptyResult(query: string, searchResultsReceived: number): MonitoringCycleResult {
+function searchFailureMessage(error: unknown): string {
+  return (error instanceof Error ? error.message : "Unknown search error")
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/\bhttps?:\/\/[^\s<>"']+/gi, "[redacted-url]")
+    .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, "[redacted-email]")
+    .replace(/\bBearer\s+\S+/gi, "Bearer [redacted]")
+    .replace(/\b(api[-_ ]?key|token|secret|authorization|credential|password)\b\s*[:=]\s*[^\s,;]+/gi, "$1=[redacted]")
+    .slice(0, MAX_SEARCH_FAILURE_ERROR_LENGTH);
+}
+
+function emptyResult(
+  query: string,
+  searchResultsReceived: number,
+  searchFailures: MonitoringSearchFailure[] = [],
+): MonitoringCycleResult {
   return {
     query,
     searchResultsReceived,
+    searchFailures,
     resultsProcessed: 0,
     newDiscoveries: 0,
     duplicates: 0,
@@ -58,7 +74,7 @@ function emptyResult(query: string, searchResultsReceived: number): MonitoringCy
     notificationsSent: 0,
     notificationsAlreadySent: 0,
     notificationsNotEligible: 0,
-    failures: 0,
+    failures: searchFailures.length,
     stoppedByAnalysisCap: false,
     outcomes: [],
   };
@@ -78,16 +94,29 @@ export async function runMonitoringCycle(
   const search = dependencies.search ?? ((searchQuery: string) => searchWeb(searchQuery, { usageTracker: new LocalJsonBraveUsageStore() }));
   const queries = query === undefined ? MONITORING_QUERIES : [query];
   const searchResults: SearchResult[] = [];
-  for (const searchQuery of queries) {
+  const searchFailures: MonitoringSearchFailure[] = [];
+  for (const [queryIndex, searchQuery] of queries.entries()) {
     try {
       searchResults.push(...await search(searchQuery));
     } catch (error) {
       if (query === undefined && error instanceof BraveUsageGuardDeniedError) break;
+      if (query === undefined) {
+        searchFailures.push({ queryOrdinal: queryIndex + 1, error: searchFailureMessage(error) });
+        continue;
+      }
       throw new Error(`Monitoring cycle search failed: ${errorMessage(error)}`);
     }
   }
 
-  const result = emptyResult(query ?? MONITORING_QUERIES.join(" | "), searchResults.length);
+  if (query === undefined && searchResults.length === 0 && searchFailures.length > 0) {
+    const firstFailure = searchFailures[0];
+    throw new Error(
+      `Monitoring cycle search failed: no usable results after ${searchFailures.length} non-quota failure(s). `
+      + `First failure at query ${firstFailure.queryOrdinal}: ${firstFailure.error}`,
+    );
+  }
+
+  const result = emptyResult(query ?? MONITORING_QUERIES.join(" | "), searchResults.length, searchFailures);
   const discoveryHistory = dependencies.history ?? new JsonDiscoveryHistory();
   const hasDiscovery = dependencies.hasDiscovery ?? (async (url: string) => (await discoveryHistory.getDiscovery(url)) !== undefined);
   const process = dependencies.process ?? ((searchResult: SearchResult) => processSearchResult(searchResult, {

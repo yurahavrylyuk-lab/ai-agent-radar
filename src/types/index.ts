@@ -82,9 +82,16 @@ export interface MonitoringCycleOutcome {
   error?: string;
 }
 
+/** One failed default-query search attempt, identified by its one-based query position. */
+export interface MonitoringSearchFailure {
+  queryOrdinal: number;
+  error: string;
+}
+
 export interface MonitoringCycleResult {
   query: string;
   searchResultsReceived: number;
+  searchFailures: MonitoringSearchFailure[];
   resultsProcessed: number;
   newDiscoveries: number;
   duplicates: number;
