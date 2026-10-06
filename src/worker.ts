@@ -9,6 +9,10 @@ import { generateWithGemini } from "./tools/llm/gemini.js";
 import { sendWithResend } from "./tools/email/resend.js";
 import { searchWeb } from "./tools/webSearch.js";
 import { runMonitoringCycle, type MonitoringCycleDependencies } from "./services/monitor.js";
+import type { MonitoringCycleResult } from "./types/index.js";
+
+export const MAX_SCHEDULED_OUTCOMES_LOGGED = 10;
+export const MAX_SCHEDULED_ERROR_LENGTH = 160;
 
 /** Worker binding names only. Secret values are configured outside source control in Step 8.3. */
 export interface RadarWorkerEnv {
@@ -27,6 +31,90 @@ export interface RadarWorkerEnv {
   GEMINI_MONTHLY_TOKEN_LIMIT: string;
   RESEND_API_KEY: string;
   NOTIFICATION_EMAIL: string;
+  CONTROLLED_EXECUTION_TOKEN?: string;
+}
+
+export interface ScheduledCycleSummary {
+  event: "scheduled_monitoring_cycle_completed";
+  searchResultsReceived: number;
+  resultsProcessed: number;
+  newDiscoveries: number;
+  duplicates: number;
+  analysesAttempted: number;
+  notificationsSent: number;
+  notificationsAlreadySent: number;
+  notificationsNotEligible: number;
+  failures: number;
+  stoppedByAnalysisCap: boolean;
+  outcomesTotal: number;
+  outcomesOmitted: number;
+  outcomes: Array<{
+    ordinal: number;
+    discoveryStatus?: "new" | "duplicate";
+    notificationStatus?: "not_eligible" | "already_sent" | "sent";
+    failed: boolean;
+    error?: string;
+  }>;
+}
+
+export interface ScheduledMonitoringDependencies {
+  runCycle?: () => Promise<MonitoringCycleResult>;
+  logInfo?: (summary: ScheduledCycleSummary) => void;
+}
+
+function redactScheduledError(error: string, env: RadarWorkerEnv): string {
+  const sensitiveValues = [
+    env.BRAVE_SEARCH_API_KEY,
+    env.GEMINI_API_KEY,
+    env.RESEND_API_KEY,
+    env.NOTIFICATION_EMAIL,
+    env.CONTROLLED_EXECUTION_TOKEN,
+  ]
+    .filter((value): value is string => typeof value === "string" && value.length > 0)
+    .sort((left, right) => right.length - left.length);
+
+  let safeError = error
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, "[redacted-email]")
+    .replace(/\bBearer\s+\S+/gi, "Bearer [redacted]")
+    .replace(/\bhttps?:\/\/[^\s<>"']+/gi, "[redacted-url]");
+  for (const sensitiveValue of sensitiveValues) {
+    safeError = safeError.split(sensitiveValue).join("[redacted]");
+  }
+  return safeError.slice(0, MAX_SCHEDULED_ERROR_LENGTH);
+}
+
+/** Builds the bounded, secret-free payload emitted after a successful scheduled cycle. */
+export function createScheduledCycleSummary(
+  result: MonitoringCycleResult,
+  env: RadarWorkerEnv,
+): ScheduledCycleSummary {
+  const outcomes = result.outcomes
+    .slice(0, MAX_SCHEDULED_OUTCOMES_LOGGED)
+    .map((outcome, index) => ({
+      ordinal: index + 1,
+      discoveryStatus: outcome.discoveryStatus,
+      notificationStatus: outcome.notificationStatus,
+      failed: outcome.error !== undefined,
+      ...(outcome.error === undefined ? {} : { error: redactScheduledError(outcome.error, env) }),
+    }));
+
+  return {
+    event: "scheduled_monitoring_cycle_completed",
+    searchResultsReceived: result.searchResultsReceived,
+    resultsProcessed: result.resultsProcessed,
+    newDiscoveries: result.newDiscoveries,
+    duplicates: result.duplicates,
+    analysesAttempted: result.analysesAttempted,
+    notificationsSent: result.notificationsSent,
+    notificationsAlreadySent: result.notificationsAlreadySent,
+    notificationsNotEligible: result.notificationsNotEligible,
+    failures: result.failures,
+    stoppedByAnalysisCap: result.stoppedByAnalysisCap,
+    outcomesTotal: result.outcomes.length,
+    outcomesOmitted: Math.max(0, result.outcomes.length - outcomes.length),
+    outcomes,
+  };
 }
 
 /** Composes cloud persistence without starting a monitoring cycle or invoking a provider. */
@@ -68,8 +156,24 @@ export function createWorkerMonitoringDependencies(env: RadarWorkerEnv): Monitor
 }
 
 /** Executes one bounded monitoring cycle only when Cloudflare delivers a scheduled event. */
-export function runScheduledMonitoring(env: RadarWorkerEnv): Promise<unknown> {
-  return runMonitoringCycle(undefined, createWorkerMonitoringDependencies(env));
+export async function runScheduledMonitoring(
+  env: RadarWorkerEnv,
+  dependencies: ScheduledMonitoringDependencies = {},
+): Promise<MonitoringCycleResult> {
+  const runCycle = dependencies.runCycle
+    ?? (() => runMonitoringCycle(undefined, createWorkerMonitoringDependencies(env)));
+  const result = await runCycle();
+  (dependencies.logInfo ?? ((summary) => console.info(summary)))(createScheduledCycleSummary(result, env));
+  return result;
+}
+
+/** Registers the single scheduled cycle promise with Cloudflare's event lifetime. */
+export function handleScheduledMonitoring(
+  env: RadarWorkerEnv,
+  context: ExecutionContext,
+  dependencies: ScheduledMonitoringDependencies = {},
+): void {
+  context.waitUntil(runScheduledMonitoring(env, dependencies));
 }
 
 export default {
@@ -80,6 +184,6 @@ export default {
     });
   },
   scheduled(_event: ScheduledEvent, env: RadarWorkerEnv, context: ExecutionContext): void {
-    context.waitUntil(runScheduledMonitoring(env));
+    handleScheduledMonitoring(env, context);
   },
 };
