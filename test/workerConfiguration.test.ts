@@ -5,7 +5,16 @@ import { D1DiscoveryHistory } from "../src/services/d1DiscoveryHistory.js";
 import { D1GeminiUsageStore } from "../src/services/d1GeminiUsageStore.js";
 import { D1NotificationHistory } from "../src/services/d1NotificationHistory.js";
 import { createRadarRuntimeConfiguration } from "../src/services/radarRuntimeConfiguration.js";
-import worker, { createWorkerMonitoringDependencies, createWorkerPersistence, type RadarWorkerEnv } from "../src/worker.js";
+import type { MonitoringCycleResult } from "../src/types/index.js";
+import worker, {
+  createWorkerMonitoringDependencies,
+  createWorkerPersistence,
+  handleScheduledMonitoring,
+  MAX_SCHEDULED_ERROR_LENGTH,
+  runScheduledMonitoring,
+  type RadarWorkerEnv,
+  type ScheduledCycleSummary,
+} from "../src/worker.js";
 
 function environment(): RadarWorkerEnv {
   return {
@@ -24,6 +33,36 @@ function environment(): RadarWorkerEnv {
     GEMINI_MONTHLY_TOKEN_LIMIT: "100000",
     RESEND_API_KEY: "resend-test-key",
     NOTIFICATION_EMAIL: "radar@example.test",
+  };
+}
+
+function monitoringResult(overrides: Partial<MonitoringCycleResult> = {}): MonitoringCycleResult {
+  return {
+    query: "test query",
+    searchResultsReceived: 12,
+    resultsProcessed: 5,
+    newDiscoveries: 4,
+    duplicates: 1,
+    analysesAttempted: 4,
+    notificationsSent: 1,
+    notificationsAlreadySent: 1,
+    notificationsNotEligible: 2,
+    failures: 1,
+    stoppedByAnalysisCap: true,
+    outcomes: [
+      {
+        sourceTitle: "Secret title should never be logged",
+        sourceUrl: "https://example.test/secret-path",
+        discoveryStatus: "new",
+        notificationStatus: "sent",
+      },
+      {
+        sourceTitle: "Failed source",
+        sourceUrl: "https://example.test/failure",
+        error: "Provider failed",
+      },
+    ],
+    ...overrides,
   };
 }
 
@@ -51,4 +90,140 @@ test("Worker composition uses D1 stores and exposes a scheduled handler without 
   assert.equal(typeof worker.scheduled, "function");
   const response = await worker.fetch(new Request("https://worker.example"), environment());
   assert.equal(await response.text(), "AI Agent Radar worker ready");
+});
+
+test("scheduled monitoring runs one cycle and emits one structured summary with exact counts", async () => {
+  const expected = monitoringResult();
+  const summaries: ScheduledCycleSummary[] = [];
+  let cycleCalls = 0;
+
+  const actual = await runScheduledMonitoring(environment(), {
+    runCycle: async () => {
+      cycleCalls += 1;
+      return expected;
+    },
+    logInfo: (summary) => summaries.push(summary),
+  });
+
+  assert.equal(actual, expected);
+  assert.equal(cycleCalls, 1);
+  assert.equal(summaries.length, 1);
+  assert.deepEqual(summaries[0], {
+    event: "scheduled_monitoring_cycle_completed",
+    searchResultsReceived: 12,
+    resultsProcessed: 5,
+    newDiscoveries: 4,
+    duplicates: 1,
+    analysesAttempted: 4,
+    notificationsSent: 1,
+    notificationsAlreadySent: 1,
+    notificationsNotEligible: 2,
+    failures: 1,
+    stoppedByAnalysisCap: true,
+    outcomesTotal: 2,
+    outcomesOmitted: 0,
+    outcomes: [
+      {
+        ordinal: 1,
+        discoveryStatus: "new",
+        notificationStatus: "sent",
+        failed: false,
+      },
+      {
+        ordinal: 2,
+        discoveryStatus: undefined,
+        notificationStatus: undefined,
+        failed: true,
+        error: "Provider failed",
+      },
+    ],
+  });
+});
+
+test("scheduled handler registers and awaits the single monitoring promise", async () => {
+  const summaries: ScheduledCycleSummary[] = [];
+  const promises: Promise<unknown>[] = [];
+  let cycleCalls = 0;
+  const context = {
+    waitUntil(promise: Promise<unknown>) {
+      promises.push(promise);
+    },
+  } as ExecutionContext;
+
+  handleScheduledMonitoring(environment(), context, {
+    runCycle: async () => {
+      cycleCalls += 1;
+      return monitoringResult();
+    },
+    logInfo: (summary) => summaries.push(summary),
+  });
+
+  assert.equal(promises.length, 1);
+  await promises[0];
+  assert.equal(cycleCalls, 1);
+  assert.equal(summaries.length, 1);
+});
+
+test("scheduled summary bounds outcomes and redacts secrets, email addresses, URLs, and source content", async () => {
+  const env = environment();
+  env.CONTROLLED_EXECUTION_TOKEN = "controlled-execution-secret";
+  const longError = [
+    env.BRAVE_SEARCH_API_KEY,
+    env.GEMINI_API_KEY,
+    env.RESEND_API_KEY,
+    env.NOTIFICATION_EMAIL,
+    env.CONTROLLED_EXECUTION_TOKEN,
+    "another@example.test",
+    "Bearer bearer-secret",
+    "x".repeat(MAX_SCHEDULED_ERROR_LENGTH + 40),
+  ].join("\n");
+  const outcomes = Array.from({ length: 12 }, (_, index) => ({
+    sourceTitle: `private source body ${index}`,
+    sourceUrl: `https://secret.example.test/path/${index}`,
+    error: longError,
+  }));
+  const summaries: ScheduledCycleSummary[] = [];
+
+  await runScheduledMonitoring(env, {
+    runCycle: async () => monitoringResult({ outcomes }),
+    logInfo: (summary) => summaries.push(summary),
+  });
+
+  const serialized = JSON.stringify(summaries[0]);
+  assert.equal(summaries[0]?.outcomes.length, 10);
+  assert.equal(summaries[0]?.outcomesTotal, 12);
+  assert.equal(summaries[0]?.outcomesOmitted, 2);
+  assert.ok(summaries[0]?.outcomes.every((outcome) => (outcome.error?.length ?? 0) <= MAX_SCHEDULED_ERROR_LENGTH));
+  for (const forbidden of [
+    env.BRAVE_SEARCH_API_KEY,
+    env.GEMINI_API_KEY,
+    env.RESEND_API_KEY,
+    env.NOTIFICATION_EMAIL,
+    env.CONTROLLED_EXECUTION_TOKEN,
+    "another@example.test",
+    "bearer-secret",
+    "secret.example.test",
+    "private source body",
+  ]) {
+    assert.equal(serialized.includes(forbidden), false, `summary must not contain ${forbidden}`);
+  }
+});
+
+test("scheduled monitoring propagates a rejected cycle without logging success or retrying", async () => {
+  const summaries: ScheduledCycleSummary[] = [];
+  let cycleCalls = 0;
+
+  await assert.rejects(
+    runScheduledMonitoring(environment(), {
+      runCycle: async () => {
+        cycleCalls += 1;
+        throw new Error("cycle failed");
+      },
+      logInfo: (summary) => summaries.push(summary),
+    }),
+    /cycle failed/,
+  );
+
+  assert.equal(cycleCalls, 1);
+  assert.equal(summaries.length, 0);
 });

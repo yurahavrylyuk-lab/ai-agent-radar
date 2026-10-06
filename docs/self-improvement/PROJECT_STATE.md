@@ -31,6 +31,7 @@ Cloudflare Cron
 - Autonomous production schedule: `0 8 * * *` UTC, once daily at 08:00 UTC.
 - Public HTTP fetch returns only `AI Agent Radar worker ready`.
 - HTTP requests must never trigger monitoring. There is no manual monitoring endpoint.
+- Each successful scheduled run emits exactly one structured, secret-free cycle summary with aggregate counts and bounded outcome status details. It excludes source URLs and content, redacts configured secret values and email addresses, and truncates error text.
 - No automatic full-cycle retries.
 
 ## Providers
