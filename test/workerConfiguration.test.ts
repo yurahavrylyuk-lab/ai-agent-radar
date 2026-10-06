@@ -168,6 +168,7 @@ test("scheduled summary bounds outcomes and redacts secrets, email addresses, UR
   const env = environment();
   env.CONTROLLED_EXECUTION_TOKEN = "controlled-execution-secret";
   const longError = [
+    "Request failed for https://example.test/private/story?id=123&token=something",
     env.BRAVE_SEARCH_API_KEY,
     env.GEMINI_API_KEY,
     env.RESEND_API_KEY,
@@ -202,6 +203,10 @@ test("scheduled summary bounds outcomes and redacts secrets, email addresses, UR
     env.CONTROLLED_EXECUTION_TOKEN,
     "another@example.test",
     "bearer-secret",
+    "example.test",
+    "/private/story",
+    "id=123",
+    "token=something",
     "secret.example.test",
     "private source body",
   ]) {

@@ -76,7 +76,8 @@ function redactScheduledError(error: string, env: RadarWorkerEnv): string {
   let safeError = error
     .replace(/[\r\n\t]+/g, " ")
     .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, "[redacted-email]")
-    .replace(/\bBearer\s+\S+/gi, "Bearer [redacted]");
+    .replace(/\bBearer\s+\S+/gi, "Bearer [redacted]")
+    .replace(/\bhttps?:\/\/[^\s<>"']+/gi, "[redacted-url]");
   for (const sensitiveValue of sensitiveValues) {
     safeError = safeError.split(sensitiveValue).join("[redacted]");
   }
