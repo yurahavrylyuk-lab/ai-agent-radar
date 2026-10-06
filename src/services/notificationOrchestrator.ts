@@ -2,9 +2,9 @@ import { formatDiscoveryEmail, formatDigestEmail, type DigestEmailOptions } from
 import { compareDiscoveryPriority } from "./discoveryPriority.js";
 import { isNotificationEligible } from "./notificationEligibility.js";
 import { isTrustedFallbackSource } from "./sourceTrust.js";
-import type { NotificationHistory } from "./notificationHistoryCore.js";
+import { NotificationHistoryError, type NotificationHistory } from "./notificationHistoryCore.js";
 import { sendWithResend } from "../tools/email/resend.js";
-import type { DiscoveryEmailContent, DiscoveryProcessingResult, EmailSendResult, NotificationRecord, NotificationResult, StoredDiscovery } from "../types/index.js";
+import type { DeliveryCandidate, DiscoveryEmailContent, DiscoveryProcessingResult, EmailSendResult, NotificationRecord, NotificationResult, StoredDiscovery } from "../types/index.js";
 
 type EligibilityCheck = (result: DiscoveryProcessingResult) => boolean;
 type DiscoveryEmailFormatter = (discovery: StoredDiscovery) => DiscoveryEmailContent;
@@ -19,6 +19,13 @@ export interface NotificationOrchestratorDependencies {
   /** Used by notifyDigest for a multi-story digest email. */
   formatDigest?: DigestEmailFormatter;
   sendEmail?: EmailSender;
+}
+
+export interface DigestDeliveryResult {
+  notifications: Map<string, NotificationResult>;
+  eligibleCandidates: DeliveryCandidate[];
+  sentCandidates: DeliveryCandidate[];
+  mode?: DigestEmailOptions["mode"];
 }
 
 function messageOf(error: unknown): string {
@@ -56,79 +63,74 @@ export async function notifyDiscovery(
 }
 
 /**
- * Sends one digest email containing up to four eligible stories ranked by the
- * bounded P3 priority score and then by original relevance.
- * Returns a map of sourceUrl → NotificationResult for every result in the input.
+ * Sends one digest email containing up to four fresh or replay stories ranked
+ * by the bounded P3 priority score and then by original relevance.
  *
  * Accepted trade-off (consistent with notifyDiscovery): the email is sent before
  * notification records are written. If persistence fails, affected stories remain
  * eligible on the next cycle. The try-all recording loop narrows the inconsistency
  * window by attempting every story before surfacing errors.
  */
-export async function notifyDigest(
-  results: DiscoveryProcessingResult[],
+export async function notifyDeliveryDigest(
+  candidates: DeliveryCandidate[],
   dependencies: NotificationOrchestratorDependencies = {},
-): Promise<Map<string, NotificationResult>> {
+): Promise<DigestDeliveryResult> {
   const history = dependencies.history;
   if (!history) throw new Error("Notification history is required.");
   const isEligible = dependencies.isEligible ?? isNotificationEligible;
 
   const notificationMap = new Map<string, NotificationResult>();
-
-  // Only new discoveries can enter either the normal or fallback path.
-  const newResults: DiscoveryProcessingResult[] = [];
-  for (const result of results) {
-    if (result.status !== "new") {
-      notificationMap.set(result.discovery.analysis.sourceUrl, { status: "not_eligible" });
-    } else {
-      newResults.push(result);
+  const dedupedByUrl = new Map<string, DeliveryCandidate>();
+  for (const candidate of candidates) {
+    const existing = dedupedByUrl.get(candidate.discovery.normalizedUrl);
+    if (!existing || (existing.origin === "replay" && candidate.origin === "fresh")) {
+      dedupedByUrl.set(candidate.discovery.normalizedUrl, candidate);
     }
   }
-
-  if (newResults.length === 0) return notificationMap;
-
-  // Deduplicate new stories by source URL (first occurrence wins).
-  const seenUrls = new Set<string>();
-  const deduped: DiscoveryProcessingResult[] = [];
-  for (const result of newResults) {
-    const url = result.discovery.analysis.sourceUrl;
-    if (!seenUrls.has(url)) {
-      seenUrls.add(url);
-      deduped.push(result);
-    }
-  }
+  const deduped = [...dedupedByUrl.values()];
 
   // Separate already-notified stories from unsent ones.
-  const unsentResults: DiscoveryProcessingResult[] = [];
-  for (const result of deduped) {
-    const url = result.discovery.analysis.sourceUrl;
-    if (await history.hasNotificationBeenSent(url, "email")) {
-      const record = await history.getNotificationRecord(url, "email");
-      if (!record) throw new Error("Known notification could not be retrieved safely.");
-      notificationMap.set(url, { status: "already_sent", record });
-    } else {
-      unsentResults.push(result);
+  const unsentCandidates: DeliveryCandidate[] = [];
+  for (const candidate of deduped) {
+    const url = candidate.discovery.analysis.sourceUrl;
+    try {
+      if (await history.hasNotificationBeenSent(url, "email")) {
+        const record = await history.getNotificationRecord(url, "email");
+        if (!record) throw new NotificationHistoryError("Known notification could not be retrieved safely.");
+        notificationMap.set(url, { status: "already_sent", record });
+      } else {
+        unsentCandidates.push(candidate);
+      }
+    } catch (error) {
+      if (error instanceof NotificationHistoryError) throw error;
+      throw new NotificationHistoryError(`Notification history could not be read safely: ${messageOf(error)}`);
     }
   }
 
-  if (unsentResults.length === 0) return notificationMap;
+  if (unsentCandidates.length === 0) {
+    return { notifications: notificationMap, eligibleCandidates: [], sentCandidates: [] };
+  }
 
   // Default every unsent discovery to not eligible; selected digest stories are
   // replaced with sent records below.
-  for (const result of unsentResults) {
-    notificationMap.set(result.discovery.analysis.sourceUrl, { status: "not_eligible" });
+  for (const candidate of unsentCandidates) {
+    notificationMap.set(candidate.discovery.analysis.sourceUrl, { status: "not_eligible" });
   }
 
-  const normalResults = unsentResults.filter(isEligible);
-  const fallback = normalResults.length === 0;
-  const candidateResults = fallback
-    ? unsentResults.filter((result) => isTrustedFallbackSource(result.discovery.analysis.sourceUrl))
-    : normalResults;
+  const normalCandidates = unsentCandidates.filter((candidate) =>
+    isEligible({ status: "new", discovery: candidate.discovery })
+  );
+  const fallback = normalCandidates.length === 0;
+  const eligibleCandidates = fallback
+    ? unsentCandidates.filter((candidate) => isTrustedFallbackSource(candidate.discovery.analysis.sourceUrl))
+    : normalCandidates;
 
-  if (candidateResults.length === 0) return notificationMap;
+  if (eligibleCandidates.length === 0) {
+    return { notifications: notificationMap, eligibleCandidates: [], sentCandidates: [] };
+  }
 
   // Apply existing bounded P3 ordering, then cap either path at four stories.
-  const digest = [...candidateResults]
+  const digest = [...eligibleCandidates]
     .sort((a, b) => compareDiscoveryPriority(a.discovery, b.discovery))
     .slice(0, 4);
 
@@ -136,7 +138,7 @@ export async function notifyDigest(
   const formatDigest = dependencies.formatDigest ?? formatDigestEmail;
   const sendEmail = dependencies.sendEmail ?? sendWithResend;
   const emailResult = await sendEmail(formatDigest(
-    digest.map((r) => r.discovery),
+    digest.map((candidate) => candidate.discovery),
     { mode: fallback ? "fallback" : "normal" },
   ));
 
@@ -144,11 +146,13 @@ export async function notifyDigest(
   // Attempt all recordings before throwing so a single write failure does not
   // leave subsequent stories permanently unrecorded.
   const recordErrors: string[] = [];
-  for (const result of digest) {
-    const url = result.discovery.analysis.sourceUrl;
+  const sentCandidates: DeliveryCandidate[] = [];
+  for (const candidate of digest) {
+    const url = candidate.discovery.analysis.sourceUrl;
     try {
       const record = await history.recordNotificationSent(url, "email", emailResult.id);
       notificationMap.set(url, { status: "sent", record });
+      sentCandidates.push(candidate);
     } catch (error) {
       recordErrors.push(messageOf(error));
     }
@@ -159,5 +163,29 @@ export async function notifyDigest(
     );
   }
 
+  return {
+    notifications: notificationMap,
+    eligibleCandidates: [...eligibleCandidates],
+    sentCandidates,
+    mode: fallback ? "fallback" : "normal",
+  };
+}
+
+export async function notifyDigest(
+  results: DiscoveryProcessingResult[],
+  dependencies: NotificationOrchestratorDependencies = {},
+): Promise<Map<string, NotificationResult>> {
+  const notificationMap = new Map<string, NotificationResult>();
+  const candidates: DeliveryCandidate[] = [];
+  for (const result of results) {
+    if (result.status === "new") {
+      candidates.push({ discovery: result.discovery, origin: "fresh" });
+    } else {
+      notificationMap.set(result.discovery.analysis.sourceUrl, { status: "not_eligible" });
+    }
+  }
+
+  const delivery = await notifyDeliveryDigest(candidates, dependencies);
+  for (const [url, notification] of delivery.notifications) notificationMap.set(url, notification);
   return notificationMap;
 }

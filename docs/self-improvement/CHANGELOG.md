@@ -1,5 +1,11 @@
 # Self-improvement changelog
 
+## 2026-10-06 — Proposal 1 bounded notification replay ready for review
+
+- Added a 72-hour, activation-cutoff-protected, 100-row bounded lookup for analyzed but unnotified discoveries, using existing JSON/D1 discovery data without a migration.
+- Fresh and replay candidates now share normalized identity, P3 ordering, the four-story digest cap, P4's current exact-host trust check, and ordinary notification history.
+- Added aggregate secret-free replay observability. No provider limits, Cron, secrets, deployment, provider calls, P5, or production merge changed.
+
 ## 2026-09-20 — GOV-001 completed
 
 - GOV-001 revision 2 was independently reviewed: Analyst result `PASS` at checkpoint `5137631f44f8888fd4690cad368592110bb396c1`.

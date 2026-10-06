@@ -1,8 +1,8 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import type { AgentAnalysis, StoredDiscovery } from "../types/index.js";
-import { DiscoveryHistoryError, isValidAgentAnalysis, normalizeDiscoveryUrl, type DiscoveryHistory } from "./discoveryHistoryCore.js";
-export { DiscoveryHistoryError, isValidAgentAnalysis, normalizeDiscoveryUrl, type DiscoveryHistory } from "./discoveryHistoryCore.js";
+import { DiscoveryHistoryError, isValidAgentAnalysis, normalizeDiscoveryUrl, validateRecentDiscoveryQuery, type DiscoveryHistory, type RecentDiscoveryQuery, type RecentDiscoveryResult } from "./discoveryHistoryCore.js";
+export { DiscoveryHistoryError, isValidAgentAnalysis, normalizeDiscoveryUrl, type DiscoveryHistory, type RecentDiscoveryQuery, type RecentDiscoveryResult } from "./discoveryHistoryCore.js";
 
 interface DiscoveryHistoryData {
   discoveries: StoredDiscovery[];
@@ -13,7 +13,9 @@ function nonEmptyString(value: unknown): value is string {
 }
 
 function validTimestamp(value: unknown): value is string {
-  return typeof value === "string" && !Number.isNaN(new Date(value).getTime());
+  if (typeof value !== "string") return false;
+  const parsed = new Date(value);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString() === value;
 }
 
 function validDiscovery(value: unknown): value is StoredDiscovery {
@@ -56,6 +58,23 @@ export class JsonDiscoveryHistory implements DiscoveryHistory {
     const normalizedUrl = normalizeDiscoveryUrl(url);
     const discovery = (await this.read()).discoveries.find((item) => item.normalizedUrl === normalizedUrl);
     return discovery ? copy(discovery) : undefined;
+  }
+
+  async listRecentDiscoveries(query: RecentDiscoveryQuery): Promise<RecentDiscoveryResult> {
+    validateRecentDiscoveryQuery(query);
+    const discoveries = (await this.read()).discoveries
+      .filter((item) => item.firstSeenAt >= query.fromInclusive && item.firstSeenAt < query.beforeExclusive)
+      .sort((left, right) => {
+        if (left.firstSeenAt < right.firstSeenAt) return 1;
+        if (left.firstSeenAt > right.firstSeenAt) return -1;
+        if (left.normalizedUrl < right.normalizedUrl) return -1;
+        if (left.normalizedUrl > right.normalizedUrl) return 1;
+        return 0;
+      });
+    return {
+      discoveries: discoveries.slice(0, query.limit).map(copy),
+      truncated: discoveries.length > query.limit,
+    };
   }
 
   async hasDiscovery(url: string): Promise<boolean> {

@@ -46,6 +46,14 @@ export type DiscoveryProcessingResult =
   | { status: "new"; discovery: StoredDiscovery }
   | { status: "duplicate"; discovery: StoredDiscovery };
 
+export type DeliveryCandidateOrigin = "fresh" | "replay";
+
+/** A completed stored analysis admitted to the single digest-delivery path. */
+export interface DeliveryCandidate {
+  discovery: StoredDiscovery;
+  origin: DeliveryCandidateOrigin;
+}
+
 /** Provider-neutral content ready for a future email transport. */
 export interface DiscoveryEmailContent {
   subject: string;
@@ -101,5 +109,10 @@ export interface MonitoringCycleResult {
   notificationsNotEligible: number;
   failures: number;
   stoppedByAnalysisCap: boolean;
+  replayCandidatesConsidered: number;
+  replayCandidatesEligible: number;
+  freshStoriesSent: number;
+  replayStoriesSent: number;
+  replayLookupTruncated: boolean;
   outcomes: MonitoringCycleOutcome[];
 }

@@ -2,8 +2,20 @@ import { agentAnalysisCategories, type AgentAnalysis, type AgentAnalysisCategory
 
 export class DiscoveryHistoryError extends Error {}
 
+export interface RecentDiscoveryQuery {
+  fromInclusive: string;
+  beforeExclusive: string;
+  limit: number;
+}
+
+export interface RecentDiscoveryResult {
+  discoveries: StoredDiscovery[];
+  truncated: boolean;
+}
+
 export interface DiscoveryHistory {
   getDiscovery(url: string): Promise<StoredDiscovery | undefined>;
+  listRecentDiscoveries(query: RecentDiscoveryQuery): Promise<RecentDiscoveryResult>;
   recordDiscovery(analysis: AgentAnalysis, seenAt?: Date): Promise<StoredDiscovery>;
   touchDiscovery(url: string, seenAt?: Date): Promise<StoredDiscovery | undefined>;
 }
@@ -26,4 +38,17 @@ export function normalizeDiscoveryUrl(value: string): string {
   if (!trimmed) throw new DiscoveryHistoryError("Discovery URL must be a non-empty string.");
   try { const url = new URL(trimmed); url.pathname = url.pathname.replace(/\/+$/, "") || "/"; return url.toString(); }
   catch { throw new DiscoveryHistoryError("Discovery URL must be a valid absolute URL."); }
+}
+
+export function validateRecentDiscoveryQuery(query: RecentDiscoveryQuery): void {
+  const from = new Date(query.fromInclusive);
+  const before = new Date(query.beforeExclusive);
+  if (Number.isNaN(from.getTime()) || from.toISOString() !== query.fromInclusive ||
+      Number.isNaN(before.getTime()) || before.toISOString() !== query.beforeExclusive ||
+      from.getTime() >= before.getTime()) {
+    throw new DiscoveryHistoryError("Recent discovery time range is invalid.");
+  }
+  if (!Number.isInteger(query.limit) || query.limit < 1 || query.limit > 100) {
+    throw new DiscoveryHistoryError("Recent discovery limit must be an integer from 1 to 100.");
+  }
 }

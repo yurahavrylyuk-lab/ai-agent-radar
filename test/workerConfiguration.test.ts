@@ -50,6 +50,11 @@ function monitoringResult(overrides: Partial<MonitoringCycleResult> = {}): Monit
     notificationsNotEligible: 2,
     failures: 1,
     stoppedByAnalysisCap: true,
+    replayCandidatesConsidered: 3,
+    replayCandidatesEligible: 2,
+    freshStoriesSent: 1,
+    replayStoriesSent: 2,
+    replayLookupTruncated: false,
     outcomes: [
       {
         sourceTitle: "Secret title should never be logged",
@@ -85,6 +90,7 @@ test("Worker composition uses D1 stores and exposes a scheduled handler without 
   assert.ok(persistence.notificationHistory instanceof D1NotificationHistory);
   assert.ok(persistence.braveUsageStore instanceof D1BraveUsageStore);
   assert.ok(persistence.geminiUsageStore instanceof D1GeminiUsageStore);
+  assert.ok(dependencies.history instanceof D1DiscoveryHistory, "replay discovery history must use D1");
   assert.equal(typeof dependencies.search, "function");
   assert.equal(typeof dependencies.process, "function");
   assert.ok(dependencies.notification?.history instanceof D1NotificationHistory, "notification history must be a D1NotificationHistory");
@@ -124,6 +130,11 @@ test("scheduled monitoring runs one cycle and emits one structured summary with 
     notificationsNotEligible: 2,
     failures: 1,
     stoppedByAnalysisCap: true,
+    replayCandidatesConsidered: 3,
+    replayCandidatesEligible: 2,
+    freshStoriesSent: 1,
+    replayStoriesSent: 2,
+    replayLookupTruncated: false,
     outcomesTotal: 2,
     outcomesOmitted: 0,
     outcomes: [

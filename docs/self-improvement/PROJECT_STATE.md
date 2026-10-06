@@ -32,6 +32,7 @@ Cloudflare Cron
 - Public HTTP fetch returns only `AI Agent Radar worker ready`.
 - HTTP requests must never trigger monitoring. There is no manual monitoring endpoint.
 - Each successful scheduled run emits exactly one structured, secret-free cycle summary with aggregate counts and bounded outcome status details. It excludes source URLs and content, redacts configured secret values and email addresses, and truncates error text.
+- Each cycle performs one bounded recent-discovery lookup so an analyzed but unnotified discovery can re-enter the shared digest without Brave rediscovery or Gemini re-analysis. Replay adds no provider request and does not create a second email.
 - Default multi-query monitoring records isolated non-quota Brave failures by one-based query ordinal and continues sequentially so successful query results still reach normal deduplication, analysis, and notification processing. Each recorded search failure appears in `searchFailures` and increments the aggregate `failures` count. Each query is attempted at most once; there is no query or full-cycle retry. A quota denial still stops further searches without becoming a transient failure. If non-quota failures occur and no usable results were collected, the cycle rejects instead of reporting empty success.
 - No automatic full-cycle retries.
 
@@ -80,8 +81,9 @@ These are ceilings, not consumption targets. Provider quota changes require expl
 - New discovery: may consume one of up to four Gemini analysis slots.
 - Notification identity: normalized URL + notification channel.
 - A previously notified discovery must not generate another email.
-- Normal email eligibility requires all three: new discovery, `relevanceScore >= 7`, and no previously recorded email notification.
-- P4 adds one bounded fallback exception after notification-history filtering: only when zero NEW, unsent analyses meet the normal threshold, up to four below-threshold candidates from human-approved exact hostnames may be sent in one digest labelled `It could be relevant`. If no trusted candidate exists, no email is sent. Normal candidates always take precedence and are never padded with fallback stories.
+- Normal email eligibility requires all three: a fresh new discovery or approved replay discovery, `relevanceScore >= 7`, and no previously recorded email notification.
+- Replay candidates use immutable `firstSeenAt` and must be both within 72 hours of the cycle-start instant and on/after the immutable activation cutoff `2026-10-06T16:00:00Z`. Discovery lookup is newest-first with normalized-URL tie-breaking, capped at 100 with no pagination. Fresh and replay candidates deduplicate by normalized URL, use one P3-ranked four-story pool, and produce at most one digest. Stored relevance is unchanged.
+- P4 adds one bounded fallback exception after notification-history filtering: only when zero fresh-or-replay, unsent analyses meet the normal threshold, up to four below-threshold candidates from currently human-approved exact hostnames may be sent in one digest labelled `It could be relevant`. Trust is rechecked at replay time. If no trusted candidate exists, no email is sent. Normal candidates always take precedence and are never padded with fallback stories.
 - The versioned fallback trust registry is static and provider-independent. It uses exact HTTP(S) hostname equality only; it infers no parent, subdomain, or `www` trust. Unknown, malformed, unsupported, credentialed, address-based, or non-default-port sources fail closed. Trust does not change stored Gemini relevance or normal eligibility.
 - Before analysis slots are assigned, P3 gives unique unseen Brave candidates with explicit Codex or Claude Code matches a bounded deterministic priority signal. At most two of four positions are reserved by this signal; generic candidates retain stable search order and fill remaining slots, while preferred candidates may use otherwise-empty positions. This selection never changes eligibility or stored relevance.
 - P3 digest ordering gives relevant Codex and Claude Code discoveries a deterministic `+1` priority bonus capped at `10`, with preferred-tool status breaking an otherwise exact tie at the ceiling. This is a post-eligibility ordering signal: it does not mutate the stored Gemini relevance score and never makes a below-threshold story eligible.
@@ -96,6 +98,8 @@ Production persistence uses Cloudflare D1 for:
 - Brave usage.
 - Gemini usage.
 - Gemini usage state.
+
+The same discoveries table supplies the bounded replay lookup; Proposal 1 adds no migration, retry table, or delivery-attempt table. A successful ordinary notification-history record excludes all later replay. A failed email send writes no success record and can be considered again until expiry. The accepted send-before-history-write ambiguity remains: provider acceptance followed by history failure can allow a later duplicate delivery.
 
 Versioned D1 migrations live in `migrations/`. Local development also supports JSON persistence. Local JSON is not part of the deployed Worker runtime.
 

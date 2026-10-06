@@ -118,6 +118,7 @@ test("a failed history check prevents analysis", async () => {
   let analysisCalls = 0;
   const brokenHistory: DiscoveryHistory = {
     async getDiscovery() { throw new Error("history is corrupted"); },
+    async listRecentDiscoveries() { return { discoveries: [], truncated: false }; },
     async recordDiscovery() { throw new Error("unreachable"); },
     async touchDiscovery() { throw new Error("unreachable"); },
   };
@@ -131,6 +132,7 @@ test("a failed history check prevents analysis", async () => {
 test("a recording failure is surfaced", async () => {
   const failingHistory: DiscoveryHistory = {
     async getDiscovery() { return undefined; },
+    async listRecentDiscoveries() { return { discoveries: [], truncated: false }; },
     async recordDiscovery() { throw new Error("history write failed"); },
     async touchDiscovery() { throw new Error("unreachable"); },
   };
