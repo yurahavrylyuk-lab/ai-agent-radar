@@ -16,6 +16,7 @@ The project is an educational discovery and project-idea radar: its aim is not j
 - A conservative per-cycle analysis cap limits new analyses.
 - The original source title and URL are preserved through analysis and notification formatting.
 - Local discovery and notification history preserve operational state across runs.
+- Recently analyzed but unnotified discoveries can be replayed from durable history without another Gemini analysis.
 
 Production runs in Cloudflare Workers with D1-backed persistence. Public HTTP remains health-only; monitoring runs only from the daily Cloudflare Cron Trigger.
 
@@ -66,11 +67,11 @@ slots. This selection does not bypass Gemini or change eligibility.
 
 ## Fallback digest and source trust
 
-The normal notification threshold remains `7`. If at least one NEW, unsent
-analysis reaches that threshold, the normal digest contains only normally
+The normal notification threshold remains `7`. If at least one fresh-or-replay,
+unsent analysis reaches that threshold, the normal digest contains only normally
 eligible stories; lower-scored stories never pad it.
 
-Only when zero NEW, unsent analyses reach the normal threshold may the radar
+Only when zero fresh-or-replay, unsent analyses reach the normal threshold may the radar
 send a fallback digest. Fallback candidates must have an exact hostname match
 in the human-maintained registry in `src/config/trustedSources.ts`. Parent
 domains do not approve subdomains, `www` variants are not inferred, and unknown,
@@ -83,6 +84,22 @@ sent. Source trust has no effect on normal eligibility.
 P2 is merged and Cloudflare production is configured with
 `BRAVE_DAILY_SEARCH_LIMIT=10`, `BRAVE_WEEKLY_SEARCH_LIMIT=100`, and
 `BRAVE_MONTHLY_SEARCH_LIMIT=350`.
+
+## Bounded notification replay
+
+A stored, unnotified analysis can re-enter the same digest pool for 72 hours
+from its immutable `firstSeenAt`, provided it was first seen on or after
+`2026-10-06T16:00:00Z`. The recent-history scan is deterministic and capped at
+100 rows. Replay does not require Brave to find the URL again and does not call
+Gemini again.
+
+Fresh and replay candidates deduplicate by normalized URL, share P3 ranking and
+the four-story/one-email limits, and use the ordinary notification-history
+identity. A normal replay story suppresses fallback. Below-threshold replay is
+allowed only when the source still passes the current exact-host P4 registry.
+Failed sends create no success record, so a candidate can be considered again
+before expiry; the existing provider-accepted/history-write-failed ambiguity is
+unchanged.
 
 For safe local D1 development only:
 

@@ -2,7 +2,10 @@ import {
   DiscoveryHistoryError,
   isValidAgentAnalysis,
   normalizeDiscoveryUrl,
+  validateRecentDiscoveryQuery,
   type DiscoveryHistory,
+  type RecentDiscoveryQuery,
+  type RecentDiscoveryResult,
 } from "./discoveryHistoryCore.js";
 import type { AgentAnalysis, StoredDiscovery } from "../types/index.js";
 
@@ -22,7 +25,8 @@ function copy(discovery: StoredDiscovery): StoredDiscovery {
 }
 
 function isTimestamp(value: string): boolean {
-  return !Number.isNaN(new Date(value).getTime());
+  const parsed = new Date(value);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString() === value;
 }
 
 function discoveryFromRow(row: DiscoveryRow): StoredDiscovery {
@@ -75,6 +79,25 @@ export class D1DiscoveryHistory implements DiscoveryHistory {
     } catch (error) {
       if (error instanceof DiscoveryHistoryError) throw error;
       throw new DiscoveryHistoryError("D1 discovery history could not be read safely.");
+    }
+  }
+
+  async listRecentDiscoveries(query: RecentDiscoveryQuery): Promise<RecentDiscoveryResult> {
+    validateRecentDiscoveryQuery(query);
+    try {
+      const result = await this.database.prepare(
+        "SELECT normalized_url, first_seen_at, last_seen_at, analysis_json FROM discoveries "
+        + "WHERE first_seen_at >= ?1 AND first_seen_at < ?2 "
+        + "ORDER BY first_seen_at DESC, normalized_url ASC LIMIT ?3",
+      ).bind(query.fromInclusive, query.beforeExclusive, query.limit + 1).all<DiscoveryRow>();
+      const discoveries = (result.results ?? []).map(discoveryFromRow);
+      return {
+        discoveries: discoveries.slice(0, query.limit).map(copy),
+        truncated: discoveries.length > query.limit,
+      };
+    } catch (error) {
+      if (error instanceof DiscoveryHistoryError) throw error;
+      throw new DiscoveryHistoryError("D1 recent discovery history could not be read safely.");
     }
   }
 

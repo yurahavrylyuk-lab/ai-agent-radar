@@ -117,3 +117,79 @@ test("listing returns stored discoveries", async () => {
     assert.deepEqual((await history.listDiscoveries()).map((item) => item.normalizedUrl), ["https://example.com/one", "https://example.com/two"]);
   });
 });
+
+test("recent discovery lookup uses inclusive lower and exclusive upper boundaries", async () => {
+  await withHistory(async (history) => {
+    await history.recordDiscovery(analysis("https://example.com/lower"), new Date("2026-10-06T16:00:00.000Z"));
+    await history.recordDiscovery(analysis("https://example.com/middle"), new Date("2026-10-07T08:00:00.000Z"));
+    await history.recordDiscovery(analysis("https://example.com/upper"), new Date("2026-10-08T08:00:00.000Z"));
+    const recent = await history.listRecentDiscoveries({
+      fromInclusive: "2026-10-06T16:00:00.000Z",
+      beforeExclusive: "2026-10-08T08:00:00.000Z",
+      limit: 100,
+    });
+    assert.deepEqual(recent.discoveries.map((item) => item.normalizedUrl), [
+      "https://example.com/middle",
+      "https://example.com/lower",
+    ]);
+    assert.equal(recent.truncated, false);
+  });
+});
+
+test("recent discovery lookup is deterministic, bounded, and unaffected by lastSeenAt", async () => {
+  await withHistory(async (history) => {
+    await history.recordDiscovery(analysis("https://example.com/b"), new Date("2026-10-07T08:00:00.000Z"));
+    await history.recordDiscovery(analysis("https://example.com/a"), new Date("2026-10-07T08:00:00.000Z"));
+    await history.recordDiscovery(analysis("https://example.com/newest"), new Date("2026-10-07T09:00:00.000Z"));
+    await history.touchDiscovery("https://example.com/a", new Date("2026-10-20T08:00:00.000Z"));
+    const recent = await history.listRecentDiscoveries({
+      fromInclusive: "2026-10-07T00:00:00.000Z",
+      beforeExclusive: "2026-10-08T00:00:00.000Z",
+      limit: 2,
+    });
+    assert.deepEqual(recent.discoveries.map((item) => item.normalizedUrl), [
+      "https://example.com/newest",
+      "https://example.com/a",
+    ]);
+    assert.equal(recent.truncated, true);
+  });
+});
+
+test("recent discovery lookup fails closed on invalid ranges and limits", async () => {
+  await withHistory(async (history) => {
+    await assert.rejects(history.listRecentDiscoveries({
+      fromInclusive: "2026-10-07T00:00:00Z",
+      beforeExclusive: "2026-10-08T00:00:00.000Z",
+      limit: 100,
+    }), /time range is invalid/);
+    await assert.rejects(history.listRecentDiscoveries({
+      fromInclusive: "2026-10-07T00:00:00.000Z",
+      beforeExclusive: "2026-10-08T00:00:00.000Z",
+      limit: 101,
+    }), /limit must be an integer from 1 to 100/);
+  });
+});
+
+test("recent discovery lookup never returns more than the approved 100-row scan", async () => {
+  await withHistory(async (history, filePath) => {
+    const discoveries = Array.from({ length: 101 }, (_, index) => {
+      const sourceUrl = `https://example.com/bounded-${String(index).padStart(3, "0")}`;
+      return {
+        normalizedUrl: sourceUrl,
+        firstSeenAt: "2026-10-07T08:00:00.000Z",
+        lastSeenAt: "2026-10-07T08:00:00.000Z",
+        analysis: analysis(sourceUrl),
+      };
+    });
+    await writeFile(filePath, JSON.stringify({ discoveries }), "utf8");
+    const recent = await history.listRecentDiscoveries({
+      fromInclusive: "2026-10-06T16:00:00.000Z",
+      beforeExclusive: "2026-10-08T08:00:00.000Z",
+      limit: 100,
+    });
+    assert.equal(recent.discoveries.length, 100);
+    assert.equal(recent.truncated, true);
+    assert.equal(recent.discoveries[0]?.normalizedUrl, "https://example.com/bounded-000");
+    assert.equal(recent.discoveries.at(-1)?.normalizedUrl, "https://example.com/bounded-099");
+  });
+});

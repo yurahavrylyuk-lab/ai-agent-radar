@@ -1,5 +1,16 @@
 # Daily Self-Improvement Summary
 
+## 2026-10-06 — Proposal 1 bounded notification replay
+
+- Status: REVIEW; implementation branch `codex/replay-unnotified-discoveries`, baseline `e4606faef42e6aff1ba66313c1c0f97d7fc31df2`.
+- Implemented the human-approved 72-hour durable replay window with activation cutoff `2026-10-06T16:00:00Z`, bounded 100-row D1/JSON lookup, fresh/replay normalized-URL deduplication, shared P3 ranking/cap, current-policy P4 trust recheck, and aggregate scheduled observability.
+- Replay requires neither URL rediscovery nor Gemini re-analysis. Successful notification history excludes replay; send failure leaves no success record; existing send-accepted/history-write-failed ambiguity remains.
+- No migration, retry table, provider call, deployment, Cloudflare/config/secret/quota change, P5 work, or merge occurred.
+- Validation: `npm ci` passed; `npm run build` passed; `npm test` passed 207/207; `npm run worker:typecheck` passed; `git diff --check` passed. Focused replay/regression selection passed 99/99. No live provider or deployment command was run.
+- Commit and PR evidence are supplied in the Builder handoff after the reviewed diff is committed and published.
+
+---
+
 ## Architect-owned cycle summary
 
 Architect owns this summary and final decision.

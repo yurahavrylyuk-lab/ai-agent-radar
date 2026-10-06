@@ -108,6 +108,32 @@ test("D1 discovery history rejects malformed persisted analysis", async () => {
   });
 });
 
+test("D1 recent discovery lookup matches bounded boundary and ordering semantics", async () => {
+  await withDatabase(async (_database, d1) => {
+    const history = new D1DiscoveryHistory(d1);
+    await history.recordDiscovery(analysis("https://example.com/lower"), new Date("2026-10-06T16:00:00.000Z"));
+    await history.recordDiscovery(analysis("https://example.com/b"), new Date("2026-10-07T08:00:00.000Z"));
+    await history.recordDiscovery(analysis("https://example.com/a"), new Date("2026-10-07T08:00:00.000Z"));
+    await history.recordDiscovery(analysis("https://example.com/upper"), new Date("2026-10-08T08:00:00.000Z"));
+
+    const recent = await history.listRecentDiscoveries({
+      fromInclusive: "2026-10-06T16:00:00.000Z",
+      beforeExclusive: "2026-10-08T08:00:00.000Z",
+      limit: 2,
+    });
+    assert.deepEqual(recent.discoveries.map((item) => item.normalizedUrl), [
+      "https://example.com/a",
+      "https://example.com/b",
+    ]);
+    assert.equal(recent.truncated, true);
+    await assert.rejects(history.listRecentDiscoveries({
+      fromInclusive: "2026-10-06T16:00:00.000Z",
+      beforeExclusive: "2026-10-08T08:00:00.000Z",
+      limit: 0,
+    }), /limit must be an integer from 1 to 100/);
+  });
+});
+
 test("D1 notification history preserves URL/channel identity and provider message IDs", async () => {
   await withDatabase(async (_database, d1) => {
     const history = new D1NotificationHistory(d1);

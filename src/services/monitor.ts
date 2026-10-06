@@ -1,16 +1,17 @@
 import { JsonDiscoveryHistory, DiscoveryHistoryError, type DiscoveryHistory } from "./discoveryHistory.js";
 import { normalizeDiscoveryUrl } from "./discoveryHistoryCore.js";
+import { getNotificationReplayWindow } from "../config/notificationReplay.js";
 import { getPreAnalysisCandidatePriority, MAX_PREFERRED_PRE_ANALYSIS_CANDIDATES } from "./discoveryPriority.js";
 import { processSearchResult } from "./discoveryProcessor.js";
 import { NotificationHistoryError } from "./notificationHistory.js";
-import { notifyDigest, type NotificationOrchestratorDependencies } from "./notificationOrchestrator.js";
+import { notifyDeliveryDigest, type DigestDeliveryResult, type NotificationOrchestratorDependencies } from "./notificationOrchestrator.js";
 import { LocalJsonBraveUsageStore } from "./localJsonBraveUsageStore.js";
 import { LocalJsonGeminiUsageStore } from "./localJsonGeminiUsageStore.js";
 import { JsonNotificationHistory } from "./notificationHistory.js";
 import { generateWithGemini } from "../tools/llm/gemini.js";
 import { analyzeSearchResult } from "./analysisAgent.js";
 import { BraveUsageGuardDeniedError, searchWeb } from "../tools/webSearch.js";
-import type { DiscoveryProcessingResult, MonitoringCycleResult, MonitoringSearchFailure, NotificationResult, SearchResult } from "../types/index.js";
+import type { DeliveryCandidate, DiscoveryProcessingResult, MonitoringCycleResult, MonitoringSearchFailure, NotificationResult, SearchResult } from "../types/index.js";
 
 export const MONITORING_QUERY = "new AI agent developer tool framework release";
 export const MONITORING_QUERIES = [
@@ -31,7 +32,7 @@ export const MAX_SEARCH_FAILURE_ERROR_LENGTH = 240;
 type WebSearch = (query: string) => Promise<SearchResult[]>;
 type DiscoveryLookup = (url: string) => Promise<boolean>;
 type DiscoveryProcessor = (result: SearchResult) => Promise<DiscoveryProcessingResult>;
-type NotificationProcessor = (results: DiscoveryProcessingResult[]) => Promise<Map<string, NotificationResult>>;
+type NotificationProcessor = (candidates: DeliveryCandidate[]) => Promise<DigestDeliveryResult>;
 
 export interface MonitoringCycleDependencies {
   search?: WebSearch;
@@ -42,6 +43,7 @@ export interface MonitoringCycleDependencies {
   /** Optional dependencies for the provider-independent notification orchestration. */
   notification?: NotificationOrchestratorDependencies;
   notify?: NotificationProcessor;
+  now?: () => Date;
 }
 
 function errorMessage(error: unknown): string {
@@ -76,6 +78,11 @@ function emptyResult(
     notificationsNotEligible: 0,
     failures: searchFailures.length,
     stoppedByAnalysisCap: false,
+    replayCandidatesConsidered: 0,
+    replayCandidatesEligible: 0,
+    freshStoriesSent: 0,
+    replayStoriesSent: 0,
+    replayLookupTruncated: false,
     outcomes: [],
   };
 }
@@ -91,6 +98,8 @@ export async function runMonitoringCycle(
   query: string | undefined = undefined,
   dependencies: MonitoringCycleDependencies = {},
 ): Promise<MonitoringCycleResult> {
+  const cycleStartedAt = (dependencies.now ?? (() => new Date()))();
+  if (Number.isNaN(cycleStartedAt.getTime())) throw new Error("Monitoring cycle timestamp is invalid.");
   const search = dependencies.search ?? ((searchQuery: string) => searchWeb(searchQuery, { usageTracker: new LocalJsonBraveUsageStore() }));
   const queries = query === undefined ? MONITORING_QUERIES : [query];
   const searchResults: SearchResult[] = [];
@@ -124,7 +133,20 @@ export async function runMonitoringCycle(
     analyze: (r) => analyzeSearchResult(r, { generate: (input) => generateWithGemini(input, { usageTracker: new LocalJsonGeminiUsageStore() }) }),
   }));
   const notification = dependencies.notification ?? { history: new JsonNotificationHistory() };
-  const notify = dependencies.notify ?? ((results: DiscoveryProcessingResult[]) => notifyDigest(results, notification));
+  const notify = dependencies.notify ?? ((candidates: DeliveryCandidate[]) => notifyDeliveryDigest(candidates, notification));
+
+  let replayDiscoveries = [] as Awaited<ReturnType<DiscoveryHistory["listRecentDiscoveries"]>>["discoveries"];
+  const replayWindow = getNotificationReplayWindow(cycleStartedAt);
+  if (replayWindow) {
+    try {
+      const replayLookup = await discoveryHistory.listRecentDiscoveries(replayWindow);
+      replayDiscoveries = replayLookup.discoveries;
+      result.replayCandidatesConsidered = replayDiscoveries.length;
+      result.replayLookupTruncated = replayLookup.truncated;
+    } catch (error) {
+      throw new Error(`Monitoring cycle aborted: replay discovery history is unavailable: ${errorMessage(error)}`);
+    }
+  }
 
   // Phase 1: Identify unique unseen candidates before assigning scarce analysis slots.
   type Candidate = {
@@ -215,16 +237,22 @@ export async function runMonitoringCycle(
     successfullyProcessedUrls.add(candidate.normalizedUrl);
   }
 
-  // Phase 3: Send one digest notification for all processed items.
-  if (processedItems.length > 0) {
-    let notificationResults: Map<string, NotificationResult>;
+  // Phase 3: Merge fresh analyses with bounded durable replay candidates and send at most one digest.
+  const deliveryCandidates: DeliveryCandidate[] = [
+    ...processedItems
+      .filter(({ processed }) => processed.status === "new")
+      .map(({ processed }) => ({ discovery: processed.discovery, origin: "fresh" as const })),
+    ...replayDiscoveries.map((discovery) => ({ discovery, origin: "replay" as const })),
+  ];
+  if (deliveryCandidates.length > 0) {
+    let delivery: DigestDeliveryResult;
     try {
-      notificationResults = await notify(processedItems.map(({ processed }) => processed));
+      delivery = await notify(deliveryCandidates);
     } catch (error) {
       if (error instanceof NotificationHistoryError) {
         throw new Error(`Monitoring cycle aborted: notification history is unavailable: ${errorMessage(error)}`);
       }
-      result.failures += processedItems.length;
+      result.failures += new Set(deliveryCandidates.map((candidate) => candidate.discovery.normalizedUrl)).size;
       for (const { searchResult, processed } of processedItems) {
         result.outcomes.push({
           sourceTitle: searchResult.title,
@@ -236,9 +264,33 @@ export async function runMonitoringCycle(
       return result;
     }
 
+    result.replayCandidatesEligible = delivery.eligibleCandidates
+      .filter((candidate) => candidate.origin === "replay").length;
+    result.freshStoriesSent = delivery.sentCandidates
+      .filter((candidate) => candidate.origin === "fresh").length;
+    result.replayStoriesSent = delivery.sentCandidates
+      .filter((candidate) => candidate.origin === "replay").length;
+
+    const processedUrls = new Set(processedItems.map(({ processed }) => processed.discovery.normalizedUrl));
     for (const { searchResult, processed } of processedItems) {
       const url = processed.discovery.analysis.sourceUrl;
-      const notif = notificationResults.get(url) ?? { status: "not_eligible" as const };
+      const notif = delivery.notifications.get(url) ?? { status: "not_eligible" as const };
+      recordNotification(result, notif);
+      result.outcomes.push({
+        sourceTitle: searchResult.title,
+        sourceUrl: searchResult.url,
+        discoveryStatus: processed.status,
+        notificationStatus: notif.status,
+      });
+    }
+    for (const candidate of deliveryCandidates) {
+      if (candidate.origin !== "replay" || processedUrls.has(candidate.discovery.normalizedUrl)) continue;
+      const notif = delivery.notifications.get(candidate.discovery.analysis.sourceUrl);
+      if (notif) recordNotification(result, notif);
+    }
+  } else {
+    for (const { searchResult, processed } of processedItems) {
+      const notif = { status: "not_eligible" as const };
       recordNotification(result, notif);
       result.outcomes.push({
         sourceTitle: searchResult.title,

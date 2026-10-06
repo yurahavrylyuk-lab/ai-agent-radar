@@ -53,6 +53,11 @@ export interface ScheduledCycleSummary {
   notificationsNotEligible: number;
   failures: number;
   stoppedByAnalysisCap: boolean;
+  replayCandidatesConsidered: number;
+  replayCandidatesEligible: number;
+  freshStoriesSent: number;
+  replayStoriesSent: number;
+  replayLookupTruncated: boolean;
   outcomesTotal: number;
   outcomesOmitted: number;
   outcomes: Array<{
@@ -127,6 +132,11 @@ export function createScheduledCycleSummary(
     notificationsNotEligible: result.notificationsNotEligible,
     failures: result.failures,
     stoppedByAnalysisCap: result.stoppedByAnalysisCap,
+    replayCandidatesConsidered: result.replayCandidatesConsidered,
+    replayCandidatesEligible: result.replayCandidatesEligible,
+    freshStoriesSent: result.freshStoriesSent,
+    replayStoriesSent: result.replayStoriesSent,
+    replayLookupTruncated: result.replayLookupTruncated,
     outcomesTotal: result.outcomes.length,
     outcomesOmitted: Math.max(0, result.outcomes.length - outcomes.length),
     outcomes,
@@ -149,6 +159,7 @@ export function createWorkerMonitoringDependencies(env: RadarWorkerEnv): Monitor
   const persistence = createWorkerPersistence(env);
 
   return {
+    history: persistence.discoveryHistory,
     search: (query) => searchWeb(query, {
       usageTracker: persistence.braveUsageStore,
       environment: configuration.environment,

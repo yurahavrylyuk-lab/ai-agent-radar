@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { notifyDiscovery, notifyDigest } from "../src/services/notificationOrchestrator.js";
-import type { DiscoveryEmailContent, DiscoveryProcessingResult, NotificationRecord } from "../src/types/index.js";
+import { notifyDeliveryDigest, notifyDiscovery, notifyDigest } from "../src/services/notificationOrchestrator.js";
+import type { DeliveryCandidate, DiscoveryEmailContent, DiscoveryProcessingResult, NotificationRecord } from "../src/types/index.js";
 import type { NotificationHistory } from "../src/services/notificationHistory.js";
 
 function result(status: DiscoveryProcessingResult["status"], relevanceScore: number, sourceUrl = "https://example.com/discovery"): DiscoveryProcessingResult {
@@ -197,6 +197,19 @@ function openHistory(): NotificationHistory {
     async getNotificationRecord() { throw new Error("unreachable"); },
     async recordNotificationSent(url, _ch, id) { return record(url, id); },
   };
+}
+
+function deliveryCandidate(
+  relevanceScore: number,
+  sourceUrl: string,
+  origin: DeliveryCandidate["origin"],
+  name = "Example Agent",
+): DeliveryCandidate {
+  const item = namedDigestResult(relevanceScore, sourceUrl, name);
+  const normalized = new URL(sourceUrl);
+  normalized.pathname = normalized.pathname.replace(/\/+$/, "") || "/";
+  item.discovery.normalizedUrl = normalized.toString();
+  return { discovery: item.discovery, origin };
 }
 
 test("notifyDigest returns an empty map for empty input", async () => {
@@ -515,4 +528,147 @@ test("notifyDigest excludes duplicates from fallback and deduplicates same-cycle
   assert.equal(storiesToFormatter, 1);
   assert.equal(map.get("https://openai.com/old")?.status, "not_eligible");
   assert.equal(map.get(url)?.status, "sent");
+});
+
+test("fresh and replay candidates share one ranked four-story digest", async () => {
+  const candidates = [
+    deliveryCandidate(7, "https://example.com/fresh", "fresh", "Generic tool"),
+    deliveryCandidate(8, "https://example.com/replay", "replay", "Generic replay"),
+    deliveryCandidate(7, "https://example.com/codex", "replay", "Codex update"),
+    deliveryCandidate(9, "https://example.com/top", "fresh", "Top story"),
+    deliveryCandidate(10, "https://example.com/omitted", "replay", "Omitted generic"),
+  ];
+  const formatted: string[] = [];
+  const outcome = await notifyDeliveryDigest(candidates, {
+    history: openHistory(),
+    formatDigest: (items, options) => {
+      assert.equal(options?.mode, "normal");
+      formatted.push(...items.map((item) => item.analysis.sourceUrl));
+      return content;
+    },
+    sendEmail: async () => ({ id: "digest_shared" }),
+  });
+
+  assert.equal(formatted.length, 4);
+  assert.deepEqual(formatted, [
+    "https://example.com/omitted",
+    "https://example.com/top",
+    "https://example.com/replay",
+    "https://example.com/codex",
+  ]);
+  assert.equal(outcome.sentCandidates.length, 4);
+});
+
+test("a fresh candidate replaces the same normalized replay URL", async () => {
+  const url = "https://example.com/same";
+  const replay = deliveryCandidate(8, `${url}/`, "replay");
+  const fresh = deliveryCandidate(8, url, "fresh");
+  let formattedOrigins: string[] = [];
+  const outcome = await notifyDeliveryDigest([replay, fresh], {
+    history: openHistory(),
+    formatDigest: (items) => { formattedOrigins = items.map((item) => item.normalizedUrl); return content; },
+    sendEmail: async () => ({ id: "digest_deduped" }),
+  });
+  assert.deepEqual(formattedOrigins, [url]);
+  assert.equal(outcome.sentCandidates.length, 1);
+  assert.equal(outcome.sentCandidates[0]?.origin, "fresh");
+});
+
+test("an eligible replay candidate suppresses P4 fallback candidates", async () => {
+  const normalReplay = deliveryCandidate(7, "https://unknown.example/replay", "replay");
+  const fallbackFresh = deliveryCandidate(6, "https://openai.com/fresh", "fresh");
+  const formatted: string[] = [];
+  const outcome = await notifyDeliveryDigest([fallbackFresh, normalReplay], {
+    history: openHistory(),
+    formatDigest: (items, options) => {
+      assert.equal(options?.mode, "normal");
+      formatted.push(...items.map((item) => item.analysis.sourceUrl));
+      return content;
+    },
+    sendEmail: async () => ({ id: "normal_replay" }),
+  });
+  assert.deepEqual(formatted, [normalReplay.discovery.analysis.sourceUrl]);
+  assert.equal(outcome.notifications.get(fallbackFresh.discovery.analysis.sourceUrl)?.status, "not_eligible");
+});
+
+test("below-threshold replay is rechecked against current exact-host trust", async () => {
+  const trusted = deliveryCandidate(6, "https://openai.com/replay", "replay");
+  const untrusted = deliveryCandidate(6, "https://support.openai.com/replay", "replay");
+  const formatted: string[] = [];
+  const outcome = await notifyDeliveryDigest([untrusted, trusted], {
+    history: openHistory(),
+    formatDigest: (items, options) => {
+      assert.equal(options?.mode, "fallback");
+      formatted.push(...items.map((item) => item.analysis.sourceUrl));
+      return content;
+    },
+    sendEmail: async () => ({ id: "fallback_replay" }),
+  });
+  assert.deepEqual(formatted, [trusted.discovery.analysis.sourceUrl]);
+  assert.equal(outcome.notifications.get(untrusted.discovery.analysis.sourceUrl)?.status, "not_eligible");
+  assert.equal(trusted.discovery.analysis.relevanceScore, 6);
+});
+
+test("fresh and replay fallback stories share one labelled four-story email", async () => {
+  const candidates = [
+    deliveryCandidate(6, "https://openai.com/fresh", "fresh"),
+    deliveryCandidate(5, "https://anthropic.com/replay", "replay"),
+    deliveryCandidate(4, "https://github.com/one", "fresh"),
+    deliveryCandidate(3, "https://nodejs.org/two", "replay"),
+    deliveryCandidate(2, "https://python.org/omitted", "replay"),
+  ];
+  let sends = 0;
+  let mode = "";
+  let formattedCount = 0;
+  const outcome = await notifyDeliveryDigest(candidates, {
+    history: openHistory(),
+    formatDigest: (items, options) => {
+      formattedCount = items.length;
+      mode = options?.mode ?? "";
+      return { subject: "Fallback", text: "It could be relevant", html: "<p>It could be relevant</p>" };
+    },
+    sendEmail: async (email) => {
+      sends += 1;
+      assert.match(email.text, /It could be relevant/);
+      assert.match(email.html, /It could be relevant/);
+      return { id: "fallback_shared" };
+    },
+  });
+  assert.equal(mode, "fallback");
+  assert.equal(formattedCount, 4);
+  assert.equal(sends, 1);
+  assert.equal(outcome.sentCandidates.length, 4);
+});
+
+test("already-notified replay candidates are never resent", async () => {
+  const candidate = deliveryCandidate(9, "https://example.com/already", "replay");
+  const existing = record(candidate.discovery.analysis.sourceUrl, "first_delivery");
+  let sendCalls = 0;
+  const outcome = await notifyDeliveryDigest([candidate], {
+    history: {
+      async hasNotificationBeenSent() { return true; },
+      async getNotificationRecord() { return existing; },
+      async recordNotificationSent() { throw new Error("unreachable"); },
+    },
+    sendEmail: async () => { sendCalls += 1; return { id: "unexpected" }; },
+  });
+  assert.equal(outcome.notifications.get(candidate.discovery.analysis.sourceUrl)?.status, "already_sent");
+  assert.equal(sendCalls, 0);
+});
+
+test("replay preserves the accepted send-before-history-write ambiguity without retry", async () => {
+  const candidate = deliveryCandidate(9, "https://example.com/ambiguous", "replay");
+  let sendCalls = 0;
+  let recordCalls = 0;
+  await assert.rejects(notifyDeliveryDigest([candidate], {
+    history: {
+      async hasNotificationBeenSent() { return false; },
+      async getNotificationRecord() { return undefined; },
+      async recordNotificationSent() { recordCalls += 1; throw new Error("history write failed"); },
+    },
+    formatDigest: () => content,
+    sendEmail: async () => { sendCalls += 1; return { id: "provider_accepted" }; },
+  }), /Digest email was accepted, but 1 notification record\(s\) could not be persisted: history write failed/);
+  assert.equal(sendCalls, 1);
+  assert.equal(recordCalls, 1);
 });

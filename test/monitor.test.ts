@@ -1,8 +1,79 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { MAX_NEW_ANALYSES_PER_CYCLE, MAX_SEARCH_FAILURE_ERROR_LENGTH, MONITORING_QUERIES, MONITORING_QUERY, runMonitoringCycle } from "../src/services/monitor.js";
+import { MAX_NEW_ANALYSES_PER_CYCLE, MAX_SEARCH_FAILURE_ERROR_LENGTH, MONITORING_QUERIES, MONITORING_QUERY, runMonitoringCycle as runProductionMonitoringCycle, type MonitoringCycleDependencies } from "../src/services/monitor.js";
+import type { DiscoveryHistory } from "../src/services/discoveryHistory.js";
+import type { NotificationHistory } from "../src/services/notificationHistory.js";
 import { BraveUsageGuardDeniedError } from "../src/tools/webSearch.js";
-import type { DiscoveryProcessingResult, NotificationResult, SearchResult } from "../src/types/index.js";
+import type { AgentAnalysis, DeliveryCandidate, DiscoveryProcessingResult, NotificationRecord, NotificationResult, SearchResult, StoredDiscovery } from "../src/types/index.js";
+
+function emptyHistory(): DiscoveryHistory {
+  return {
+    getDiscovery: async () => undefined,
+    listDiscoveries: async () => [],
+    listRecentDiscoveries: async () => ({ discoveries: [], truncated: false }),
+    recordDiscovery: async () => { throw new Error("Unexpected discovery write."); },
+    touchDiscovery: async () => { throw new Error("Unexpected discovery touch."); },
+  };
+}
+
+function memoryHistory(discoveries: StoredDiscovery[]): DiscoveryHistory {
+  const stored = new Map(discoveries.map((item) => [item.normalizedUrl, structuredClone(item)]));
+  return {
+    async getDiscovery(url) { return stored.get(url.replace(/\/$/, "")); },
+    async listRecentDiscoveries(query) {
+      const items = [...stored.values()]
+        .filter((item) => item.firstSeenAt >= query.fromInclusive && item.firstSeenAt < query.beforeExclusive)
+        .sort((a, b) => b.firstSeenAt.localeCompare(a.firstSeenAt) || a.normalizedUrl.localeCompare(b.normalizedUrl));
+      return { discoveries: items.slice(0, query.limit), truncated: items.length > query.limit };
+    },
+    async recordDiscovery(analysis: AgentAnalysis, seenAt = new Date()) {
+      const item = processed({ title: analysis.sourceTitle, url: analysis.sourceUrl }, "new").discovery;
+      item.firstSeenAt = seenAt.toISOString();
+      item.lastSeenAt = seenAt.toISOString();
+      item.analysis = structuredClone(analysis);
+      stored.set(item.normalizedUrl, item);
+      return structuredClone(item);
+    },
+    async touchDiscovery(url, seenAt = new Date()) {
+      const item = stored.get(url.replace(/\/$/, ""));
+      if (!item) return undefined;
+      item.lastSeenAt = seenAt.toISOString();
+      return structuredClone(item);
+    },
+  };
+}
+
+function memoryNotifications(): { history: NotificationHistory; records: Map<string, NotificationRecord> } {
+  const records = new Map<string, NotificationRecord>();
+  return {
+    records,
+    history: {
+      async hasNotificationBeenSent(url) { return records.has(url); },
+      async getNotificationRecord(url) { return records.get(url); },
+      async recordNotificationSent(url, channel, providerMessageId) {
+        const record: NotificationRecord = {
+          normalizedUrl: url,
+          channel,
+          sentAt: "2026-10-09T08:01:00.000Z",
+          providerMessageId,
+        };
+        records.set(url, record);
+        return record;
+      },
+    },
+  };
+}
+
+function runMonitoringCycle(
+  query: string | undefined = undefined,
+  dependencies: MonitoringCycleDependencies = {},
+) {
+  return runProductionMonitoringCycle(query, {
+    history: emptyHistory(),
+    now: () => new Date("2026-10-09T08:00:00.000Z"),
+    ...dependencies,
+  });
+}
 
 function searchResult(id: string): SearchResult {
   return { title: `Result ${id}`, url: `https://example.com/${id}`, snippet: `Snippet ${id}` };
@@ -42,10 +113,14 @@ const notification = (status: NotificationResult["status"]): NotificationResult 
 
 /** Creates a batch notify stub that returns the given status for every result. */
 function batchNotify(status: NotificationResult["status"]) {
-  return async (results: DiscoveryProcessingResult[]): Promise<Map<string, NotificationResult>> => {
+  return async (candidates: DeliveryCandidate[]) => {
     const map = new Map<string, NotificationResult>();
-    for (const r of results) map.set(r.discovery.analysis.sourceUrl, notification(status));
-    return map;
+    for (const candidate of candidates) map.set(candidate.discovery.analysis.sourceUrl, notification(status));
+    return {
+      notifications: map,
+      eligibleCandidates: status === "not_eligible" ? [] : candidates,
+      sentCandidates: status === "sent" ? candidates : [],
+    };
   };
 }
 
@@ -369,7 +444,10 @@ test("zero search results return a clean summary without processing or notificat
     search: async () => [],
     hasDiscovery: async () => { throw new Error("should not inspect history"); },
     process: async () => { processCalls++; throw new Error("unreachable"); },
-    notify: async (_results) => { notificationCalls++; return new Map(); },
+    notify: async (_results) => {
+      notificationCalls++;
+      return { notifications: new Map(), eligibleCandidates: [], sentCandidates: [] };
+    },
   });
   assert.equal(outcome.searchResultsReceived, 0);
   assert.equal(outcome.resultsProcessed, 0);
@@ -378,7 +456,7 @@ test("zero search results return a clean summary without processing or notificat
   assert.equal(notificationCalls, 0);
 });
 
-test("all duplicates use zero analysis slots and still reach batch notification", async () => {
+test("all duplicates use zero analysis slots and do not enter the delivery pool", async () => {
   const results = [searchResult("one"), searchResult("two"), searchResult("three")];
   let processCalls = 0;
   let notificationBatchCalls = 0;
@@ -390,7 +468,7 @@ test("all duplicates use zero analysis slots and still reach batch notification"
       notificationBatchCalls++;
       const map = new Map<string, NotificationResult>();
       for (const r of items) map.set(r.discovery.analysis.sourceUrl, notification("not_eligible"));
-      return map;
+      return { notifications: map, eligibleCandidates: [], sentCandidates: [] };
     },
   });
   assert.equal(outcome.analysesAttempted, 0);
@@ -398,7 +476,7 @@ test("all duplicates use zero analysis slots and still reach batch notification"
   assert.equal(outcome.resultsProcessed, 3);
   assert.equal(outcome.notificationsNotEligible, 3);
   assert.equal(processCalls, 3);
-  assert.equal(notificationBatchCalls, 1); // one batch call for all three items
+  assert.equal(notificationBatchCalls, 0);
 });
 
 test("with fewer new results than the cap all are analyzed without stopping", async () => {
@@ -558,4 +636,168 @@ test("the cycle does not mutate SearchResult inputs", async () => {
     notify: batchNotify("not_eligible"),
   });
   assert.deepEqual(input, original);
+});
+
+test("a replay-only cycle delivers stored analysis without rediscovery or Gemini analysis", async () => {
+  const stored = processed(searchResult("replay-only"), "new").discovery;
+  stored.firstSeenAt = "2026-10-08T08:00:00.000Z";
+  stored.lastSeenAt = "2026-10-08T08:00:00.000Z";
+  const notifications = memoryNotifications();
+  let searches = 0;
+  let analyses = 0;
+  let sends = 0;
+
+  const outcome = await runProductionMonitoringCycle(undefined, {
+    now: () => new Date("2026-10-09T08:00:00.000Z"),
+    history: memoryHistory([stored]),
+    search: async () => { searches += 1; return []; },
+    process: async (item) => { analyses += 1; return processed(item, "new"); },
+    notification: {
+      history: notifications.history,
+      formatDigest: () => ({ subject: "Replay", text: "Replay", html: "<p>Replay</p>" }),
+      sendEmail: async () => { sends += 1; return { id: "replay_1" }; },
+    },
+  });
+
+  assert.equal(searches, MONITORING_QUERIES.length);
+  assert.equal(analyses, 0);
+  assert.equal(sends, 1);
+  assert.equal(outcome.replayCandidatesConsidered, 1);
+  assert.equal(outcome.replayCandidatesEligible, 1);
+  assert.equal(outcome.replayStoriesSent, 1);
+  assert.equal(outcome.freshStoriesSent, 0);
+  assert.equal(outcome.notificationsSent, 1);
+});
+
+test("failed fresh delivery can replay next cycle and successful history prevents another send", async () => {
+  const item = searchResult("retry-replay");
+  const history = memoryHistory([]);
+  const notifications = memoryNotifications();
+  let sendCalls = 0;
+  const notification = {
+    history: notifications.history,
+    formatDigest: () => ({ subject: "Digest", text: "Digest", html: "<p>Digest</p>" }),
+    sendEmail: async () => {
+      sendCalls += 1;
+      if (sendCalls === 1) throw new Error("temporary email failure");
+      return { id: "replay_success" };
+    },
+  };
+
+  const first = await runProductionMonitoringCycle("test", {
+    now: () => new Date("2026-10-08T08:00:00.000Z"),
+    history,
+    search: async () => [item],
+    hasDiscovery: async () => false,
+    process: async () => ({
+      status: "new",
+      discovery: await history.recordDiscovery(
+        processed(item, "new").discovery.analysis,
+        new Date("2026-10-08T07:59:00.000Z"),
+      ),
+    }),
+    notification,
+  });
+  assert.equal(first.failures, 1, "the same fresh/replay URL counts as one failed delivery candidate");
+  assert.equal(notifications.records.size, 0);
+
+  const second = await runProductionMonitoringCycle("test", {
+    now: () => new Date("2026-10-09T08:00:00.000Z"),
+    history,
+    search: async () => [],
+    process: async () => { throw new Error("replay must not analyze"); },
+    notification,
+  });
+  assert.equal(second.replayStoriesSent, 1);
+  assert.equal(notifications.records.size, 1);
+
+  const third = await runProductionMonitoringCycle("test", {
+    now: () => new Date("2026-10-09T09:00:00.000Z"),
+    history,
+    search: async () => [],
+    process: async () => { throw new Error("replay must not analyze"); },
+    notification,
+  });
+  assert.equal(sendCalls, 2);
+  assert.equal(third.notificationsAlreadySent, 1);
+  assert.equal(third.replayStoriesSent, 0);
+});
+
+test("replay lookup uncertainty aborts before analysis or notification", async () => {
+  let processCalls = 0;
+  let notificationCalls = 0;
+  const history = emptyHistory();
+  history.listRecentDiscoveries = async () => { throw new Error("D1 unavailable"); };
+  await assert.rejects(runProductionMonitoringCycle("test", {
+    now: () => new Date("2026-10-09T08:00:00.000Z"),
+    history,
+    search: async () => [searchResult("unreachable")],
+    process: async (item) => { processCalls += 1; return processed(item, "new"); },
+    notify: async () => {
+      notificationCalls += 1;
+      return { notifications: new Map(), eligibleCandidates: [], sentCandidates: [] };
+    },
+  }), /replay discovery history is unavailable: D1 unavailable/);
+  assert.equal(processCalls, 0);
+  assert.equal(notificationCalls, 0);
+});
+
+test("notification-history lookup uncertainty aborts replay without sending", async () => {
+  const stored = processed(searchResult("notification-history-failure"), "new").discovery;
+  stored.firstSeenAt = "2026-10-08T08:00:00.000Z";
+  stored.lastSeenAt = stored.firstSeenAt;
+  let sends = 0;
+  await assert.rejects(runProductionMonitoringCycle("test", {
+    now: () => new Date("2026-10-09T08:00:00.000Z"),
+    history: memoryHistory([stored]),
+    search: async () => [],
+    notification: {
+      history: {
+        async hasNotificationBeenSent() { throw new Error("notification D1 unavailable"); },
+        async getNotificationRecord() { throw new Error("unreachable"); },
+        async recordNotificationSent() { throw new Error("unreachable"); },
+      },
+      sendEmail: async () => { sends += 1; return { id: "unreachable" }; },
+    },
+  }), /notification history is unavailable: Notification history could not be read safely/);
+  assert.equal(sends, 0);
+});
+
+test("pre-activation and expired discoveries never enter replay even when lastSeenAt is recent", async () => {
+  const beforeActivation = processed(searchResult("before-activation"), "new").discovery;
+  beforeActivation.firstSeenAt = "2026-10-06T15:59:59.999Z";
+  beforeActivation.lastSeenAt = "2026-10-09T07:59:00.000Z";
+  const expired = processed(searchResult("expired"), "new").discovery;
+  expired.firstSeenAt = "2026-10-07T07:59:59.999Z";
+  expired.lastSeenAt = "2026-10-10T07:59:00.000Z";
+  let sends = 0;
+  const outcome = await runProductionMonitoringCycle("test", {
+    now: () => new Date("2026-10-10T08:00:00.000Z"),
+    history: memoryHistory([beforeActivation, expired]),
+    search: async () => [],
+    notification: {
+      history: memoryNotifications().history,
+      sendEmail: async () => { sends += 1; return { id: "unreachable" }; },
+    },
+  });
+  assert.equal(outcome.replayCandidatesConsidered, 0);
+  assert.equal(outcome.replayStoriesSent, 0);
+  assert.equal(sends, 0);
+});
+
+test("replay lookup runs once without pagination and reports truncation", async () => {
+  let lookups = 0;
+  const history = emptyHistory();
+  history.listRecentDiscoveries = async (query) => {
+    lookups += 1;
+    assert.equal(query.limit, 100);
+    return { discoveries: [], truncated: true };
+  };
+  const outcome = await runProductionMonitoringCycle("test", {
+    now: () => new Date("2026-10-09T08:00:00.000Z"),
+    history,
+    search: async () => [],
+  });
+  assert.equal(lookups, 1);
+  assert.equal(outcome.replayLookupTruncated, true);
 });
