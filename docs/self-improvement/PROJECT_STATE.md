@@ -32,6 +32,7 @@ Cloudflare Cron
 - Public HTTP fetch returns only `AI Agent Radar worker ready`.
 - HTTP requests must never trigger monitoring. There is no manual monitoring endpoint.
 - Each successful scheduled run emits exactly one structured, secret-free cycle summary with aggregate counts and bounded outcome status details. It excludes source URLs and content, redacts configured secret values and email addresses, and truncates error text.
+- Default multi-query monitoring records isolated non-quota Brave failures by one-based query ordinal and continues sequentially so successful query results still reach normal deduplication, analysis, and notification processing. Each recorded search failure appears in `searchFailures` and increments the aggregate `failures` count. Each query is attempted at most once; there is no query or full-cycle retry. A quota denial still stops further searches without becoming a transient failure. If non-quota failures occur and no usable results were collected, the cycle rejects instead of reporting empty success.
 - No automatic full-cycle retries.
 
 ## Providers

@@ -12,6 +12,7 @@ import { runMonitoringCycle, type MonitoringCycleDependencies } from "./services
 import type { MonitoringCycleResult } from "./types/index.js";
 
 export const MAX_SCHEDULED_OUTCOMES_LOGGED = 10;
+export const MAX_SCHEDULED_SEARCH_FAILURES_LOGGED = 10;
 export const MAX_SCHEDULED_ERROR_LENGTH = 160;
 
 /** Worker binding names only. Secret values are configured outside source control in Step 8.3. */
@@ -37,6 +38,12 @@ export interface RadarWorkerEnv {
 export interface ScheduledCycleSummary {
   event: "scheduled_monitoring_cycle_completed";
   searchResultsReceived: number;
+  searchFailuresTotal: number;
+  searchFailuresOmitted: number;
+  searchFailures: Array<{
+    queryOrdinal: number;
+    error: string;
+  }>;
   resultsProcessed: number;
   newDiscoveries: number;
   duplicates: number;
@@ -89,6 +96,12 @@ export function createScheduledCycleSummary(
   result: MonitoringCycleResult,
   env: RadarWorkerEnv,
 ): ScheduledCycleSummary {
+  const searchFailures = result.searchFailures
+    .slice(0, MAX_SCHEDULED_SEARCH_FAILURES_LOGGED)
+    .map((failure) => ({
+      queryOrdinal: failure.queryOrdinal,
+      error: redactScheduledError(failure.error, env),
+    }));
   const outcomes = result.outcomes
     .slice(0, MAX_SCHEDULED_OUTCOMES_LOGGED)
     .map((outcome, index) => ({
@@ -102,6 +115,9 @@ export function createScheduledCycleSummary(
   return {
     event: "scheduled_monitoring_cycle_completed",
     searchResultsReceived: result.searchResultsReceived,
+    searchFailuresTotal: result.searchFailures.length,
+    searchFailuresOmitted: Math.max(0, result.searchFailures.length - searchFailures.length),
+    searchFailures,
     resultsProcessed: result.resultsProcessed,
     newDiscoveries: result.newDiscoveries,
     duplicates: result.duplicates,

@@ -40,6 +40,7 @@ function monitoringResult(overrides: Partial<MonitoringCycleResult> = {}): Monit
   return {
     query: "test query",
     searchResultsReceived: 12,
+    searchFailures: [],
     resultsProcessed: 5,
     newDiscoveries: 4,
     duplicates: 1,
@@ -111,6 +112,9 @@ test("scheduled monitoring runs one cycle and emits one structured summary with 
   assert.deepEqual(summaries[0], {
     event: "scheduled_monitoring_cycle_completed",
     searchResultsReceived: 12,
+    searchFailuresTotal: 0,
+    searchFailuresOmitted: 0,
+    searchFailures: [],
     resultsProcessed: 5,
     newDiscoveries: 4,
     duplicates: 1,
@@ -186,11 +190,19 @@ test("scheduled summary bounds outcomes and redacts secrets, email addresses, UR
   const summaries: ScheduledCycleSummary[] = [];
 
   await runScheduledMonitoring(env, {
-    runCycle: async () => monitoringResult({ outcomes }),
+    runCycle: async () => monitoringResult({
+      failures: 13,
+      searchFailures: [{ queryOrdinal: 3, error: longError }],
+      outcomes,
+    }),
     logInfo: (summary) => summaries.push(summary),
   });
 
   const serialized = JSON.stringify(summaries[0]);
+  assert.equal(summaries[0]?.searchFailuresTotal, 1);
+  assert.equal(summaries[0]?.searchFailuresOmitted, 0);
+  assert.equal(summaries[0]?.searchFailures[0]?.queryOrdinal, 3);
+  assert.ok((summaries[0]?.searchFailures[0]?.error.length ?? 0) <= MAX_SCHEDULED_ERROR_LENGTH);
   assert.equal(summaries[0]?.outcomes.length, 10);
   assert.equal(summaries[0]?.outcomesTotal, 12);
   assert.equal(summaries[0]?.outcomesOmitted, 2);
