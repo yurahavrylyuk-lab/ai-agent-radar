@@ -64,7 +64,13 @@ export class JsonDiscoveryHistory implements DiscoveryHistory {
     validateRecentDiscoveryQuery(query);
     const discoveries = (await this.read()).discoveries
       .filter((item) => item.firstSeenAt >= query.fromInclusive && item.firstSeenAt < query.beforeExclusive)
-      .sort((left, right) => right.firstSeenAt.localeCompare(left.firstSeenAt) || left.normalizedUrl.localeCompare(right.normalizedUrl));
+      .sort((left, right) => {
+        if (left.firstSeenAt < right.firstSeenAt) return 1;
+        if (left.firstSeenAt > right.firstSeenAt) return -1;
+        if (left.normalizedUrl < right.normalizedUrl) return -1;
+        if (left.normalizedUrl > right.normalizedUrl) return 1;
+        return 0;
+      });
     return {
       discoveries: discoveries.slice(0, query.limit).map(copy),
       truncated: discoveries.length > query.limit,

@@ -155,6 +155,28 @@ test("recent discovery lookup is deterministic, bounded, and unaffected by lastS
   });
 });
 
+test("recent discovery URL tie-breaking uses locale-independent lexical order", async () => {
+  await withHistory(async (history) => {
+    const seenAt = new Date("2026-10-07T08:00:00.000Z");
+    for (const path of ["a", "_", "A", "-"]) {
+      await history.recordDiscovery(analysis(`https://example.com/${path}`), seenAt);
+    }
+
+    const recent = await history.listRecentDiscoveries({
+      fromInclusive: "2026-10-07T00:00:00.000Z",
+      beforeExclusive: "2026-10-08T00:00:00.000Z",
+      limit: 100,
+    });
+
+    assert.deepEqual(recent.discoveries.map((item) => item.normalizedUrl), [
+      "https://example.com/-",
+      "https://example.com/A",
+      "https://example.com/_",
+      "https://example.com/a",
+    ]);
+  });
+});
+
 test("recent discovery lookup fails closed on invalid ranges and limits", async () => {
   await withHistory(async (history) => {
     await assert.rejects(history.listRecentDiscoveries({
