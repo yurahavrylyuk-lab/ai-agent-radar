@@ -7,6 +7,7 @@ import { NotificationHistoryError } from "./notificationHistory.js";
 import { notifyDeliveryDigest, type DigestDeliveryResult, type NotificationOrchestratorDependencies } from "./notificationOrchestrator.js";
 import { LocalJsonBraveUsageStore } from "./localJsonBraveUsageStore.js";
 import { LocalJsonGeminiUsageStore } from "./localJsonGeminiUsageStore.js";
+import { inspectGeminiAvailability, type GeminiAvailability, type GeminiBlockedReason } from "./geminiUsageGuard.js";
 import { JsonNotificationHistory } from "./notificationHistory.js";
 import { createGeminiCycleContext, generateWithGemini, type GeminiCycleContext } from "../tools/llm/gemini.js";
 import { analyzeSearchResult } from "./analysisAgent.js";
@@ -46,6 +47,43 @@ export interface MonitoringCycleDependencies {
   now?: () => Date;
   /** Shared, cycle-local provider metrics and frozen request allowance. */
   geminiCycleContext?: GeminiCycleContext;
+  /** Read-only pre-discovery Gemini admission snapshot. */
+  geminiPreflight?: (now: Date) => Promise<GeminiAvailability>;
+}
+
+const geminiBlockedReasons = new Set<GeminiBlockedReason>([
+  "usage_unknown",
+  "daily_request_limit",
+  "weekly_request_limit",
+  "monthly_request_limit",
+  "daily_token_limit",
+  "weekly_token_limit",
+  "monthly_token_limit",
+  "usage_state_unavailable",
+  "invalid_configuration",
+]);
+const geminiUsageFieldNames = ["dailyRequests", "weeklyRequests", "monthlyRequests", "dailyTokens", "weeklyTokens", "monthlyTokens"] as const;
+
+function hasExactGeminiUsageFields(value: unknown, minimum: number): boolean {
+  if (!value || typeof value !== "object") return false;
+  const record = value as Record<string, unknown>;
+  return Object.keys(record).length === geminiUsageFieldNames.length
+    && geminiUsageFieldNames.every((name) => {
+      const entry = record[name];
+      return typeof entry === "number" && Number.isSafeInteger(entry) && entry >= minimum;
+    });
+}
+
+function safeGeminiAvailability(value: unknown): GeminiAvailability {
+  if (!value || typeof value !== "object") return { allowed: false, reason: "usage_state_unavailable" };
+  const availability = value as { allowed?: unknown; reason?: unknown; counts?: unknown; limits?: unknown };
+  if (availability.allowed === false && geminiBlockedReasons.has(availability.reason as GeminiBlockedReason)) {
+    return { allowed: false, reason: availability.reason as GeminiBlockedReason };
+  }
+  const validCounts = hasExactGeminiUsageFields(availability.counts, 0);
+  const validLimits = hasExactGeminiUsageFields(availability.limits, 1);
+  if (availability.allowed === true && validCounts && validLimits) return availability as GeminiAvailability;
+  return { allowed: false, reason: "usage_state_unavailable" };
 }
 
 function errorMessage(error: unknown): string {
@@ -107,39 +145,22 @@ export async function runMonitoringCycle(
   const cycleStartedAt = (dependencies.now ?? (() => new Date()))();
   if (Number.isNaN(cycleStartedAt.getTime())) throw new Error("Monitoring cycle timestamp is invalid.");
   const geminiCycleContext = dependencies.geminiCycleContext ?? createGeminiCycleContext();
-  const search = dependencies.search ?? ((searchQuery: string) => searchWeb(searchQuery, { usageTracker: new LocalJsonBraveUsageStore() }));
   const queries = query === undefined ? MONITORING_QUERIES : [query];
   const searchResults: SearchResult[] = [];
   const searchFailures: MonitoringSearchFailure[] = [];
-  for (const [queryIndex, searchQuery] of queries.entries()) {
-    try {
-      searchResults.push(...await search(searchQuery));
-    } catch (error) {
-      if (query === undefined && error instanceof BraveUsageGuardDeniedError) break;
-      if (query === undefined) {
-        searchFailures.push({ queryOrdinal: queryIndex + 1, error: searchFailureMessage(error) });
-        continue;
-      }
-      throw new Error(`Monitoring cycle search failed: ${errorMessage(error)}`);
-    }
-  }
-
-  if (query === undefined && searchResults.length === 0 && searchFailures.length > 0) {
-    const firstFailure = searchFailures[0];
-    throw new Error(
-      `Monitoring cycle search failed: no usable results after ${searchFailures.length} non-quota failure(s). `
-      + `First failure at query ${firstFailure.queryOrdinal}: ${firstFailure.error}`,
-    );
-  }
-
-  const result = emptyResult(query ?? MONITORING_QUERIES.join(" | "), searchResults.length, searchFailures);
+  const result = emptyResult(query ?? MONITORING_QUERIES.join(" | "), 0, searchFailures);
   const discoveryHistory = dependencies.history ?? new JsonDiscoveryHistory();
   const hasDiscovery = dependencies.hasDiscovery ?? (async (url: string) => (await discoveryHistory.getDiscovery(url)) !== undefined);
+  const geminiUsageStore = new LocalJsonGeminiUsageStore();
+  const geminiPreflight = dependencies.geminiPreflight
+    ?? ((now: Date) => inspectGeminiAvailability(geminiUsageStore, globalThis.process.env, now));
+  const search = dependencies.search ?? ((searchQuery: string) => searchWeb(searchQuery, { usageTracker: new LocalJsonBraveUsageStore() }));
   const process = dependencies.process ?? ((searchResult: SearchResult) => processSearchResult(searchResult, {
     history: discoveryHistory,
     analyze: (r) => analyzeSearchResult(r, {
       generate: (input) => generateWithGemini(input, {
-        usageTracker: new LocalJsonGeminiUsageStore(),
+        usageTracker: geminiUsageStore,
+        environment: globalThis.process.env,
         cycleContext: geminiCycleContext,
       }),
       onValidatedAnalysis: (response) => {
@@ -169,6 +190,43 @@ export async function runMonitoringCycle(
     }
   }
 
+  let geminiAvailability: GeminiAvailability;
+  try {
+    geminiAvailability = safeGeminiAvailability(await geminiPreflight((dependencies.now ?? (() => new Date()))()));
+  } catch {
+    geminiAvailability = { allowed: false, reason: "usage_state_unavailable" };
+  }
+  if (!geminiAvailability.allowed) result.geminiBlockedReason = geminiAvailability.reason;
+
+  if (geminiAvailability.allowed) {
+    for (const [queryIndex, searchQuery] of queries.entries()) {
+      try {
+        searchResults.push(...await search(searchQuery));
+      } catch (error) {
+        if (query === undefined && error instanceof BraveUsageGuardDeniedError) break;
+        if (query === undefined) {
+          searchFailures.push({ queryOrdinal: queryIndex + 1, error: searchFailureMessage(error) });
+          continue;
+        }
+        throw new Error(`Monitoring cycle search failed: ${errorMessage(error)}`);
+      }
+    }
+
+    if (query === undefined && searchResults.length === 0 && searchFailures.length > 0) {
+      const firstFailure = searchFailures[0];
+      throw new Error(
+        `Monitoring cycle search failed: no usable results after ${searchFailures.length} non-quota failure(s). `
+        + `First failure at query ${firstFailure.queryOrdinal}: ${firstFailure.error}`,
+      );
+    }
+  }
+  result.searchResultsReceived = searchResults.length;
+  result.failures = searchFailures.length;
+
+  type ProcessedItem = { searchResult: SearchResult; processed: DiscoveryProcessingResult };
+  const processedItems: ProcessedItem[] = [];
+
+  if (geminiAvailability.allowed) {
   // Phase 1: Identify unique unseen candidates before assigning scarce analysis slots.
   type Candidate = {
     searchResult: SearchResult;
@@ -229,8 +287,6 @@ export async function runMonitoringCycle(
   result.stoppedByAnalysisCap = newCandidates.length > MAX_NEW_ANALYSES_PER_CYCLE;
 
   // Phase 2: Process known URLs and selected new URLs in stable provider order.
-  type ProcessedItem = { searchResult: SearchResult; processed: DiscoveryProcessingResult };
-  const processedItems: ProcessedItem[] = [];
   const successfullyProcessedUrls = new Set<string>();
 
   for (const candidate of candidates) {
@@ -257,6 +313,7 @@ export async function runMonitoringCycle(
     if (processed.status === "duplicate") result.duplicates += 1;
     processedItems.push({ searchResult, processed });
     successfullyProcessedUrls.add(candidate.normalizedUrl);
+  }
   }
 
   // Phase 3: Merge fresh analyses with bounded durable replay candidates and send at most one digest.

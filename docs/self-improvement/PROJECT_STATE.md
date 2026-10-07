@@ -32,6 +32,7 @@ Cloudflare Cron
 - Public HTTP fetch returns only `AI Agent Radar worker ready`.
 - HTTP requests must never trigger monitoring. There is no manual monitoring endpoint.
 - Each successful scheduled run emits exactly one structured, secret-free cycle summary with aggregate counts and bounded outcome status details. It excludes source URLs and content, redacts configured secret values and email addresses, and truncates error text.
+- Before new discovery, a scheduled cycle performs one read-only Gemini availability preflight after bounded replay lookup. If Gemini is locally blocked, the summary records a bounded `geminiBlockedReason`; Brave and fresh analysis are skipped, while eligible stored replay can still use the ordinary one-digest delivery path. A completed replay-only cycle is not proof that Gemini is available.
 - Each cycle performs one bounded recent-discovery lookup so an analyzed but unnotified discovery can re-enter the shared digest without Brave rediscovery or Gemini re-analysis. Replay adds no provider request and does not create a second email.
 - Default multi-query monitoring records isolated non-quota Brave failures by one-based query ordinal and continues sequentially so successful query results still reach normal deduplication, analysis, and notification processing. Each recorded search failure appears in `searchFailures` and increments the aggregate `failures` count. Each query is attempted at most once; there is no query or full-cycle retry. A quota denial still stops further searches without becoming a transient failure. If non-quota failures occur and no usable results were collected, the cycle rejects instead of reporting empty success.
 - No automatic full-cycle retries.
@@ -118,6 +119,10 @@ Secrets are Cloudflare Worker secret bindings. Record binding names only, never 
 Never commit Brave, Gemini, or Resend API keys, the notification email address, temporary authentication secrets, or deployment credentials. Do not copy secrets into plans, reviews, summaries, logs, or validation output.
 
 The production Worker bundle must not include local JSON persistence, Node filesystem modules, dotenv, or an OpenAI cloud dependency. Production must not expose a public/manual monitoring endpoint.
+
+## Gemini blocked-state recovery
+
+`usage_unknown` is fail-closed and is never cleared automatically. Do not blindly reset it with SQL. First determine why accounting became unknown, inspect reservation and accounting evidence, and determine whether the provider request may have executed. Preserve the request reservation, reconcile uncertain request and thinking-inclusive token usage conservatively, and avoid counting it twice. Only after human review and explicit approval may a controlled recovery clear a specific latch; do not make a provider request merely to test whether the account works. For limit blocks, inspect recorded usage and wait for the normal window reset. For invalid configuration or unavailable usage state, inspect bindings, schema, and data integrity without printing values or substituting empty state.
 
 ## Production checkpoints
 
