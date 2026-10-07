@@ -8,7 +8,7 @@ import { notifyDeliveryDigest, type DigestDeliveryResult, type NotificationOrche
 import { LocalJsonBraveUsageStore } from "./localJsonBraveUsageStore.js";
 import { LocalJsonGeminiUsageStore } from "./localJsonGeminiUsageStore.js";
 import { JsonNotificationHistory } from "./notificationHistory.js";
-import { generateWithGemini } from "../tools/llm/gemini.js";
+import { createGeminiCycleContext, generateWithGemini, type GeminiCycleContext } from "../tools/llm/gemini.js";
 import { analyzeSearchResult } from "./analysisAgent.js";
 import { BraveUsageGuardDeniedError, searchWeb } from "../tools/webSearch.js";
 import type { DeliveryCandidate, DiscoveryProcessingResult, MonitoringCycleResult, MonitoringSearchFailure, NotificationResult, SearchResult } from "../types/index.js";
@@ -44,6 +44,8 @@ export interface MonitoringCycleDependencies {
   notification?: NotificationOrchestratorDependencies;
   notify?: NotificationProcessor;
   now?: () => Date;
+  /** Shared, cycle-local provider metrics and frozen request allowance. */
+  geminiCycleContext?: GeminiCycleContext;
 }
 
 function errorMessage(error: unknown): string {
@@ -78,6 +80,10 @@ function emptyResult(
     notificationsNotEligible: 0,
     failures: searchFailures.length,
     stoppedByAnalysisCap: false,
+    geminiProviderAttempts: 0,
+    geminiFallbacks: 0,
+    analysesUsingFallbackModel: 0,
+    geminiRequestsByModel: { "gemini-3.8-flash": 0, "gemini-3.6-flash": 0, "gemini-3.5-flash-lite": 0 },
     replayCandidatesConsidered: 0,
     replayCandidatesEligible: 0,
     freshStoriesSent: 0,
@@ -100,6 +106,7 @@ export async function runMonitoringCycle(
 ): Promise<MonitoringCycleResult> {
   const cycleStartedAt = (dependencies.now ?? (() => new Date()))();
   if (Number.isNaN(cycleStartedAt.getTime())) throw new Error("Monitoring cycle timestamp is invalid.");
+  const geminiCycleContext = dependencies.geminiCycleContext ?? createGeminiCycleContext();
   const search = dependencies.search ?? ((searchQuery: string) => searchWeb(searchQuery, { usageTracker: new LocalJsonBraveUsageStore() }));
   const queries = query === undefined ? MONITORING_QUERIES : [query];
   const searchResults: SearchResult[] = [];
@@ -130,10 +137,24 @@ export async function runMonitoringCycle(
   const hasDiscovery = dependencies.hasDiscovery ?? (async (url: string) => (await discoveryHistory.getDiscovery(url)) !== undefined);
   const process = dependencies.process ?? ((searchResult: SearchResult) => processSearchResult(searchResult, {
     history: discoveryHistory,
-    analyze: (r) => analyzeSearchResult(r, { generate: (input) => generateWithGemini(input, { usageTracker: new LocalJsonGeminiUsageStore() }) }),
+    analyze: (r) => analyzeSearchResult(r, {
+      generate: (input) => generateWithGemini(input, {
+        usageTracker: new LocalJsonGeminiUsageStore(),
+        cycleContext: geminiCycleContext,
+      }),
+      onValidatedAnalysis: (response) => {
+        if (response.usedFallback) geminiCycleContext.analysesUsingFallbackModel += 1;
+      },
+    }),
   }));
   const notification = dependencies.notification ?? { history: new JsonNotificationHistory() };
   const notify = dependencies.notify ?? ((candidates: DeliveryCandidate[]) => notifyDeliveryDigest(candidates, notification));
+  const syncGeminiMetrics = () => {
+    result.geminiProviderAttempts = geminiCycleContext.providerAttempts;
+    result.geminiFallbacks = geminiCycleContext.fallbacks;
+    result.analysesUsingFallbackModel = geminiCycleContext.analysesUsingFallbackModel;
+    result.geminiRequestsByModel = { ...geminiCycleContext.requestsByModel };
+  };
 
   let replayDiscoveries = [] as Awaited<ReturnType<DiscoveryHistory["listRecentDiscoveries"]>>["discoveries"];
   const replayWindow = getNotificationReplayWindow(cycleStartedAt);
@@ -226,6 +247,7 @@ export async function runMonitoringCycle(
         throw new Error(`Monitoring cycle aborted: discovery history is unavailable: ${errorMessage(error)}`);
       }
       result.failures += 1;
+      syncGeminiMetrics();
       result.outcomes.push({ sourceTitle: searchResult.title, sourceUrl: searchResult.url, error: errorMessage(error) });
       continue;
     }
@@ -261,6 +283,7 @@ export async function runMonitoringCycle(
           error: errorMessage(error),
         });
       }
+      syncGeminiMetrics();
       return result;
     }
 
@@ -301,5 +324,6 @@ export async function runMonitoringCycle(
     }
   }
 
+  syncGeminiMetrics();
   return result;
 }

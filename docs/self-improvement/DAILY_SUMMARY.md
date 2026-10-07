@@ -1,5 +1,14 @@
 # Daily Self-Improvement Summary
 
+## 2026-10-06 — Gemini multi-model free-tier fallback
+
+- Status: REVIEW; implementation branch `codex/gemini-multi-model-fallback`, baseline `86c80e6516f18ab07fff0ee732dc1b0e5732677f`.
+- Implemented the human-approved fixed pool `gemini-3.8-flash` → `gemini-3.6-flash` → `gemini-3.5-flash-lite`, forward-only verified fallback, unchanged P0 per-model retry semantics, exact-model request reservation/settlement, nullable historical D1/JSON attribution, and bounded secret-free cycle metrics.
+- Global request/token limits, four-logical-analysis cap, Brave/Resend behavior, replay's zero-Gemini path, relevance/source validation, P1–P4 behavior, Cron, secrets, and production configuration remain unchanged.
+- Validation: prior `npm ci` passed with unchanged dependencies; `npm run build` passed; `npm test` passed 222/222; `npm run worker:typecheck` passed; `git diff --check` passed; `npm ls --depth=0` passed. Exact commit/PR evidence is supplied in the final Builder handoff. No provider call, migration application, production D1 mutation, deployment, merge, P5 work, or branch cleanup occurred.
+
+---
+
 ## 2026-10-06 — Proposal 1 bounded notification replay
 
 - Status: REVIEW; implementation branch `codex/replay-unnotified-discoveries`, baseline `e4606faef42e6aff1ba66313c1c0f97d7fc31df2`.

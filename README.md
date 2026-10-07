@@ -28,9 +28,21 @@ Current:
 
 - Local JSON runtime state remains the default local implementation.
 - D1 adapters exist for discoveries, notifications, Brave usage, and Gemini usage.
-- The versioned D1 schema lives in `migrations/`.
+- The versioned D1 schema lives in `migrations/`; migration `0003` adds nullable Gemini model attribution while preserving historical rows.
 
 Production schedule: `0 8 * * *` UTC (daily at 08:00 UTC). Each scheduled event runs one bounded monitoring cycle: up to ten quota-guarded Brave searches, up to four new Gemini analyses, and at most one Resend notification. D1 preserves deduplication, usage, discoveries, and notification history.
+
+Gemini analysis uses a source-controlled, forward-only model pool:
+`gemini-3.8-flash`, `gemini-3.6-flash`, then `gemini-3.5-flash-lite`.
+Each model preserves the existing initial request plus three 503 retries. The
+provider advances only after exhausted verified 503/UNAVAILABLE responses or a
+structurally verified model-specific 429; ambiguous quota, authentication,
+permission, policy, transport, accounting, and invalid-output failures do not
+hop models. Every actual request is attributed to its model before dispatch.
+The existing global limits (5/20/50 requests and 10,000/30,000/100,000 tokens)
+remain fail-closed and normally stop the theoretical 12-attempt chain early.
+`GEMINI_MODEL` is deprecated and ignored; it cannot alter the reviewed pool.
+The pool uses only the approved included Free Tier capacity; paid fallback is not enabled.
 
 Repository Brave request limits are configured as:
 

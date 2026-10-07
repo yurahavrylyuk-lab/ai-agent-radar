@@ -39,7 +39,7 @@ Cloudflare Cron
 ## Providers
 
 - Search: Brave Search.
-- Analysis: Google Gemini 3.6 Flash; configured model identifier `gemini-3.6-flash`.
+- Analysis: Google Gemini through the reviewed ordered pool `gemini-3.8-flash`, `gemini-3.6-flash`, and `gemini-3.5-flash-lite`. Runtime environment input cannot add, remove, or reorder models; `GEMINI_MODEL` is deprecated and ignored. The pool is restricted to approved included Free Tier capacity; paid fallback is disabled.
 - Email: Resend.
 - OpenAI: not used in the cloud production execution path. Local legacy tooling/dependencies do not authorize inclusion in the deployed Worker runtime.
 
@@ -49,6 +49,7 @@ Maximum per autonomous monitoring cycle:
 
 - Brave: up to 10 requests (one per `MONITORING_QUERIES` entry; the quota guard stops the loop early if a daily/weekly/monthly limit is reached).
 - Gemini: up to 4 new analyses (`MAX_NEW_ANALYSES_PER_CYCLE = 4`; known/duplicate URLs consume no analysis slot).
+- Gemini provider attempts: each logical analysis permits at most four attempts per approved model (12 theoretical), but the unchanged global request/token guard runs before every dispatch and the cycle freezes its initial remaining request allowance. With the configured daily request limit of 5, a normal cycle cannot dispatch more than the remaining portion of those five requests.
 - Resend: 1 email.
 - OpenAI: 0 calls.
 
@@ -98,6 +99,8 @@ Production persistence uses Cloudflare D1 for:
 - Brave usage.
 - Gemini usage.
 - Gemini usage state.
+
+Gemini usage migration `0003_gemini_usage_model.sql` adds nullable exact-model attribution. Historical rows remain null/unknown-model and continue to count globally. New dispatches reserve a zero-token, exact-model request and set usage state unknown before network I/O; a completed response settles that same record and restores known state. Ambiguous transport, invalid usage, or failed settlement remains fail-closed and prevents later requests.
 
 The same discoveries table supplies the bounded replay lookup; Proposal 1 adds no migration, retry table, or delivery-attempt table. A successful ordinary notification-history record excludes all later replay. A failed email send writes no success record and can be considered again until expiry. The accepted send-before-history-write ambiguity remains: provider acceptance followed by history failure can allow a later duplicate delivery.
 

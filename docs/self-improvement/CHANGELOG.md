@@ -1,5 +1,11 @@
 # Self-improvement changelog
 
+## 2026-10-06 — Gemini multi-model fallback ready for review
+
+- Added a reviewed three-model, forward-only Gemini fallback with unchanged per-model 503 retries and conservative model-specific 429 classification.
+- Added pre-dispatch exact-model usage reservation/settlement, nullable historical model attribution, migration `0003`, and cycle/provider-attempt observability.
+- Preserved global usage limits, four logical analyses, replay's zero-Gemini behavior, Brave/Resend behavior, secrets, Cron, and production configuration. No provider call, migration application, deployment, or production merge occurred.
+
 ## 2026-10-06 — Proposal 1 bounded notification replay ready for review
 
 - Added a 72-hour, activation-cutoff-protected, 100-row bounded lookup for analyzed but unnotified discoveries, using existing JSON/D1 discovery data without a migration.

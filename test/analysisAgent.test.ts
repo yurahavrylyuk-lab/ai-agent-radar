@@ -101,3 +101,25 @@ test("analysis prompt covers the P3 taxonomy and rejects keyword-only relevance"
   assert.match(prompt, /IDEs, CLI tools, CI\/CD, code review tools, productivity tooling/);
   assert.match(prompt, /Score practical learning or project-building value, not keyword presence/);
 });
+
+test("reports fallback use only after a valid analysis is produced", async () => {
+  let validatedFallbacks = 0;
+  await analyzeSearchResult(result, {
+    generate: async () => ({ outputText: JSON.stringify(validAnalysis), usedFallback: true }),
+    onValidatedAnalysis: (response) => {
+      if (response.usedFallback) validatedFallbacks += 1;
+    },
+  });
+  assert.equal(validatedFallbacks, 1);
+});
+
+test("does not report fallback use when the model output fails validation", async () => {
+  let validatedFallbacks = 0;
+  await assert.rejects(analyzeSearchResult(result, {
+    generate: async () => ({ outputText: "not JSON", usedFallback: true }),
+    onValidatedAnalysis: (response) => {
+      if (response.usedFallback) validatedFallbacks += 1;
+    },
+  }), /invalid JSON/);
+  assert.equal(validatedFallbacks, 0);
+});

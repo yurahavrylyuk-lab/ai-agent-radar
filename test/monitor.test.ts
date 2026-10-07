@@ -4,6 +4,7 @@ import { MAX_NEW_ANALYSES_PER_CYCLE, MAX_SEARCH_FAILURE_ERROR_LENGTH, MONITORING
 import type { DiscoveryHistory } from "../src/services/discoveryHistory.js";
 import type { NotificationHistory } from "../src/services/notificationHistory.js";
 import { BraveUsageGuardDeniedError } from "../src/tools/webSearch.js";
+import { createGeminiCycleContext, MAX_GEMINI_ATTEMPTS_PER_ANALYSIS } from "../src/tools/llm/gemini.js";
 import type { AgentAnalysis, DeliveryCandidate, DiscoveryProcessingResult, NotificationRecord, NotificationResult, SearchResult, StoredDiscovery } from "../src/types/index.js";
 
 function emptyHistory(): DiscoveryHistory {
@@ -224,6 +225,31 @@ test("the four-analysis cap applies across the full default query batch", async 
   assert.equal(processCalls, 4);
   assert.equal(outcome.analysesAttempted, 4);
   assert.equal(outcome.stoppedByAnalysisCap, true);
+});
+
+test("cycle observability reports provider attempts separately from logical analyses", async () => {
+  const context = createGeminiCycleContext();
+  const item = searchResult("provider-metrics");
+  const outcome = await runMonitoringCycle(undefined, {
+    geminiCycleContext: context,
+    search: async (query) => query === MONITORING_QUERIES[0] ? [item] : [],
+    hasDiscovery: async () => false,
+    process: async (result) => {
+      context.providerAttempts = 5;
+      context.fallbacks = 1;
+      context.analysesUsingFallbackModel = 1;
+      context.requestsByModel["gemini-3.8-flash"] = 4;
+      context.requestsByModel["gemini-3.6-flash"] = 1;
+      return processed(result, "new");
+    },
+    notify: batchNotify("not_eligible"),
+  });
+  assert.equal(outcome.analysesAttempted, 1);
+  assert.equal(outcome.geminiProviderAttempts, 5);
+  assert.equal(outcome.geminiFallbacks, 1);
+  assert.equal(outcome.analysesUsingFallbackModel, 1);
+  assert.deepEqual(outcome.geminiRequestsByModel, { "gemini-3.8-flash": 4, "gemini-3.6-flash": 1, "gemini-3.5-flash-lite": 0 });
+  assert.equal(MAX_GEMINI_ATTEMPTS_PER_ANALYSIS * MAX_NEW_ANALYSES_PER_CYCLE, 48);
 });
 
 test("a Codex candidate from a later query enters the four analysis slots", async () => {

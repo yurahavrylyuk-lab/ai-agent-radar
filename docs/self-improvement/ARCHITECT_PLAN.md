@@ -1,5 +1,142 @@
 # Architect Plan
 
+## Gemini multi-model free-tier fallback — architecture revision 1
+
+Architecture status: ARCHITECTURE_READY. Implementation status: REVIEW. Human approval supplied on 2026-10-06 for the exact ordered pool `gemini-3.8-flash`, `gemini-3.6-flash`, `gemini-3.5-flash-lite`, with project-specific Google AI Studio Free-tier evidence (3.8/3.6: 5 RPM, 250K TPM, 20 RPD; 3.5 Flash Lite: 15 RPM, 250K TPM, 500 RPD). These volatile provider figures are approval evidence only and are not production constants. Builder implementation is ready for independent Analyst review; no merge, deployment, migration application, or provider execution occurred.
+
+### Baseline and evidence reconciliation
+
+- On 2026-10-06, fetched origin successfully and verified `origin/main == 86c80e6516f18ab07fff0ee732dc1b0e5732677f` exactly.
+- Checkout: `codex/replay-unnotified-discoveries`, HEAD `c1f72604bef8fa250a00495d21848338cc44e85c`; working tree initially clean. Inspected source, tests, migrations, AGENTS.md, plan.md and PROJECT_STATE.md have no difference from fetched main. No branch switch is authorized or needed for this plan.
+- Read the role/governance records, Gemini client, usage interface/guard/D1/JSON stores, runtime configuration, analysis and monitor composition, Worker wiring, relevant tests and both existing migrations. The older replay section below still says REVIEW although the supplied authoritative main includes replay; preserve its historical handoff, do not invent a missing final Analyst/Architect review. Reconcile that closure before opening an implementation cycle; this proposal is design-only.
+- `plan.md` P0 currently treats all non-503 errors as terminal. This proposal expressly changes only the documented model-fallback exceptions below; it preserves same-model retries as 503-only. The existing plan must be amended after human approval, not silently reinterpreted.
+- Only this architecture plan changes in this task. No live provider call, runtime/configuration change, migration, branch creation, commit, PR or deployment.
+
+### Current implementation and gaps
+
+`src/tools/llm/gemini.ts` sends `{ model, input }` to the existing Interactions endpoint using one GEMINI_API_KEY and an environment-selected GEMINI_MODEL (repository setting: `gemini-3.6-flash`). P0 uses an initial attempt plus at most three same-model HTTP-503 retries, fixed 5-second delays and a 30-second fetch timeout. No retry for 429, 500, authentication, network or timeout failures. No fallback currently exists.
+
+The guard runs once BEFORE the retry loop, not before each request. Every completed HTTP error records one request with zero tokens; successful responses record validated, thinking-inclusive totals. Transport failures currently record no request. Invalid success JSON/usage marks usage unknown; recording failures throw but do not reliably leave durable unknown state. These gaps must not be multiplied by fallback.
+
+Usage has no model field; operation is currently `minimal-test`. D1 and JSON aggregate all records. Current global request ceilings are daily 5 / weekly 20 / monthly 50; token admission ceilings are 10,000 / 30,000 / 100,000. Preserve their values and existing time-window semantics. They are application limits, not authoritative Google quota measurements.
+
+`analysisAgent.ts` validates the same AgentAnalysis for every response and preserves original title/URL; discovery processing stores only a completed valid analysis. Monitor counts logical unseen stories before processing (maximum four), catches bounded per-story failures, and keeps stored replay outside analysis. Preserve all these boundaries.
+
+### Official documentation and conditional pool
+
+Official sources checked on 2026-10-06:
+
+- [Models](https://ai.google.dev/gemini-api/docs/models) and [lifecycle](https://ai.google.dev/gemini-api/docs/deprecations): the three candidates below are stable, with no announced shutdown date at inspection.
+- [Interactions support](https://ai.google.dev/gemini-api/docs/interactions-overview): all three are listed for the existing API. No endpoint or SDK migration is proposed.
+- [Pricing](https://ai.google.dev/gemini-api/docs/pricing): standard input/output free-tier pricing is listed for these candidates. This is not project-specific entitlement evidence.
+- [Rate limits](https://ai.google.dev/gemini-api/docs/rate-limits): quotas are project-scoped, vary by model, and current active limits must be checked in AI Studio. App counters do not measure all usage by other clients of the project.
+- [Troubleshooting](https://ai.google.dev/gemini-api/docs/troubleshooting): provider retry guidance is broader than P0; this proposal deliberately preserves the narrower approved same-model retry policy.
+
+Human-approved ordered model pool:
+
+1. `gemini-3.8-flash`
+2. `gemini-3.6-flash`
+3. `gemini-3.5-flash-lite`
+
+Human approval recorded on 2026-10-06: the existing project's Google AI Studio dashboard showed current Free-tier access for all three exact standard-text models and approved this ordering and quality trade-off. Reported limits were 5 RPM / 250K TPM / 20 RPD for 3.8 and 3.6, and 15 RPM / 250K TPM / 500 RPD for 3.5 Flash Lite. These values are approval evidence, not hardcoded capacity or a guarantee about future provider state. No key, project credential, billing identifier, or secret is recorded here; no paid fallback is authorized.
+
+An unavailable candidate requires an explicit revised human-approved pool, never automatic substitution. Reconfirm entitlement before deployment and after billing/model changes; this implementation task does not query billing or make model-probe calls.
+
+### Configuration and selection
+
+Use one reviewed Worker-compatible `src/config/geminiModels.ts` constant with a version and a readonly ordered list of approved exact IDs, maximum three, unique and nonempty. Production list is populated only from human approval. No regex family expansion, dynamic discovery, remote list, runtime model-management endpoint, env fallback chain or provider-generated selection.
+
+The static list is the sole selection authority. Retire GEMINI_MODEL as a selector in runtime configuration; document the existing environment variable as deprecated/ignored rather than silently using it as another fallback or requiring a Cloudflare edit in this task. Tests must prove environment input cannot add/reorder/select models. Human approval of replacing the existing model-selection policy is required. No keys, projects, identities or providers are rotated. No Pro, preview, legacy 2.5, paid-only, image/audio/live, batch, grounding, tool or paid service-tier additions.
+
+### Exact fallback classification
+
+- HTTP 503 with absent status or matching UNAVAILABLE: same model, up to three retries with fixed 5-second waits; after its fourth 503, advance one model. A contradictory structured error or explicit auth/policy condition fails closed.
+- HTTP 429 with RESOURCE_EXHAUSTED: no same-model retry. Advance only when validated structured quota evidence unambiguously identifies a model-specific quota for the attempted model and no shared/project-wide, billing, permission or policy violation. Every reported violation must be recognized and model-scoped. Never infer scope from an English message containing a model name. Missing, malformed, unknown or contradictory quota details => terminal quota failure, no fallback. Project-scoped quotas with a model dimension can be model-specific; project association alone does not establish independence.
+- Explicit model-not-served: immediate advance, without same-model retry, only for a documented structured provider reason identifying this exact configured model as unavailable for this endpoint. Bare 404/NOT_FOUND, resource-not-found, permission-denied, typo-like messages or string heuristics are insufficient. Builder must supply a documentation-backed, fixture-tested reason allowlist; if no such machine-readable discriminator is documented, keep this category disabled and fail terminally. Do not invent a Google reason code.
+- Always terminal: invalid prompt/request/schema, 400, 401, 402, 403, 500, safety/policy refusal, authentication/key/permission failures, unknown errors, transport failure/timeout, accounting uncertainty and usage denial. No generic SDK retry layer.
+- A successful HTTP response ends provider fallback. JSON/usage/AgentAnalysis/source-integrity failure is semantic/accounting failure, never permission to ask another model. Explicit safety-block responses are terminal even when HTTP is successful.
+
+Builder must implement a pure bounded classifier with offline fixtures. Unknown error structures fail closed. HTTP-503 status alone preserves existing P0 compatibility; 429 and model-not-served exceptions require stronger evidence as above. Do not sleep through a shared quota limit or return to a previously abandoned model.
+
+### Retry/fallback state machine and bounds
+
+`validate approved configuration -> start logical analysis at primary -> check global and cycle budget -> check model guard -> begin accounted attempt -> dispatch -> settle usage -> classify -> same-model retry / advance / return response / terminal failure`.
+
+Before EVERY actual request, including retries and transitions, check durable usage and remaining cycle budget. Only 503 increments the same-model retry index; each model gets at most four total attempts. A new model starts at attempt one; indices only move forward. A locally denied model may be skipped only for a positively identified model-only guard; a global or uncertain denial terminates the chain. Stop after the first HTTP success and run unchanged semantic validation; no later model is contacted on its failure. Exhaustion raises one bounded per-story error. No partial discovery, fabricated score, recursive cycle retry or repeated Brave/dedup work.
+
+Structural bounds for three models: 12 provider attempts per logical analysis, 48 across four logical analyses. These are algorithmic ceilings, NOT additional production budgets. Add an immutable per-cycle remaining-request allowance captured from the existing global guard at cycle start and decremented on dispatch, never replenished at a calendar rollover. With current daily limit 5, the effective maximum is 5 requests for one story or the ENTIRE four-story cycle, often fewer due to previous daily/weekly/monthly consumption, token gates, or model limits. For example, four primary 503 attempts can leave only one secondary attempt; tertiary need not be reached. No promise of increased daily application allowance.
+
+Keep fresh usage checks on every attempt as well as the frozen cycle allowance. Non-monitor callers receive the same per-invocation budget snapshot and guard checks. Sequential execution only; concurrent writers must not bypass durable accounting admission. No change to `analysesAttempted`: a story trying three models is still one logical attempt; maximum four remains. Replay always performs zero Gemini calls.
+
+### Accounting, uncertainty and smallest migration
+
+Add nullable `model` to historical records and require exact nonempty approved `model` on all new production attempts. New operation: `analysis`; never encode model identity in operation. Preserve old operation strings and do not relabel history. Store model attribution even for HTTP failures and dispatched transport failures. Provider-attempt observability counts fetch dispatches, not locally rejected attempts.
+
+Proposed sole schema migration `migrations/0003_gemini_usage_model.sql`:
+
+```sql
+ALTER TABLE gemini_usage ADD COLUMN model TEXT;
+```
+
+Existing rows remain NULL = unknown historical model; never assume they used 3.6. Aggregate them normally against every global ceiling. Per-model reporting has an explicit unknown-history bucket. If approved model-specific local ceilings are later supplied, conservatively include unknown historical usage in each model's relevant window for admission, without duplicating it in global totals or reporting it as factual model attribution. Missing/invalid data is not zero usage.
+
+Extend the usage-store API narrowly for durable attempt admission/settlement. Before dispatch, durably acquire the existing usage-state flag (known -> unknown/pending) and reserve exactly one model-attributed request row with provisional zero tokens. The state acquisition and reservation must be atomic and conditional; only one request can hold it. Return an opaque reservation handle. Dispatch only after success. On a completed HTTP failure, settle once using the existing zero-token failure convention; on valid successful usage, update that same row with validated thinking-inclusive totals. Settlement and restoring known state must be atomic, tied to that reservation, with no append/double-count. Do not expose a general clear-unknown operation.
+
+For network ambiguity, crash, malformed success JSON/usage, failed persistence, interrupted settlement or invalid reservation, leave usage unknown and stop all subsequent Gemini attempts, including later stories/cycles. Never clear a pre-existing unknown flag automatically; recovery requires separate human-reviewed evidence. A crash after reservation but before fetch may conservatively overcount one request; label this as a reservation, not verified provider execution. This small admission change prevents a failed usage write from enabling another model or a later cycle. Builder must prove atomic ownership/settlement with D1 and JSON tests; inability to do so within these interfaces requires scope clarification, not a weakened guarantee.
+
+D1 continues to use the existing singleton state and row IDs; no new quota table or discovery migration. JSON accepts old missing/null model as legacy, writes model on new records, preserves history and uses atomic replacement plus exclusive admission for reservation/settlement; a storage-local opaque reservation ID may be used for parity with D1 IDs. Do not include Node filesystem code in Worker bundles. Malformed model metadata fails closed; do not reject valid historical IDs solely because they were removed from the current pool.
+
+Apply migration before new code in a separately approved release; old code's explicit column lists remain compatible with the added nullable column. New code with missing schema blocks before fetch. Rollback retains the column/history and must not run older writers concurrently with pending reservations or unknown state. Do not downgrade during an in-flight request, delete usage, erase uncertainty, or automatically drop the column. Test old rows, old writes, schema absence, preservation, and rollback compatibility offline.
+
+### Quota guard policy and limits of guarantees
+
+Keep global app ceilings unchanged and count ALL models, errors, retries and fallback attempts together. Add per-model counters for attribution, not invented available capacity. No hardcoded Google RPM/RPD/TPM values and no division/multiplication of global budgets by model count. Provider rejection remains authoritative; other clients' usage cannot be inferred locally.
+
+The minimal release has no new numeric model-specific local ceilings unless the human explicitly approves supplied values and window semantics. If such a guard is configured, only a model-specific denial can advance to another approved model, with global budget still available. Global-cap or unknown-state denial never advances. Missing required model-limit data must not imply unlimited permission.
+
+Existing token limits are pre-request admission checks against recorded consumption; the next response's exact tokens are unknown. Preserve those values and checks, including thinking totals, and stop further attempts when any is reached. Do not claim this is a hard pre-generation token reservation: one successful response can cross a token threshold, a pre-existing limitation. Strict total-token preallocation/output budgeting would require a separate explicitly approved design. Zero tokens for completed HTTP errors remains the existing accounting convention, not proof that Google charged none. The zero-dollar requirement relies on verified Free-tier project controls, not these counters.
+
+### Observability and error surface
+
+Keep Proposal 3 redaction and log-size bounds. Add cycle fields `geminiModelAttempts` (actual dispatch count), `geminiFallbacks` (forward transitions, including approved model-only skips), `analysesUsingFallbackModel` (validated analyses produced by a non-primary model), and `geminiRequestsByModel` (at most three approved keys and dispatch counts). Count attempts on failure as well as success; avoid process-global accumulators and reset all counters for each cycle. A typed callback/context from Worker/local composition carries events; observer failure must not cause a retry or duplicate provider call.
+
+Final per-story diagnostic: at most three records `{model, attempts, reason, httpStatus?}` plus one terminal reason; enums only for reasons, maximum serialized error 1,000 characters before existing scheduled-summary redaction/truncation. Distinguish unavailable, model quota, shared/unknown quota, not-served, local-global cap, local-model cap, semantic failure and accounting uncertainty. Never copy raw provider responses/messages, prompts, snippets, output, keys or email addresses into these fields. Approved model IDs are safe. No per-URL metrics or new endpoint.
+
+### Bounded Builder scope after approval
+
+1. Reverify baseline/cleanliness and recorded human approval; resolve historical replay closure without rewriting Analyst evidence. Follow the existing experimental-branch governance; this task creates no branch.
+2. Add static `src/config/geminiModels.ts`; implement the forward-only loop and pure classifier in `src/tools/llm/gemini.ts` (a small sibling classifier only if needed). Preserve endpoint, input/prompt, schema and one key.
+3. Update `src/services/geminiUsageTracker.ts`, `geminiUsageGuard.ts`, `d1GeminiUsageStore.ts`, `localJsonGeminiUsageStore.ts`, and the single proposed migration for model attribution and safe admission/settlement. Do not touch discovery/notification tables.
+4. Update `src/services/radarRuntimeConfiguration.ts`, `src/services/monitor.ts`, `src/worker.ts`, `src/types/index.ts`, and only if needed `src/tools/llm/types.ts` / `src/services/analysisAgent.ts` for cycle context and successful-model metadata. No prompt/validation weakening, ranking or replay changes.
+5. Tests: `test/geminiUsageGuard.test.ts`, `test/d1Adapters.test.ts`, `test/localJsonUsageStores.test.ts`, `test/analysisAgent.test.ts`, `test/monitor.test.ts`, `test/workerConfiguration.test.ts`; small new classifier/config tests as needed. Update fixtures for the added usage field and settlement interface.
+6. Documentation after approval: AGENTS.md provider invariant (explicit governance approval), PROJECT_STATE.md, README.md, plan.md P0 model-fallback exceptions, this plan and Builder-owned DAILY_SUMMARY/CHANGELOG. Analyst owns the independent review. Describe deprecated GEMINI_MODEL in operator docs; no Cloudflare variables/quotas changed by implementation. Local example configuration may be updated to remove that obsolete selector after approval.
+7. Run inspected offline test/build/Worker typecheck scripts and diff checks. No live test scripts, remote migration, production configuration, secret changes, deployment, push/merge, P5, SDK/provider replacement, key rotation or new dependencies are authorized by this architecture.
+
+### Acceptance and Analyst focus
+
+1. Primary succeeds: exactly one dispatch, same valid AgentAnalysis, no secondary. Secondary/tertiary success retains original source identity and all validators; first success stops the chain.
+2. A fixture with confirmed model-specific 429 advances once, with no same-model retry. Bare/ambiguous/shared/billing/mixed 429 stops. Unknown quota dimensions and raw-message spoofing cannot grant fallback.
+3. 503 retries exactly three times after the initial attempt, fixed 5-second delays when budget permits, then advances; budget denial interrupts before another fetch. No backward transition or reset. Contradictory/auth/policy metadata fails terminally.
+4. Documented exact-model-not-served reason advances only if its allowlist is justified; bare 404, typo, permissions or unrecognized reasons stop.
+5. Auth/key/permission/request/schema/safety errors, 500, timeout and network ambiguity never hop models. Successful malformed JSON, invalid usage, empty output, invalid relevance or invalid analysis fails once with no stored partial discovery and no semantic retry. Original title/URL preservation remains identical for every model.
+6. All-model availability exhaustion produces one logical story failure; monitoring proceeds through its current per-story semantics without a full-cycle retry. Test structural 12/48 bounds with isolated synthetic high-budget fixtures, and separately prove current production limits allow at most five total attempts, including rollover and prior consumption. Never change production ceilings to reach a test path.
+7. `analysesAttempted` counts stories, maximum four, irrespective of provider attempts; provider counters include failed dispatches and exclude local denials/reservations not dispatched.
+8. Every admitted dispatched request has one model-attributed reservation; settlement cannot duplicate it. Test HTTP failure zero-token convention, thinking-inclusive success totals, per-model aggregation, legacy NULL/absent model, invalid rows and unknown-history conservative guards.
+9. Inject failures before reservation, after reservation, during fetch, during settlement and during uncertainty writes; no later dispatch can occur with uncertain state. Race two admissions; only one proceeds. Crash/restart preserves the unknown latch. D1/JSON agree; rollback does not erase evidence. New code against unmigrated DB makes zero calls.
+10. Global request/token limits cannot be evaded by switching models. Model-only local denial may advance only if explicitly configured/approved; global/unknown denial stops. No automatic clearing of usage state or fabricated per-model capacity.
+11. Production selection rejects unapproved IDs; env values cannot select paid/preview/Pro/legacy models or another project. Missing approval blocks implementation/release. Tests verify the selection gate, not a claim that a mock proves real billing state.
+12. Stored replay and known discovery paths produce zero Gemini calls. Fresh/replay ranking, normal threshold 7, P4 trust and label, deduplication, notification history, four-story digest and one email remain unchanged.
+13. Full P0/P1/P2/P3/P4 and Proposals 1–3 regressions pass offline. Assert unchanged Brave/Resend call counts and zero OpenAI calls. Log tests inject hostile error bodies/secrets and verify bounded enum diagnostics and per-cycle reset.
+14. Build, full offline tests, Worker typecheck, bundle-boundary inspection and diff checks pass; document all skipped checks. Independent Analyst reviews exact implementation, migration, approval provenance, caps and accounting before Architect disposition. No live deployment evidence may be inferred from tests.
+
+### Remaining risks and approval boundary
+
+Global request limit five sharply limits the practical reach of a three-model chain. P0 remains an upper retry budget subject to safety guards, not an entitlement to four calls. Multiple models can share an outage or quota. Availability, pricing and project entitlements can change; generic 429 bodies may yield no safe fallback. Model quality may differ despite identical validation. Existing token admission checks do not predict future token totals. Durable uncertainty intentionally sacrifices availability after ambiguous outcomes; recovery is not automatic. The previous replay REVIEW marker requires durable closure reconciliation before implementation. No claim is made that production is deployed at the fetched source commit.
+
+Architect recommendation: approve this bounded design conditionally, obtain the explicit project/model and governance approval above, then issue one Builder task. Architecture readiness does not mean implementation readiness or permission to call any provider.
+
+---
+
 ## Self-improvement Proposal 1 — bounded durable notification replay
 
 Architecture status: REVIEW. The human approved the 72-hour window, immutable activation cutoff `2026-10-06T16:00:00Z`, broader recent-unnotified semantics, and current-policy P4 replay. Builder implementation is ready for independent review; GOV-001 below remains completed historical evidence.
