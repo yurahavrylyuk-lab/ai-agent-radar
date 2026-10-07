@@ -33,5 +33,13 @@
     "GEMINI_DAILY_TOKEN_LIMIT": "10000",
     "GEMINI_WEEKLY_TOKEN_LIMIT": "30000",
     "GEMINI_MONTHLY_TOKEN_LIMIT": "100000"
+  },
+  "secrets": {
+    "required": [
+      "BRAVE_SEARCH_API_KEY",
+      "GEMINI_API_KEY",
+      "RESEND_API_KEY",
+      "NOTIFICATION_EMAIL"
+    ]
   }
 }
