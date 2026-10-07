@@ -40,7 +40,11 @@ const counts = (patch: Partial<GeminiUsageLimits>) => ({ dailyRequests: 1, weekl
 const jsonResponse = (body: unknown, status = 200, statusText = "OK") => new Response(JSON.stringify(body), { status, statusText, headers: { "Content-Type": "application/json" } });
 const successfulBody = { steps: [{ type: "model_output", content: [{ type: "text", text: "GEMINI_OK" }] }], usage: { total_input_tokens: 9, total_output_tokens: 4, total_thought_tokens: 99, total_tokens: 112 } };
 const unavailable = () => jsonResponse({ error: { status: "UNAVAILABLE", message: "Unavailable" } }, 503, "Service Unavailable");
-const modelQuota = (model: ApprovedGeminiModel) => jsonResponse({ error: { status: "RESOURCE_EXHAUSTED", message: "Quota exhausted", details: [{ "@type": "type.googleapis.com/google.rpc.QuotaFailure", violations: [{ quotaMetric: "generativelanguage.googleapis.com/generate_content_free_tier_requests", quotaDimensions: { model, location: "global" } }] }] } }, 429, "Too Many Requests");
+const quotaViolation = (model?: ApprovedGeminiModel) => ({ quotaMetric: "generativelanguage.googleapis.com/generate_content_free_tier_requests", quotaDimensions: model === undefined ? { location: "global" } : { model, location: "global" } });
+const quotaFailure = (...violations: unknown[]) => ({ "@type": "type.googleapis.com/google.rpc.QuotaFailure", violations });
+const helpDetail = { "@type": "type.googleapis.com/google.rpc.Help", links: [{ description: "Quota documentation", url: "https://example.invalid/quota" }] };
+const retryInfoDetail = { "@type": "type.googleapis.com/google.rpc.RetryInfo", retryDelay: "60s" };
+const modelQuota = (details: unknown[], message = "Quota exhausted") => jsonResponse({ error: { status: "RESOURCE_EXHAUSTED", message, details } }, 429, "Too Many Requests");
 const requestedModel = (init?: RequestInit) => JSON.parse(String(init?.body)).model as ApprovedGeminiModel;
 
 test("allows below all Gemini limits", () => assert.equal(reachedGeminiLimit(counts({ dailyRequests: 2, weeklyRequests: 10, monthlyRequests: 20, dailyTokens: 3_000, weeklyTokens: 9_000, monthlyTokens: 20_000 }), limits), undefined));
@@ -87,11 +91,76 @@ test("3.8 exhausts its P0 503 retries before falling forward to 3.6", async () =
   assert.equal(context.analysesUsingFallbackModel, 0);
 });
 
-test("a structurally model-specific 429 advances immediately", async () => {
+test("a model-specific 429 permits Help and RetryInfo companions and advances immediately", async () => {
   const tracker = new MemoryTracker({ records: [], usageUnknown: false });
   const models: ApprovedGeminiModel[] = [];
   await generateWithGemini("test", { usageTracker: tracker, environment: highLimitEnv, fetchImplementation: (async (_url, init) => {
-    const model = requestedModel(init); models.push(model); return model === "gemini-3.8-flash" ? modelQuota(model) : jsonResponse(successfulBody);
+    const model = requestedModel(init); models.push(model); return model === "gemini-3.8-flash"
+      ? modelQuota([helpDetail, quotaFailure(quotaViolation(model)), retryInfoDetail])
+      : jsonResponse(successfulBody);
+  }) as typeof fetch });
+  assert.deepEqual(models, ["gemini-3.8-flash", "gemini-3.6-flash"]);
+});
+
+test("Help and RetryInfo without a QuotaFailure are terminal even when the message names the model", async () => {
+  const tracker = new MemoryTracker({ records: [], usageUnknown: false });
+  let calls = 0;
+  await assert.rejects(generateWithGemini("test", { usageTracker: tracker, environment: highLimitEnv, fetchImplementation: (async () => {
+    calls++;
+    return modelQuota([helpDetail, retryInfoDetail], "gemini-3.8-flash quota exhausted");
+  }) as typeof fetch }), /HTTP 429/);
+  assert.equal(calls, 1);
+});
+
+test("a QuotaFailure attributed to another model is terminal", async () => {
+  const tracker = new MemoryTracker({ records: [], usageUnknown: false });
+  let calls = 0;
+  await assert.rejects(generateWithGemini("test", { usageTracker: tracker, environment: highLimitEnv, fetchImplementation: (async () => {
+    calls++;
+    return modelQuota([quotaFailure(quotaViolation("gemini-3.6-flash"))]);
+  }) as typeof fetch }), /HTTP 429/);
+  assert.equal(calls, 1);
+});
+
+test("a QuotaFailure without quotaDimensions.model is terminal", async () => {
+  const tracker = new MemoryTracker({ records: [], usageUnknown: false });
+  let calls = 0;
+  await assert.rejects(generateWithGemini("test", { usageTracker: tracker, environment: highLimitEnv, fetchImplementation: (async () => {
+    calls++;
+    return modelQuota([quotaFailure(quotaViolation())]);
+  }) as typeof fetch }), /HTTP 429/);
+  assert.equal(calls, 1);
+});
+
+test("a QuotaFailure without quotaMetric or quotaId is terminal", async () => {
+  const tracker = new MemoryTracker({ records: [], usageUnknown: false });
+  let calls = 0;
+  await assert.rejects(generateWithGemini("test", { usageTracker: tracker, environment: highLimitEnv, fetchImplementation: (async () => {
+    calls++;
+    return modelQuota([quotaFailure({ quotaDimensions: { model: "gemini-3.8-flash" } })]);
+  }) as typeof fetch }), /HTTP 429/);
+  assert.equal(calls, 1);
+});
+
+test("an unknown companion detail makes an otherwise valid QuotaFailure terminal", async () => {
+  const tracker = new MemoryTracker({ records: [], usageUnknown: false });
+  let calls = 0;
+  await assert.rejects(generateWithGemini("test", { usageTracker: tracker, environment: highLimitEnv, fetchImplementation: (async () => {
+    calls++;
+    return modelQuota([quotaFailure(quotaViolation("gemini-3.8-flash")), { "@type": "type.googleapis.com/google.rpc.UnknownMetadata" }]);
+  }) as typeof fetch }), /HTTP 429/);
+  assert.equal(calls, 1);
+});
+
+test("multiple matching QuotaFailure details permit fallback", async () => {
+  const tracker = new MemoryTracker({ records: [], usageUnknown: false });
+  const models: ApprovedGeminiModel[] = [];
+  await generateWithGemini("test", { usageTracker: tracker, environment: highLimitEnv, fetchImplementation: (async (_url, init) => {
+    const model = requestedModel(init);
+    models.push(model);
+    return model === "gemini-3.8-flash"
+      ? modelQuota([quotaFailure(quotaViolation(model)), quotaFailure({ quotaId: "requests-per-model", quotaDimensions: { model } })])
+      : jsonResponse(successfulBody);
   }) as typeof fetch });
   assert.deepEqual(models, ["gemini-3.8-flash", "gemini-3.6-flash"]);
 });

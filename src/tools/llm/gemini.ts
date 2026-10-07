@@ -96,19 +96,25 @@ function isUnavailable(status: number, parsed: GeminiErrorBody | undefined): boo
 
 function isModelSpecificQuotaFailure(parsed: GeminiErrorBody | undefined, model: ApprovedGeminiModel): boolean {
   if (parsed?.error?.status !== "RESOURCE_EXHAUSTED" || !Array.isArray(parsed.error.details) || parsed.error.details.length === 0) return false;
-  return parsed.error.details.every((detail) => {
+  let quotaFailureFound = false;
+  for (const detail of parsed.error.details) {
     if (!detail || typeof detail !== "object") return false;
     const value = detail as Record<string, unknown>;
-    if (value["@type"] !== "type.googleapis.com/google.rpc.QuotaFailure" || !Array.isArray(value.violations) || value.violations.length === 0) return false;
-    return value.violations.every((violation) => {
+    const detailType = value["@type"];
+    if (detailType === "type.googleapis.com/google.rpc.Help" || detailType === "type.googleapis.com/google.rpc.RetryInfo") continue;
+    if (detailType !== "type.googleapis.com/google.rpc.QuotaFailure" || !Array.isArray(value.violations) || value.violations.length === 0) return false;
+    quotaFailureFound = true;
+    const violationsAreModelSpecific = value.violations.every((violation) => {
       if (!violation || typeof violation !== "object") return false;
       const item = violation as Record<string, unknown>;
       const dimensions = item.quotaDimensions;
       const identity = item.quotaMetric ?? item.quotaId;
-      return typeof identity === "string" && identity.length > 0 && !!dimensions && typeof dimensions === "object" &&
+      return typeof identity === "string" && identity.trim().length > 0 && !!dimensions && typeof dimensions === "object" &&
         (dimensions as Record<string, unknown>).model === model;
     });
-  });
+    if (!violationsAreModelSpecific) return false;
+  }
+  return quotaFailureFound;
 }
 
 function initializeFrozenAllowance(context: GeminiCycleContext, check: Awaited<ReturnType<typeof checkGeminiUsage>>): void {
