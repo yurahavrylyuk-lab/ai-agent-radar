@@ -113,38 +113,89 @@ alter Gemini relevance scores or the normal threshold of 7.
 
 ---
 
-## P5 — User Feedback Learning
+## P5 — Discovery Reliability
+
+**Status:** TODO
+**Priority:** High
+
+Improve discovery recall without increasing the approved Brave daily quota.
+
+Goals:
+
+- search Brave with freshness up to 7 days, using `freshness = "pw"` as the preferred concept
+- improve recall of important recent AI / IT / programming / developer-tool news
+- add stronger deterministic coverage of important official sources, including OpenAI, Anthropic, Google AI, GitHub, Microsoft, and other high-value official developer/AI sources
+- preserve the existing Brave limit of `10 / day`
+- preserve deduplication
+- preserve the maximum of four fresh Gemini analyses per cycle
+- preserve P3 priority behavior
+- preserve P4 fallback behavior
+- preserve durable replay behavior
+- preserve existing Gemini request/token quotas
+
+Concrete acceptance case:
+
+- a major official release such as **GPT-6.1 Sol** published within the configured freshness window should have a materially better chance of entering the analysis pipeline
+
+**Architecture gate:** design this item with Architect before any implementation. Do not implement from this backlog entry alone.
+
+**Done when:** the approved P5 architecture is implemented and tested, discovery recall for major recent official releases is improved, and all existing quota/dedup/ranking/replay safeguards remain intact.
+
+---
+
+## P6 — X.com Source Integration
+
+**Status:** TODO
+**Priority:** After P5
+
+Add X.com as an additional bounded discovery source.
+
+Goals:
+
+- use selected trustworthy/high-signal AI and developer accounts
+- optionally use X search/keywords where the approved architecture justifies it
+- normalize X post/source identity
+- deduplicate X discoveries against Brave and existing discoveries
+- feed useful X discoveries into the same analysis, ranking, and digest pipeline
+- define trust/spam filtering so X does not become an unrestricted noisy firehose
+- preserve Gemini, Brave, deduplication, replay, and email safety limits
+
+**Architecture gate:** design X API/auth/rate-limit strategy before implementation.
+
+**Done when:** the approved P6 architecture is implemented and tested with bounded, deduplicated, high-signal X discovery feeding the existing pipeline.
+
+---
+
+## P7 — User Feedback
 
 **Status:** TODO  
 **Priority:** Later
 
-Add feedback actions:
+Add per-story feedback actions such as:
 
-- Relevant or Useful
-- Not relevant or Not useful
+- Relevant / Useful
+- Not relevant / Not useful
 
-Store:
+Store feedback with enough identity/context to use it safely as a bounded soft ranking signal.
 
-- story ID
-- source URL
-- topic/domain where appropriate
-- feedback signal
-- timestamp
+Requires design for:
 
-Use feedback as a bounded/soft ranking signal rather than allowing it to dominate relevance.
+- feedback endpoint
+- story identity
+- persistence
+- protected inspect/reset routes
+- security/authentication
+- bounded influence on future ranking
 
-Provide the ability to:
+**Architecture gate:** design this item before implementation because it changes the HTTP surface.
 
-- inspect stored feedback
-- reset stored feedback
-
-**Done when:** feedback can be submitted, stored, inspected, reset, and safely influence future ranking.
+**Done when:** the approved P7 architecture is implemented and feedback can be submitted, stored, inspected, reset, and safely influence future ranking without dominating relevance.
 
 ---
 
 ## Execution Order
 
-`P0 → P1 → P2 → P3 → P4 → P5`
+`P0 → P1 → P2 → P3 → P4 → P5 → P6 → P7`
 
 Work on a lower-priority item only when the preceding item is complete or explicitly deferred.
 
