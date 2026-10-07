@@ -77,6 +77,21 @@ candidates retain their stable search order and fill the remaining slots. If
 generic candidates are unavailable, preferred candidates may use otherwise-empty
 slots. This selection does not bypass Gemini or change eligibility.
 
+### P5 discovery reliability
+
+P5 keeps the same ten Brave request slots but makes their allocation explicit:
+five interleaved targeted official-source queries (OpenAI, Anthropic, Google AI,
+GitHub Blog, and Microsoft developer documentation) and five broad topic
+queries. Every monitoring query uses Brave's weekly `freshness: "pw"` filter;
+an explicit/custom cycle still performs one freshness-constrained search.
+
+The four Gemini analysis positions preserve P3's two Codex/Claude Code
+opportunities. At most one additional recent, exact-host result observed by its
+matching targeted official query is given a bounded analysis opportunity; normal
+stable ordering fills the rest. This is neither a relevance bonus nor source
+trust: Gemini, the normal threshold, P4 fallback policy, and notification
+history remain authoritative.
+
 ## Fallback digest and source trust
 
 The normal notification threshold remains `7`. If at least one fresh-or-replay,

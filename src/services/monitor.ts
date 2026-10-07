@@ -1,7 +1,8 @@
 import { JsonDiscoveryHistory, DiscoveryHistoryError, type DiscoveryHistory } from "./discoveryHistory.js";
 import { normalizeDiscoveryUrl } from "./discoveryHistoryCore.js";
 import { getNotificationReplayWindow } from "../config/notificationReplay.js";
-import { getPreAnalysisCandidatePriority, MAX_PREFERRED_PRE_ANALYSIS_CANDIDATES } from "./discoveryPriority.js";
+import { DISCOVERY_QUERY_DESCRIPTORS, MONITORING_FRESHNESS, MONITORING_QUERIES, type DiscoveryQueryDescriptor } from "../config/discoveryQueries.js";
+import { getPreAnalysisCandidatePriority, hasOfficialPreAnalysisPriority, selectPreAnalysisCandidates } from "./discoveryPriority.js";
 import { processSearchResult } from "./discoveryProcessor.js";
 import { NotificationHistoryError } from "./notificationHistory.js";
 import { notifyDeliveryDigest, type DigestDeliveryResult, type NotificationOrchestratorDependencies } from "./notificationOrchestrator.js";
@@ -15,22 +16,12 @@ import { BraveUsageGuardDeniedError, searchWeb } from "../tools/webSearch.js";
 import type { DeliveryCandidate, DiscoveryProcessingResult, MonitoringCycleResult, MonitoringSearchFailure, NotificationResult, SearchResult } from "../types/index.js";
 
 export const MONITORING_QUERY = "new AI agent developer tool framework release";
-export const MONITORING_QUERIES = [
-  "AI news research product announcements",
-  "AI agent framework releases",
-  "AI model releases GPT Gemini open-source models capabilities",
-  "programming language compiler standard library releases",
-  "cloud DevOps Kubernetes networking security advisories",
-  "Codex AI coding assistant developer features releases",
-  "Claude Code AI coding assistant developer features releases",
-  "IDE CLI CI/CD code review developer tools releases",
-  "AI assisted software development workflow productivity examples",
-  "useful AI IT tools techniques workflow tutorials",
-] as const;
+export { MONITORING_QUERIES };
 export const MAX_NEW_ANALYSES_PER_CYCLE = 4;
 export const MAX_SEARCH_FAILURE_ERROR_LENGTH = 240;
 
-type WebSearch = (query: string) => Promise<SearchResult[]>;
+export interface MonitoringSearchOptions { freshness?: "pw"; }
+type WebSearch = (query: string, options?: MonitoringSearchOptions) => Promise<SearchResult[]>;
 type DiscoveryLookup = (url: string) => Promise<boolean>;
 type DiscoveryProcessor = (result: SearchResult) => Promise<DiscoveryProcessingResult>;
 type NotificationProcessor = (candidates: DeliveryCandidate[]) => Promise<DigestDeliveryResult>;
@@ -145,8 +136,10 @@ export async function runMonitoringCycle(
   const cycleStartedAt = (dependencies.now ?? (() => new Date()))();
   if (Number.isNaN(cycleStartedAt.getTime())) throw new Error("Monitoring cycle timestamp is invalid.");
   const geminiCycleContext = dependencies.geminiCycleContext ?? createGeminiCycleContext();
-  const queries = query === undefined ? MONITORING_QUERIES : [query];
-  const searchResults: SearchResult[] = [];
+  const queryDescriptors: readonly DiscoveryQueryDescriptor[] = query === undefined
+    ? DISCOVERY_QUERY_DESCRIPTORS
+    : [{ id: "custom", query, kind: "broad" }];
+  const searchResults: Array<{ result: SearchResult; descriptor: DiscoveryQueryDescriptor }> = [];
   const searchFailures: MonitoringSearchFailure[] = [];
   const result = emptyResult(query ?? MONITORING_QUERIES.join(" | "), 0, searchFailures);
   const discoveryHistory = dependencies.history ?? new JsonDiscoveryHistory();
@@ -154,7 +147,10 @@ export async function runMonitoringCycle(
   const geminiUsageStore = new LocalJsonGeminiUsageStore();
   const geminiPreflight = dependencies.geminiPreflight
     ?? ((now: Date) => inspectGeminiAvailability(geminiUsageStore, globalThis.process.env, now));
-  const search = dependencies.search ?? ((searchQuery: string) => searchWeb(searchQuery, { usageTracker: new LocalJsonBraveUsageStore() }));
+  const search = dependencies.search ?? ((searchQuery: string, options?: MonitoringSearchOptions) => searchWeb(searchQuery, {
+    usageTracker: new LocalJsonBraveUsageStore(),
+    freshness: options?.freshness,
+  }));
   const process = dependencies.process ?? ((searchResult: SearchResult) => processSearchResult(searchResult, {
     history: discoveryHistory,
     analyze: (r) => analyzeSearchResult(r, {
@@ -199,9 +195,10 @@ export async function runMonitoringCycle(
   if (!geminiAvailability.allowed) result.geminiBlockedReason = geminiAvailability.reason;
 
   if (geminiAvailability.allowed) {
-    for (const [queryIndex, searchQuery] of queries.entries()) {
+    for (const [queryIndex, descriptor] of queryDescriptors.entries()) {
       try {
-        searchResults.push(...await search(searchQuery));
+        const results = await search(descriptor.query, { freshness: MONITORING_FRESHNESS });
+        searchResults.push(...results.map((result) => ({ result, descriptor })));
       } catch (error) {
         if (query === undefined && error instanceof BraveUsageGuardDeniedError) break;
         if (query === undefined) {
@@ -233,10 +230,12 @@ export async function runMonitoringCycle(
     normalizedUrl: string;
     knownDiscovery: boolean;
     repeatedInBatch: boolean;
+    officialPriority: boolean;
   };
   const candidates: Candidate[] = [];
   const firstCandidateByUrl = new Map<string, Candidate>();
-  for (const searchResult of searchResults) {
+  for (const observation of searchResults) {
+    const { result: searchResult, descriptor } = observation;
     let normalizedUrl: string;
     try {
       normalizedUrl = normalizeDiscoveryUrl(searchResult.url);
@@ -246,11 +245,13 @@ export async function runMonitoringCycle(
 
     const firstCandidate = firstCandidateByUrl.get(normalizedUrl);
     if (firstCandidate) {
+      firstCandidate.officialPriority ||= hasOfficialPreAnalysisPriority(searchResult, descriptor, cycleStartedAt);
       candidates.push({
         searchResult,
         normalizedUrl,
         knownDiscovery: firstCandidate.knownDiscovery,
         repeatedInBatch: true,
+        officialPriority: false,
       });
       continue;
     }
@@ -261,29 +262,28 @@ export async function runMonitoringCycle(
     } catch (error) {
       throw new Error(`Monitoring cycle aborted: unable to verify discovery history: ${errorMessage(error)}`);
     }
-    const candidate = { searchResult, normalizedUrl, knownDiscovery, repeatedInBatch: false };
+    const candidate = {
+      searchResult,
+      normalizedUrl,
+      knownDiscovery,
+      repeatedInBatch: false,
+      officialPriority: hasOfficialPreAnalysisPriority(searchResult, descriptor, cycleStartedAt),
+    };
     candidates.push(candidate);
     firstCandidateByUrl.set(normalizedUrl, candidate);
   }
 
   const newCandidates = candidates
     .filter((candidate) => !candidate.knownDiscovery && !candidate.repeatedInBatch);
-  const preferredCandidates = newCandidates
-    .filter((candidate) => getPreAnalysisCandidatePriority(candidate.searchResult) > 0);
-  const nonPreferredCandidates = newCandidates
-    .filter((candidate) => getPreAnalysisCandidatePriority(candidate.searchResult) === 0);
-  const selectedNewUrls = new Set<string>();
-  for (const candidate of preferredCandidates.slice(0, MAX_PREFERRED_PRE_ANALYSIS_CANDIDATES)) {
-    selectedNewUrls.add(candidate.normalizedUrl);
-  }
-  for (const candidate of nonPreferredCandidates) {
-    if (selectedNewUrls.size >= MAX_NEW_ANALYSES_PER_CYCLE) break;
-    selectedNewUrls.add(candidate.normalizedUrl);
-  }
-  for (const candidate of preferredCandidates.slice(MAX_PREFERRED_PRE_ANALYSIS_CANDIDATES)) {
-    if (selectedNewUrls.size >= MAX_NEW_ANALYSES_PER_CYCLE) break;
-    selectedNewUrls.add(candidate.normalizedUrl);
-  }
+  const selectedNewUrls = new Set(selectPreAnalysisCandidates(
+    newCandidates.map((candidate) => ({
+      value: candidate.normalizedUrl,
+      normalizedUrl: candidate.normalizedUrl,
+      preferred: getPreAnalysisCandidatePriority(candidate.searchResult) > 0,
+      officialPriority: candidate.officialPriority,
+    })),
+    MAX_NEW_ANALYSES_PER_CYCLE,
+  ));
   result.stoppedByAnalysisCap = newCandidates.length > MAX_NEW_ANALYSES_PER_CYCLE;
 
   // Phase 2: Process known URLs and selected new URLs in stable provider order.

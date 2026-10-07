@@ -1,5 +1,11 @@
 # Self-improvement changelog
 
+## 2026-10-07 — P5 Discovery Reliability ready for review
+
+- Added the approved ten-query configuration: five interleaved targeted official-source queries and five broad AI/developer-topic queries, all using Brave weekly freshness for monitoring.
+- Added a deterministic, bounded official-source pre-analysis opportunity alongside P3's existing Codex/Claude Code priority without changing relevance, trust, replay, quotas, provider behavior, or production configuration.
+- No provider call, deployment, Cloudflare/configuration/secret change, D1 migration, or production merge occurred.
+
 ## 2026-10-06 — Gemini multi-model fallback ready for review
 
 - Added a reviewed three-model, forward-only Gemini fallback with unchanged per-model 503 retries and conservative model-specific 429 classification.

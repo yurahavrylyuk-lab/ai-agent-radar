@@ -1,5 +1,116 @@
 # Architect Plan
 
+## P5 — Discovery Reliability: architecture revision 1
+
+Architecture status: HUMAN-APPROVED; implementation is at REVIEW. P5 here means Discovery Reliability under the current roadmap, not the old user-feedback proposal (now P7).
+
+### Verified baseline and current pipeline
+
+Human-supplied authoritative main and locally recorded origin/main: `46a69af998399b1b15ea0718c210d3a786da462c`. Inspection checkout is `docs/roadmap-p5-p7` at `da90cf038b67b10630d62c12b03c109a7a521610`, initially clean. Source/tests/migrations/AGENTS/PROJECT_STATE show no differences from origin/main. No fetch or live production verification was performed. Existing historical REVIEW records are preserved; they are not a new independent review of P5.
+
+Local main is stale at `f21676125f3b3c5f9dab2a8389e141e5ff35886f`; it was not moved. Builder must reverify the human-approved authoritative baseline before implementation rather than starting from that stale local branch.
+
+Current exact integration points:
+
+- `src/services/monitor.ts`: MONITORING_QUERIES contains ten broad strings. runMonitoringCycle first loads bounded replay and runs read-only Gemini preflight; only allowed cycles execute the sequential query loop. Custom query replaces the ten with one. Preserve that ordering.
+- `src/tools/webSearch.ts`: searchWeb POSTs to the existing web-search endpoint with `{q: query.trim(), count: 5}`; no freshness is supplied. It maps page_age to SearchResult.publishedAt, and performs the current Brave guard/accounting. Worker composition in `src/worker.ts` supplies D1-backed search; monitor's local default supplies JSON-backed search.
+- Monitor Phase 1 uses normalizeDiscoveryUrl from `discoveryHistoryCore.ts`, firstCandidateByUrl and durable history before analysis selection. Known URLs consume no analysis slot; duplicate normalized URLs are not independently analyzed. Current normalization retains queries/fragments and normalizes trailing path slashes; do not introduce semantic-story/canonical-link deduplication.
+- `src/services/discoveryPriority.ts` identifies Codex/Claude Code candidates. Monitor selects up to two preferred candidates, fills with non-preferred candidates in discovery order, then uses remaining preferred candidates if space remains; maximum four. Phase 2 processes selected items in stable discovery order. Gemini availability/request guards can still prevent selected stories from receiving a completed analysis.
+- Completed analyses and durable replay join the existing notification pipeline. P3 digest comparator, threshold 7, P4 trust/label, four-story digest, one-email ceiling and notification history are downstream and unchanged.
+
+### Freshness contract
+
+Official Brave [POST Web Search reference](https://api-dashboard.search.brave.com/api-reference/web/search/post), consulted 2026-10-07, defines `pw` as pages aged seven days or less. Its age can reflect publication OR last modification, so this is not proof that an article was first published within seven days. [Search operator documentation](https://api-dashboard.search.brave.com/documentation/resources/search-operators) documents site targeting, uppercase OR and inclusion of subdomains; it also warns operator behavior can change.
+
+Add optional `freshness?: "pw"` to SearchWebDependencies and to the injected search call's small options type. Scheduled/default monitoring explicitly passes `{ freshness: "pw" }` on ALL ten queries. Authorized local custom runMonitoringCycle(query) uses the same weekly freshness and still only one search; a direct standalone searchWeb caller that omits this optional field retains existing behavior. No new manual/HTTP endpoint. Forward the option through Worker and local composition; do not apply it only in a test/mock or embed it in q. Payload is `{ q, count: 5, freshness: "pw" }` for monitoring; existing method/endpoint/auth/count stay fixed.
+
+On freshness rejection or other request failure, use the existing query-failure handling; never retry with the filter removed, expand to another time range, paginate or allocate a replacement query. Silent provider semantic drift cannot be fully detected locally. Parsed page_age outside the local seven-day interval earns no official priority, but remains an ordinary candidate to avoid silently redesigning general eligibility. Missing/invalid dates similarly get no official-priority claim. The monitoring target is seven-day discovery, not a guaranteed publication-date gate. No article fetch, date inference by LLM or date scraping is introduced.
+
+### Ten fixed queries, five official and five broad
+
+Create `src/config/discoveryQueries.ts` with exactly ten immutable descriptors `{id, query, kind, officialHostnames?}` and freshness constant `"pw"`. Keep a compatibility MONITORING_QUERIES export derived from descriptors if callers/tests import it; never maintain two independent query lists. Execute in this exact order, once each, sequentially, subject to unchanged preflight and quota guards:
+
+1. `official_openai`: `site:openai.com`
+2. `broad_codex`: `Codex AI coding assistant developer features releases workflows`
+3. `official_anthropic`: `site:anthropic.com`
+4. `broad_claude_code`: `Claude Code AI coding assistant developer features releases workflows`
+5. `official_google`: `site:blog.google OR site:ai.google.dev`
+6. `broad_ai`: `AI news model releases open-source agents frameworks SDK MCP developer tools`
+7. `official_github`: `site:github.blog`
+8. `broad_programming`: `programming language compiler standard library IDE CLI CI/CD code review releases`
+9. `official_microsoft`: `site:devblogs.microsoft.com OR site:learn.microsoft.com`
+10. `broad_infrastructure`: `cloud DevOps Kubernetes networking security advisories developer productivity tutorials`
+
+Broad topics consolidate existing coverage: AI/models/agents/frameworks/API ecosystems, programming, infrastructure/security, developer tools/workflows, and dedicated Codex/Claude Code slots remain. Five broad queries instead of ten necessarily trade some query diversity for guaranteed query allocation to the five named publishers. This is an explicit trade-off, not a claim of lossless recall. Interleaving brings P3 discovery earlier while ensuring an OpenAI query is attempted even with only one remaining search allowance. Later sources can be skipped on quota exhaustion; no per-publisher outcome guarantee.
+
+Official queries deliberately omit mandatory product/release keywords so a launch titled “Introducing ...” or an unforeseen product can be found. Group only related publisher hosts for Google/Microsoft. Five returned results per query remain; no host-per-query expansion from the P4 registry. GitHub uses github.blog rather than the very broad user-generated github.com host. AWS, Google Cloud, Azure, Kubernetes and language-project sites remain discoverable through broad topic queries; dedicated coverage for them is deferred rather than exceeding ten or removing the core five.
+
+Descriptors' exact official-priority host sets (discovery policy, NOT additions to P4 trust): OpenAI = openai.com, www.openai.com, developers.openai.com, platform.openai.com; Anthropic = anthropic.com, www.anthropic.com, docs.anthropic.com; Google = blog.google, ai.google.dev; GitHub = github.blog; Microsoft = devblogs.microsoft.com, learn.microsoft.com. Some result hosts selected by Brave's parent-domain operator may lie outside these sets; they remain ordinary candidates and gain no reserved priority. Search targeting never grants fallback delivery trust. Humans approve these query/priority policies through this plan; no runtime additions or generated queries.
+
+### Candidate identity, provenance and bounded selection
+
+Keep query provenance only in cycle memory: the query descriptor/ordinal and a bounded official-priority flag alongside each result. Never trust a provider-returned source label or candidate-supplied query ID. Compute priority from the actual preserved URL and that result's targeted descriptor, not from a hostname string inside a title/path/snippet.
+
+An official-priority observation must (a) come from one of the five targeted queries, (b) have HTTP(S) URL without credentials/non-default port and exact canonical hostname in that descriptor's set, and (c) have an unambiguous valid page_age within `[cycleStartedAt - 7*24h, cycleStartedAt]`. Lowercase parsed ASCII hostname, remove one terminal DNS dot; no inferred subdomain/www trust. Accept canonical YYYY-MM-DD as UTC midnight or ISO date-time with explicit timezone; reject invalid/calendar-overflow, relative-age strings and timezone-less date-times for priority. This timestamp is a provider recency signal, not verified first publication.
+
+Deduplicate using the EXISTING normalized URL before assigning slots. Retain the first SearchResult/prompt/source title/URL; union the locally computed official flag from duplicate observations, so a broad-first duplicate does not lose targeted discovery evidence. Keep only bounded per-URL metadata, with a stable first-seen ordinal. Known persisted URLs retain ordinary touch/no-analysis behavior. Notification-history identity and stored analysis schema do not change. Different URLs covering the same story are a known residual limitation, not grounds to merge records heuristically.
+
+Select unseen unique candidates deterministically:
+
+1. Reserve up to two slots for the existing P3 preferred candidates in existing order; use unchanged getPreAnalysisCandidatePriority.
+2. From remaining NON-P3 candidates, reserve at most ONE slot for an official-priority candidate, in first-discovery order. This is a limited opportunity to be analyzed, not a “major release” classifier, trust score or relevance bonus.
+3. Fill remaining slots with remaining non-preferred candidates in existing discovery order, excluding already selected URLs; fill any residual space with remaining preferred candidates as before. Total selected <= 4. Empty official slot is immediately reusable, not withheld.
+4. Preserve Phase 2 processing order and per-story failure behavior; no replacement analysis after a selected story fails. Do not reorder dispatch solely to force the fixture through an exhausted Gemini budget.
+
+With two P3 stories and ordinary generic competition, a recent targeted official story gets one of the other two slots while one remains available to generic coverage. If there are no P3 stories, more ordinary/official stories can fill the unused slots through normal order. When no eligible official-priority candidate exists, selection is identical to P3's current algorithm. No relevance score, Gemini prompt, normal eligibility, digest comparator or P4 predicate changes. Local custom-query results use ordinary P3 selection; no arbitrary user-written site query becomes an approved descriptor automatically.
+
+### GPT-6.1 Sol deterministic acceptance fixture
+
+Treat the named missed release as the human-provided motivating example, not a newly verified live publication. Freeze the test clock; use a SYNTHETIC fixture titled “Introducing GPT-6.1 Sol” at `https://openai.com/index/test-gpt-6-1-sol/`, published two days before the clock. This path is a test input, not a claim that a real page exists. Broad fixtures never return it. Only official_openai returns it, after four other fresh unseen non-P3 results with no qualifying official recency (e.g. missing dates); other broad results include two P3 candidates and generic competitors.
+
+Assert the exact targeted query runs with pw; Sol appears once in the normalized candidate pool and occupies the one official-priority slot alongside both P3 candidates, with total selected <= 4. Under the previous fill order the two ordinary non-P3 slots would be consumed before Sol. Inject sufficient allowed local budget and successful mocked analyses to assert the Sol analysis call actually occurs once. Do not require sending: relevance/notification policy still decides. Separately return Sol's URL from a broad fixture first and the targeted fixture later; provenance union still gives one priority candidate and one analysis. Add known/history-notified variants proving no reanalysis/resend. No live search, fetch of the synthetic URL or Gemini call.
+
+### Failure and quota behavior
+
+- Each descriptor is attempted at most once; at most ten default Brave dispatches per cycle, or one custom dispatch. No retries, additional fallback queries, pagination or second search pass for duplicate-heavy/empty results. Preserve daily/weekly/monthly guard values 10/100/350 and existing stop-on-quota semantics.
+- Partial source or broad query failure is recorded by existing bounded ordinal/error reporting; other queries continue. Actual all-search-failed/no-usable-result handling still rejects as Proposal 2 specifies. Legitimate zero-result searches remain normal, not failures. Do not convert all-search failure to replay success.
+- Duplicate-heavy results can produce fewer than four new analyses; do not compensate with more queries or reanalysis. Selection bypasses known URLs exactly as before.
+- Gemini blocked preflight performs zero Brave/new Gemini calls, with replay-only behavior and reason observability unchanged. A later request guard failure remains authoritative. Preserve Gemini requests 5/20/50, tokens 10000/30000/100000, approved model order, max four logical analyses and all reservation/fallback semantics.
+- Existing Brave persistence records successful HTTP requests, not all failed dispatches. This task does not redesign that accounting or claim to fix cross-cycle undercount after errors. The fixed ten-iteration/no-retry bound still applies to this cycle; retain existing guards and disclose this pre-existing limitation.
+
+### Builder scope and deployment implications
+
+Expected source changes: new `src/config/discoveryQueries.ts`; `src/services/monitor.ts` for descriptor/provenance wiring and the bounded slot selection; `src/tools/webSearch.ts` for optional pw serialization; `src/worker.ts` for passing search options. Put the small pure official-priority/selection helpers in `src/services/discoveryPriority.ts`, keeping its digest functions unchanged. No persistence, AgentAnalysis, trust registry or Gemini implementation change should be necessary. A shared small search-options type can live with webSearch and be imported type-only; avoid broad type refactoring.
+
+Tests: `test/webSearch.test.ts`, `test/monitor.test.ts`, `test/discoveryPriority.test.ts`, `test/workerConfiguration.test.ts`; optional focused `test/discoveryQueries.test.ts`. Documentation after implementation authorization: this plan, README, PROJECT_STATE and role-owned summary/changelog/review. This architecture task modifies only ARCHITECT_PLAN.md; do not rewrite historical reviews or implement roadmap entries. No new dependencies/infrastructure.
+
+After independent review and separate human release approval, P5 requires only a Worker code deployment. No environment variables, quota values, secrets, D1 migration or Cloudflare resources/Cron changes are required. No deployment is authorized now. Production remains Cron-only with health-only HTTP; X.com, feedback/P7, P6, model changes, provider probes and all quota increases are excluded.
+
+### Exact offline acceptance criteria
+
+1. Query config has exactly the ten ordered descriptors above, five official/five broad; scheduled execution makes <= 10 requests and custom <= 1. No retry or expansion after any result/error mix. All monitoring payloads contain count 5 and freshness pw; direct omitted-option behavior stays compatible. Worker/local options propagation is tested, not only the low-level client.
+2. Rejected freshness is an ordinary failed query, never an unfiltered retry. Partial/all-failed/quota/zero-result semantics remain unchanged. Query IDs/ordinals map deterministically to the static list.
+3. All five official publishers have one allocated query; returned off-host/credentialed/unsupported/port-spoofed URLs and fake source labels cannot gain official priority. Invalid, missing, future, just-too-old dates gain no priority; exact seven-day boundary is included. No new global rejection of normal candidates.
+4. The Sol fixture is absent from broad results but selected/analyzed once through targeted coverage under sufficient mocked budget. Include the competing two-P3-plus-generic scenario described above; compare expected old/new selection explicitly. Test broad-first/targeted-later normalized duplicates, title preservation and historical known URL handling.
+5. Two existing P3 reservations are preserved; one official reservation at most; remaining slots backfill deterministically with no duplicates and <= 4 analyses. Without official candidates, selection is unchanged. More than one official source, all preferred, all official, empty lanes and missing-date results exercise stable order and bounded capacity.
+6. Gemini preflight denied => zero searches/analyses and eligible replay can still send; successful preflight followed by dispatch denial fails closed. No extra Gemini provider allowance. All existing P0/P3/fallback-accounting tests remain passing.
+7. Official status never bypasses normal relevance analysis/threshold or expands P4 registry. Test low-scoring official analysis with existing P4 policy, unknown normal source >=7, sent-history exclusion, current-trust replay, one email/four-story cap and unchanged digest ordering. Replay never enters discovery selection or Gemini again.
+8. Full offline tests/build/Worker typecheck and diff checks pass after inspecting scripts; use mocked search/analysis/email exclusively. Inspect final diff for unchanged quotas/model pool/HTTP/Cron/schema/secrets. Tests prove algorithmic coverage and limits, not real-world indexing or release recall.
+
+### Risks, unresolved limits and next decision
+
+Brave may not index a release, may omit it from the top five, may expose no useful date, or may apply changed site/freshness semantics. Date age can reflect an update. Static first-source order can favor OpenAI, and a single official slot cannot guarantee every important release. Five broad calls preserve topic representation but reduce broad-query variety; grouped Google/Microsoft queries can skew toward one host. Cross-URL duplicate stories and provider/accounting outages remain. These are disclosed trade-offs, not hidden claims of complete discovery reliability.
+
+Human approval covers the exact 5+5 allocation, source-priority host sets and one-slot policy. The Builder implementation retains the normal Builder -> independent Analyst -> Architect -> human release flow. No provider call or production mutation was performed to establish this design.
+
+### Builder handoff — 2026-10-07
+
+- Implemented the approved descriptor configuration, weekly Brave freshness option, ephemeral targeted-official provenance, and bounded pre-analysis selector on `codex/p5-discovery-reliability` from baseline `46a69af998399b1b15ea0718c210d3a786da462c`.
+- Added offline coverage for the exact 5+5 order, freshness payloads and failure behavior, official-host/date boundaries, P3/P5 allocation, a synthetic GPT-6.1 Sol fixture, cross-query provenance union, and Worker freshness propagation.
+- Validation: `npm ci`, `npm run build`, `npm test` (244/244), `npm run worker:typecheck`, and `git diff --check` passed. No provider call, deployment, Cloudflare/D1 mutation, migration, secret/configuration change, or production merge occurred.
+
+---
+
 ## Gemini availability preflight / blocked state — architecture revision 1
 
 Date: 2026-10-07. Architecture: GEMINI_PREFLIGHT_ARCHITECTURE_READY. Design only; no implementation cycle, recovery action, provider execution or release is authorized by this entry.

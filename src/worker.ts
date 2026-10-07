@@ -166,18 +166,27 @@ export function createWorkerPersistence(env: RadarWorkerEnv) {
 }
 
 /** Creates cloud-ready cycle dependencies without invoking a monitoring cycle. */
-export function createWorkerMonitoringDependencies(env: RadarWorkerEnv): MonitoringCycleDependencies {
+export interface WorkerMonitoringDependencyOverrides {
+  readonly searchWeb?: typeof searchWeb;
+}
+
+export function createWorkerMonitoringDependencies(
+  env: RadarWorkerEnv,
+  overrides: WorkerMonitoringDependencyOverrides = {},
+): MonitoringCycleDependencies {
   const configuration = createMonitoringRuntimeConfiguration(env as unknown as Record<string, string | undefined>);
   const persistence = createWorkerPersistence(env);
   const geminiCycleContext = createGeminiCycleContext();
+  const workerSearchWeb = overrides.searchWeb ?? searchWeb;
 
   return {
     history: persistence.discoveryHistory,
     geminiCycleContext,
     geminiPreflight: (now) => inspectGeminiAvailability(persistence.geminiUsageStore, configuration.environment, now),
-    search: (query) => searchWeb(query, {
+    search: (query, options) => workerSearchWeb(query, {
       usageTracker: persistence.braveUsageStore,
       environment: configuration.environment,
+      freshness: options?.freshness,
     }),
     process: (result) => processSearchResult(result, {
       history: persistence.discoveryHistory,
