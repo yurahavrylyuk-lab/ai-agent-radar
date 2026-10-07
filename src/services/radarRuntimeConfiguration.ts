@@ -1,4 +1,4 @@
-import { getGeminiUsageLimits } from "./geminiUsageGuard.js";
+import { validateGeminiConfiguration } from "./geminiUsageGuard.js";
 import { getBraveUsageLimits } from "./usageGuard.js";
 
 export type RuntimeEnvironment = Record<string, string | undefined>;
@@ -28,17 +28,32 @@ export interface RadarRuntimeConfiguration {
   environment: RuntimeEnvironment;
 }
 
-/** Validates Worker/local configuration without exposing secret values. */
-export function createRadarRuntimeConfiguration(source: RuntimeEnvironment): RadarRuntimeConfiguration {
+function copyEnvironment(source: RuntimeEnvironment): RuntimeEnvironment {
   const environment: RuntimeEnvironment = {};
   for (const name of radarConfigurationNames) {
     environment[name] = source[name];
   }
+  return environment;
+}
 
-  for (const name of requiredRadarSecretNames) {
+function validateNonGeminiConfiguration(environment: RuntimeEnvironment): void {
+  for (const name of requiredRadarSecretNames.filter((name) => name !== "GEMINI_API_KEY")) {
     if (!environment[name]?.trim()) throw new Error(`${name} is required.`);
   }
   getBraveUsageLimits(environment);
-  getGeminiUsageLimits(environment);
+}
+
+/** Validates all Worker/local runtime configuration without exposing secret values. */
+export function createRadarRuntimeConfiguration(source: RuntimeEnvironment): RadarRuntimeConfiguration {
+  const environment = copyEnvironment(source);
+  validateNonGeminiConfiguration(environment);
+  validateGeminiConfiguration(environment);
+  return { environment };
+}
+
+/** Defers only Gemini admission validation so safe replay delivery can run while Gemini is blocked. */
+export function createMonitoringRuntimeConfiguration(source: RuntimeEnvironment): RadarRuntimeConfiguration {
+  const environment = copyEnvironment(source);
+  validateNonGeminiConfiguration(environment);
   return { environment };
 }

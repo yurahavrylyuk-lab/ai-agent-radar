@@ -5,6 +5,7 @@ import type { DiscoveryHistory } from "../src/services/discoveryHistory.js";
 import type { NotificationHistory } from "../src/services/notificationHistory.js";
 import { BraveUsageGuardDeniedError } from "../src/tools/webSearch.js";
 import { createGeminiCycleContext, MAX_GEMINI_ATTEMPTS_PER_ANALYSIS } from "../src/tools/llm/gemini.js";
+import type { GeminiAvailability, GeminiBlockedReason } from "../src/services/geminiUsageGuard.js";
 import type { AgentAnalysis, DeliveryCandidate, DiscoveryProcessingResult, NotificationRecord, NotificationResult, SearchResult, StoredDiscovery } from "../src/types/index.js";
 
 function emptyHistory(): DiscoveryHistory {
@@ -72,9 +73,18 @@ function runMonitoringCycle(
   return runProductionMonitoringCycle(query, {
     history: emptyHistory(),
     now: () => new Date("2026-10-09T08:00:00.000Z"),
+    geminiPreflight: async () => availableGemini,
     ...dependencies,
   });
 }
+
+const availableGemini: GeminiAvailability = {
+  allowed: true,
+  counts: { dailyRequests: 0, weeklyRequests: 0, monthlyRequests: 0, dailyTokens: 0, weeklyTokens: 0, monthlyTokens: 0 },
+  limits: { dailyRequests: 5, weeklyRequests: 20, monthlyRequests: 50, dailyTokens: 10_000, weeklyTokens: 30_000, monthlyTokens: 100_000 },
+};
+
+const blockedGemini = (reason: GeminiBlockedReason) => async (): Promise<GeminiAvailability> => ({ allowed: false, reason });
 
 function searchResult(id: string): SearchResult {
   return { title: `Result ${id}`, url: `https://example.com/${id}`, snippet: `Snippet ${id}` };
@@ -152,6 +162,102 @@ test("an explicit query preserves single-search behavior", async () => {
     search: async (query) => { queries.push(query); return []; },
   });
   assert.deepEqual(queries, ["some query"]);
+});
+
+test("replay lookup runs before a successful Gemini preflight and normal discovery", async () => {
+  const events: string[] = [];
+  const history = emptyHistory();
+  history.listRecentDiscoveries = async () => { events.push("replay"); return { discoveries: [], truncated: false }; };
+  await runMonitoringCycle("test", {
+    history,
+    geminiPreflight: async () => { events.push("preflight"); return availableGemini; },
+    search: async () => { events.push("search"); return []; },
+  });
+  assert.deepEqual(events, ["replay", "preflight", "search"]);
+});
+
+test("every Gemini blocked reason skips Brave and fresh analysis without fabricating a search failure", async () => {
+  const reasons: GeminiBlockedReason[] = [
+    "usage_unknown",
+    "daily_request_limit",
+    "weekly_request_limit",
+    "monthly_request_limit",
+    "daily_token_limit",
+    "weekly_token_limit",
+    "monthly_token_limit",
+    "usage_state_unavailable",
+    "invalid_configuration",
+  ];
+  for (const reason of reasons) {
+    let searches = 0;
+    let processes = 0;
+    const outcome = await runMonitoringCycle("test", {
+      geminiPreflight: blockedGemini(reason),
+      search: async () => { searches += 1; return [searchResult("must-not-search")]; },
+      process: async (item) => { processes += 1; return processed(item, "new"); },
+    });
+    assert.equal(searches, 0, reason);
+    assert.equal(processes, 0, reason);
+    assert.equal(outcome.geminiBlockedReason, reason);
+    assert.equal(outcome.searchResultsReceived, 0);
+    assert.deepEqual(outcome.searchFailures, []);
+    assert.equal(outcome.failures, 0);
+    assert.equal(outcome.analysesAttempted, 0);
+    assert.equal(outcome.geminiProviderAttempts, 0);
+    assert.equal(outcome.geminiFallbacks, 0);
+    assert.equal(outcome.analysesUsingFallbackModel, 0);
+    assert.equal(outcome.stoppedByAnalysisCap, false);
+  }
+});
+
+test("a blocked Gemini preflight still delivers eligible replay without Brave or fresh analysis", async () => {
+  const stored = processed(searchResult("blocked-replay"), "new").discovery;
+  stored.firstSeenAt = "2026-10-08T08:00:00.000Z";
+  stored.lastSeenAt = stored.firstSeenAt;
+  for (const reason of ["usage_unknown", "usage_state_unavailable", "invalid_configuration"] as const) {
+    let searches = 0;
+    let processes = 0;
+    let deliveries = 0;
+    const outcome = await runMonitoringCycle("test", {
+      history: memoryHistory([stored]),
+      geminiPreflight: blockedGemini(reason),
+      search: async () => { searches += 1; return []; },
+      process: async (item) => { processes += 1; return processed(item, "new"); },
+      notify: async (candidates) => {
+        deliveries += 1;
+        const record = notification("sent");
+        return { notifications: new Map([[stored.analysis.sourceUrl, record]]), eligibleCandidates: candidates, sentCandidates: candidates };
+      },
+    });
+    assert.equal(searches, 0);
+    assert.equal(processes, 0);
+    assert.equal(deliveries, 1);
+    assert.equal(outcome.geminiBlockedReason, reason);
+    assert.equal(outcome.replayStoriesSent, 1);
+    assert.equal(outcome.notificationsSent, 1);
+  }
+});
+
+test("a rejected or malformed Gemini preflight fails closed as usage-state unavailable while preserving replay-only delivery", async () => {
+  const stored = processed(searchResult("unavailable-replay"), "new").discovery;
+  stored.firstSeenAt = "2026-10-08T08:00:00.000Z";
+  stored.lastSeenAt = stored.firstSeenAt;
+  for (const preflight of [
+    async () => { throw new Error("private state details"); },
+    async () => ({ allowed: false, reason: "not-an-approved-reason" }),
+    async () => ({ allowed: true, counts: {}, limits: {} }),
+  ]) {
+    let searches = 0;
+    const outcome = await runMonitoringCycle("test", {
+      history: memoryHistory([stored]),
+      geminiPreflight: preflight as MonitoringCycleDependencies["geminiPreflight"],
+      search: async () => { searches += 1; return []; },
+      notify: batchNotify("sent"),
+    });
+    assert.equal(searches, 0);
+    assert.equal(outcome.geminiBlockedReason, "usage_state_unavailable");
+    assert.equal(outcome.replayStoriesSent, 1);
+  }
 });
 
 test("guard denial preserves earlier query results and stops later collection", async () => {
@@ -675,6 +781,7 @@ test("a replay-only cycle delivers stored analysis without rediscovery or Gemini
 
   const outcome = await runProductionMonitoringCycle(undefined, {
     now: () => new Date("2026-10-09T08:00:00.000Z"),
+    geminiPreflight: async () => availableGemini,
     history: memoryHistory([stored]),
     search: async () => { searches += 1; return []; },
     process: async (item) => { analyses += 1; return processed(item, "new"); },
@@ -712,6 +819,7 @@ test("failed fresh delivery can replay next cycle and successful history prevent
 
   const first = await runProductionMonitoringCycle("test", {
     now: () => new Date("2026-10-08T08:00:00.000Z"),
+    geminiPreflight: async () => availableGemini,
     history,
     search: async () => [item],
     hasDiscovery: async () => false,
@@ -729,6 +837,7 @@ test("failed fresh delivery can replay next cycle and successful history prevent
 
   const second = await runProductionMonitoringCycle("test", {
     now: () => new Date("2026-10-09T08:00:00.000Z"),
+    geminiPreflight: async () => availableGemini,
     history,
     search: async () => [],
     process: async () => { throw new Error("replay must not analyze"); },
@@ -739,6 +848,7 @@ test("failed fresh delivery can replay next cycle and successful history prevent
 
   const third = await runProductionMonitoringCycle("test", {
     now: () => new Date("2026-10-09T09:00:00.000Z"),
+    geminiPreflight: async () => availableGemini,
     history,
     search: async () => [],
     process: async () => { throw new Error("replay must not analyze"); },
@@ -756,6 +866,7 @@ test("replay lookup uncertainty aborts before analysis or notification", async (
   history.listRecentDiscoveries = async () => { throw new Error("D1 unavailable"); };
   await assert.rejects(runProductionMonitoringCycle("test", {
     now: () => new Date("2026-10-09T08:00:00.000Z"),
+    geminiPreflight: async () => availableGemini,
     history,
     search: async () => [searchResult("unreachable")],
     process: async (item) => { processCalls += 1; return processed(item, "new"); },
@@ -775,6 +886,7 @@ test("notification-history lookup uncertainty aborts replay without sending", as
   let sends = 0;
   await assert.rejects(runProductionMonitoringCycle("test", {
     now: () => new Date("2026-10-09T08:00:00.000Z"),
+    geminiPreflight: async () => availableGemini,
     history: memoryHistory([stored]),
     search: async () => [],
     notification: {
@@ -799,6 +911,7 @@ test("pre-activation and expired discoveries never enter replay even when lastSe
   let sends = 0;
   const outcome = await runProductionMonitoringCycle("test", {
     now: () => new Date("2026-10-10T08:00:00.000Z"),
+    geminiPreflight: async () => availableGemini,
     history: memoryHistory([beforeActivation, expired]),
     search: async () => [],
     notification: {
@@ -821,6 +934,7 @@ test("replay lookup runs once without pagination and reports truncation", async 
   };
   const outcome = await runProductionMonitoringCycle("test", {
     now: () => new Date("2026-10-09T08:00:00.000Z"),
+    geminiPreflight: async () => availableGemini,
     history,
     search: async () => [],
   });

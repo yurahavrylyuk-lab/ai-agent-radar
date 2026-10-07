@@ -1,3 +1,5 @@
+import type { GeminiBlockedReason } from "../services/geminiUsageGuard.js";
+
 export interface SearchResult {
   title: string;
   url: string;
@@ -118,5 +120,7 @@ export interface MonitoringCycleResult {
   freshStoriesSent: number;
   replayStoriesSent: number;
   replayLookupTruncated: boolean;
+  /** Present only when pre-discovery Gemini admission blocked new discovery for this cycle. */
+  geminiBlockedReason?: GeminiBlockedReason;
   outcomes: MonitoringCycleOutcome[];
 }

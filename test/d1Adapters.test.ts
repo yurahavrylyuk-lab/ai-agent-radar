@@ -219,6 +219,7 @@ test("D1 Gemini usage round-trips totals, preserves window semantics, and fails 
       monthlyTokens: 112,
     });
     assert.equal((await checkGeminiUsage(store, {
+      GEMINI_API_KEY: "test-key",
       GEMINI_DAILY_REQUEST_LIMIT: "5",
       GEMINI_WEEKLY_REQUEST_LIMIT: "20",
       GEMINI_MONTHLY_REQUEST_LIMIT: "50",

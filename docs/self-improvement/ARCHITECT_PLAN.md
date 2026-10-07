@@ -1,5 +1,127 @@
 # Architect Plan
 
+## Gemini availability preflight / blocked state — architecture revision 1
+
+Date: 2026-10-07. Architecture: GEMINI_PREFLIGHT_ARCHITECTURE_READY. Design only; no implementation cycle, recovery action, provider execution or release is authorized by this entry.
+
+### Baseline and inspected behavior
+
+Local HEAD and cached origin/main both equal the human-supplied authoritative baseline `f21676125f3b3c5f9dab2a8389e141e5ff35886f`; checkout is main, initially clean. No fetch or production-state query was performed in this task. Read current operating contract, Architect guide, PROJECT_STATE, existing plan/review/summary/changelog, monitor/Worker composition, runtime configuration, Gemini client and accounting interfaces/adapters, and relevant tests/scripts. Only this architecture document changes; backlog.md and plan.md remain untouched.
+
+Current monitor performs searches before loading replay. checkGeminiUsage collapses all blocked conditions to `{ allowed: false }`. The Worker composition also validates Gemini limits and key eagerly, so invalid Gemini configuration currently prevents entry into replay processing. Actual Gemini dispatch already rechecks usage, reserves and settles exact-model requests, and preserves unknown state on ambiguous outcomes. Keep that authoritative dispatch path.
+
+Historical multi-model and replay handoffs still show REVIEW, while this authoritative source includes their implementation; the latest checked-in Analyst review is historical GOV-001. Do not invent later review outcomes or rewrite historical evidence. Reconcile closure evidence before initiating a new implementation cycle. This design is grounded in the supplied current baseline, not an assertion of a newly verified deployment.
+
+### Shared availability API
+
+Keep quota truth in `src/services/geminiUsageGuard.ts`. Introduce these exported types/signatures (declarations specify architecture, not an implementation):
+
+```ts
+type GeminiBlockedReason =
+  | "usage_unknown"
+  | "daily_request_limit" | "weekly_request_limit" | "monthly_request_limit"
+  | "daily_token_limit" | "weekly_token_limit" | "monthly_token_limit"
+  | "usage_state_unavailable" | "invalid_configuration";
+
+type GeminiAvailability =
+  | { allowed: true; counts: GeminiUsageCounts; limits: GeminiUsageLimits }
+  | { allowed: false; reason: GeminiBlockedReason };
+
+type GeminiUsageReader = Pick<GeminiUsageStore, "getUsageData">;
+
+function inspectGeminiAvailability(
+  reader: GeminiUsageReader,
+  environment: RuntimeEnvironment,
+  now?: Date,
+): Promise<GeminiAvailability>;
+
+function checkGeminiUsage(
+  tracker: GeminiUsageStore,
+  environment?: RuntimeEnvironment,
+  now?: Date,
+): Promise<GeminiAvailability>;
+```
+
+`inspectGeminiAvailability` is read-only and quiet: configuration validation, one getUsageData call, validated records and existing window/count logic only. No fetch, model probing, reservation, settlement, state mutation, new persistence/cache, filesystem creation, auto-clear or cycle-budget mutation. The reader's type intentionally exposes no write methods. Available means local admission appears possible at this snapshot, not that Google's service/key/quota is verified remotely.
+
+Use a single pure evaluator for validated usage/limits and one typed limit discriminator. Preserve daily/weekly/monthly request checks followed by daily/weekly/monthly token checks. If callers/tests depend on reachedGeminiLimit's current human-readable string, derive it from a fixed enum-to-label map; do not retain a second set of comparisons. checkGeminiUsage delegates to the inspector and supplies existing allowed/blocked logging with enum-derived, secret-free messages. Actual dispatch still calls that wrapper before every request and retains atomic reservation and frozen-cycle allowance checks. No new fallback branch or model-selection rule.
+
+Deterministic precedence: (1) invalid Gemini configuration, (2) usage read/shape/count failure, (3) valid state with usageUnknown true, (4) first reached limit in the existing order, (5) available. Invalid configuration covers malformed/missing Gemini limits and absent/blank GEMINI_API_KEY, using shared validation with dispatch; it cannot identify a remotely invalid nonempty key without a prohibited probe. Invalid/missing persisted state, malformed record/timestamp, unusable totals, thrown reads or invalid evaluation clock map to usage_state_unavailable. Never echo the error or raw state. Validate safe finite aggregated counts; no NaN/overflow may result in permission. Preserve current time-window semantics, historical unknown-model rows and local JSON's existing missing-file behavior; do not introduce new storage policy here.
+
+### Composition and configuration boundary
+
+Add `geminiPreflight?: (now: Date) => Promise<GeminiAvailability>` to MonitoringCycleDependencies. Worker composition always supplies it, closing over the SAME D1GeminiUsageStore and copied environment used for dispatch. The default local composition creates one LocalJsonGeminiUsageStore and shares it between preflight and analysis. A missing injected callback uses that real local default, never an implicit allowed result. Mock-only tests must explicitly inject a preflight fixture; custom search/process dependencies do not disable preflight. Catch an unexpected preflight rejection or invalid result as usage_state_unavailable without serializing its payload.
+
+Add a narrowly named `createMonitoringRuntimeConfiguration(source)` alongside the existing strict `createRadarRuntimeConfiguration(source)`. Factor their existing environment copy and non-Gemini validation into shared helpers. The new monitoring composition validates current non-Gemini requirements exactly as before (Brave configuration, Resend and notification bindings) but defers only Gemini key/limit validation to the inspector. Keep the old strict factory for other callers. This is not a general ignore-validation flag. Worker uses the new factory; local default preflight/dispatch must share the same environment snapshot. Missing Resend/notification prerequisites do not become permission to deliver; no secrets are changed or exposed.
+
+This isolates a broken Gemini configuration or usage table while preserving healthy discovery/notification persistence. A whole D1 outage still aborts on replay/history reads; replay must never bypass unreadable deduplication/notification state. No adapter behavior, reservation protocol or schema migration is required.
+
+### Exact control flow
+
+1. Capture and validate cycleStartedAt; create a fresh GeminiCycleContext and empty result before any search. Compose dependencies without executing providers.
+2. Compute the existing replay window from cycleStartedAt and perform the existing single bounded replay lookup (skip lookup only when existing window policy says so). Preserve the 72-hour window, cutoff, 100-row cap/order and trust recheck. Replay read failure aborts before search or notification; do not hide it as a Gemini block.
+3. Run the read-only Gemini preflight once using a current timestamp from the injected clock. The replay boundary remains cycleStartedAt. Do not seed/decrement remainingRequests from this snapshot: the existing first actual request still initializes its frozen allowance and every dispatch revalidates current state. Avoid changing rollover or budget semantics in this improvement.
+4. If allowed, run the current Brave query loop and discovery/analysis phases unchanged, including custom-query behavior. Keep Proposal 2 partial non-quota tolerance, quota-denial behavior and all-search-failed rejection. Loading replay earlier does NOT turn an actually all-search-failed cycle into successful replay-only delivery.
+5. If blocked, set geminiBlockedReason, perform zero Brave calls, zero new analysis/process calls and zero Gemini writes/dispatches. Do not touch known URLs' lastSeenAt, fabricate candidates or retry preflight within this cycle. An intentional skip is not a Brave failure. A latch cleared externally during this cycle does not resume discovery mid-cycle; the next cycle can reassess.
+6. Both paths converge on the existing single merged delivery path. With discovery skipped, its fresh list is empty and replay candidates go through unchanged notification-history filtering, normal threshold/ranking, P4 fallback, current trusted-host registry and four-story/one-email limits. Replay selection/analysis adds no Brave/Gemini call; an actual replay email still uses the existing Resend call and ordinary notification-history write.
+7. Return the result and emit the existing single scheduled completion summary. Gemini block alone is a completed replay-only/no-op cycle with a blocked-health field. Other history/send errors retain existing rejection/failure behavior; do not synthesize a success summary for a rejected cycle. No new log sink, Cloudflare change, retry, endpoint or scheduler.
+
+### Reasons, counters and race semantics
+
+Add `geminiBlockedReason?: GeminiBlockedReason` to both MonitoringCycleResult and ScheduledCycleSummary. Define it narrowly as the cycle's PRE-DISCOVERY preflight outcome; absence means that preflight allowed discovery, not a claim of continuing provider health. Do not overwrite it after dispatch-time failures. Those retain existing bounded error/counter reporting. This avoids misleadingly reporting that search was skipped when a race actually occurred after search.
+
+Omit newDiscoverySkippedForGeminiBlock: with this definition it is exactly equivalent to reason presence and would create redundant state. Serialize only the allowlisted enum; reject/map malformed injected values to usage_state_unavailable before use. No health-field secrets, URLs, provider bodies, raw D1 values or free-text errors. Existing summary redaction remains intact.
+
+On blocked discovery: searchResultsReceived, resultsProcessed, newDiscoveries, duplicates, analysesAttempted, geminiProviderAttempts, geminiFallbacks, analysesUsingFallbackModel, all per-model attempt counts and freshStoriesSent are zero; stoppedByAnalysisCap is false; searchFailures is empty. No synthetic discovery outcomes or counted processing failure. The configured query description remains a description, not proof of execution. Replay counts/truncation and notification counts retain their real meanings; failures remains zero unless actual replay delivery/processing fails under current rules. Previously sent/ineligible replay is filtered normally. No replay candidates means no notification call/email and a clean summary with the exact blocked reason.
+
+An unavailable Gemini store permits replay-only operation if independent replay and notification persistence/configuration are healthy. Unknown usage, any reached limit and invalid Gemini configuration behave the same way operationally, with distinct enums. The preflight cannot predict reservation races or remote outages. If usage becomes unknown/capped/unreadable after preflight, the real guard blocks before dispatch; a subsequent reservation race still fails closed. Some Brave requests may already have been spent in that race, which is an accepted limit of this one-snapshot optimization. No attempt to reserve capacity early, bypass a guard, auto-clear a latch or redesign concurrency is allowed.
+
+### Operator runbook text for later PROJECT_STATE update
+
+“Gemini blocked health describes why new discovery was skipped at preflight. Eligible stored replay can still be delivered while Gemini is blocked. A completed cycle is not proof of Gemini availability.
+
+For a request/token limit, inspect the recorded usage and existing window/configuration; wait for the normal applicable window reset. Do not raise limits, switch projects/keys, delete history or clear usage_unknown to evade a limit. For invalid_configuration, verify the named binding/limit definitions without printing values; correction requires the normal separate approval. For usage_state_unavailable, investigate access, schema and data integrity read-only; never substitute empty usage or recreate/reset state automatically.
+
+For usage_unknown, preserve the latch. Identify the affected execution and whether a request or settlement could still be active. Do not interfere with a live reservation. Under a separately approved recovery procedure, prevent concurrent dispatch during reconciliation, preserve evidence and correlate bounded logs with reservation IDs, timestamps, exact model/request rows and settlement evidence. Zero-token reservation data is not proof the provider did no work.
+
+Determine whether the request may have executed. Reconcile request and token consumption from authoritative evidence; retain the existing request reservation and avoid counting it twice. Include thinking tokens and relevant quota windows. If exact consumption cannot be established, a conservative documented upper bound must be justified and human-approved; if no safe bound/evidence exists, remain blocked. Passage of time, absence of an error, or an empty dashboard alone does not justify clearing the latch.
+
+Only after reconciliation, verification that no active request can race recovery, and explicit human approval of an exact correction may a separate controlled operation update accounting and clear the specific latch. Review and record before/after evidence without secrets, then run a read-only availability check. Re-enable ordinary scheduled execution only within that approval. This runbook grants no mutation authority and supplies no blind latch-reset SQL. No automatic recovery, scheduled clearing, deletion of usage history or provider call merely to test the account is permitted.”
+
+### Later Builder file scope
+
+- `src/services/geminiUsageGuard.ts`: typed reasons, shared evaluator, read-only inspector and logging wrapper; existing thresholds/windows unchanged.
+- `src/services/radarRuntimeConfiguration.ts`: narrow monitoring configuration preparation and shared validation; retain strict factory contract.
+- `src/services/monitor.ts`: replay-first ordering, preflight injection/default wiring, conditional discovery and result initialization; reuse delivery path.
+- `src/worker.ts`: bind read-only D1 preflight to the same usage store/environment; add the one summary field; preserve HTTP/Cron and logging behavior.
+- `src/types/index.ts`: type-only GeminiBlockedReason reference and optional result field. No runtime dependency on local persistence through the types.
+- `src/tools/llm/gemini.ts`: only minimal shared config validation/type adaptation if necessary; no retry/fallback/reservation rewrite. No production adapter/schema changes expected.
+- Tests: `test/geminiUsageGuard.test.ts`, `test/monitor.test.ts`, `test/workerConfiguration.test.ts`; focused D1/JSON read-only tests in `test/d1Adapters.test.ts` / `test/localJsonUsageStores.test.ts` if required. Update injected monitor fixtures explicitly rather than granting availability by default.
+- Documentation after implementation authorization: PROJECT_STATE.md runbook/control flow/health meaning, README.md operator explanation, this plan and role-owned DAILY_SUMMARY/CHANGELOG. Analyst owns review records. No AGENTS governance change is needed: stricter discovery admission stays within existing maxima. Do not modify backlog.md or plan.md.
+
+### Required offline acceptance tests
+
+1. Allowed preflight preserves normal Brave, analysis, dedup and digest behavior. Assert ordering replay-read -> preflight -> search -> analysis -> delivery and shared usage-store/environment wiring in Worker and local composition.
+2. Parameterize all nine reasons. Each blocks every Brave call and new Gemini/processor call. Independently reach each of the six limits with other counters below limits, and test equality/below-boundary and multiple-limit precedence. Validate malformed limits, missing Gemini key, unreadable/malformed usage, unknown state and unexpected rejected preflight.
+3. Blocked unknown/read-error/invalid-configuration paths can deliver an eligible replay normally with healthy history; verify single send/history and zero fresh/provider counts. Include current-trust P4, already-notified replay, empty replay and expired/pre-cutoff replay. No replay/blocked yields zero email and clean bounded summary.
+4. Replay/history failure aborts without search/send; notification-history failure never sends. A shared D1 outage is not misreported as recoverable Gemini-only failure. Real replay-send failure preserves existing failure behavior and blocked-health field when returning a result.
+5. Read-only spies make every write/reserve/settle/markUnknown/fetch throw; inspector never invokes them. Durable snapshot before/after is equal, and cycle context/allowance is unchanged. Validate D1 read path and local missing-file read without file/directory creation.
+6. For identical environment, usage and clock, inspector and request wrapper agree on allowed/reason. Change state between allowed preflight and actual guard to unknown, reached limit or read failure: no Gemini dispatch/reservation; existing per-story behavior remains. Existing reservation-race and frozen-budget tests still pass; no automatic mid-cycle preflight retry.
+7. Monitoring-specific config allows Gemini-invalid replay-only operation; strict factory still rejects invalid Gemini settings. Other missing secrets/invalid Brave config retain existing startup rejection. Worker never substitutes local JSON storage.
+8. When Brave runs, preserve partial-search tolerance, actual all-search-failed rejection, quota-denial semantics and custom-query behavior. When deliberately skipped, searchFailures remains empty and no synthetic failure is counted.
+9. Summary contains each exact enum and omits it when preflight passes. No second boolean, free-text health payload or secret leak. Inject hostile read errors and malformed dependency results; verify whitelist/redaction, one completion summary and correct counters for both replay-only and no-op completion.
+10. Full Gemini multi-model/P0, P1-P4, Proposals 1-3, four-analysis/one-email limits, unchanged provider ceilings and zero-Gemini stored replay regressions pass. No P5/P6/P7, query-set, pool, fallback, trust, replay-window or migration changes.
+
+### Builder validation, risks and next handoff
+
+After separate implementation authorization, require `npm ci`, `npm run build`, `npm test`, `npm run worker:typecheck`, `git diff --check`, `git diff --exit-code`, and green GitHub CI on the exact reviewed commit. Inspect scripts first; tests use fixtures/mocks only. Do not run monitor/gemini/email/e2e provider scripts. Interpret git diff --exit-code as the final clean-tree reproducibility check after the separately authorized checkpoint: before that, inspect the intentional implementation diff instead of deleting/stashing changes to force exit zero. Also inspect staged changes/status; plain git diff does not prove absence of staged or untracked work. Current task authorizes no checkpoint, push or CI-triggering publication.
+
+No migration is needed. Residual risks: preflight is a snapshot rather than a provider-health guarantee; a Gemini block intentionally forfeits even potentially useful Brave discovery/lastSeenAt refresh; healthy replay still depends on Resend and authoritative notification history. Configuration separation must be narrowly Gemini-specific, and tests must not accidentally fall back to real local usage files. Existing history-write-after-send ambiguity and token admission semantics remain unchanged. Historical review/closure gaps must be reconciled before activating another cycle; no runtime policy is inferred from those stale labels.
+
+Next handoff: human implementation approval and closure reconciliation -> bounded Builder -> independent Analyst -> Architect disposition -> human release decision. No recovery operation, provider call, quota increase, deployment or main integration is implied by architecture readiness.
+
+---
+
 ## Gemini multi-model free-tier fallback — architecture revision 1
 
 Architecture status: ARCHITECTURE_READY. Implementation status: REVIEW. Human approval supplied on 2026-10-06 for the exact ordered pool `gemini-3.8-flash`, `gemini-3.6-flash`, `gemini-3.5-flash-lite`, with project-specific Google AI Studio Free-tier evidence (3.8/3.6: 5 RPM, 250K TPM, 20 RPD; 3.5 Flash Lite: 15 RPM, 250K TPM, 500 RPD). These volatile provider figures are approval evidence only and are not production constants. Builder implementation is ready for independent Analyst review; no merge, deployment, migration application, or provider execution occurred.

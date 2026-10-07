@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { APPROVED_GEMINI_MODELS, type ApprovedGeminiModel } from "../src/config/geminiModels.js";
-import { checkGeminiUsage, reachedGeminiLimit, type GeminiUsageLimits } from "../src/services/geminiUsageGuard.js";
+import { checkGeminiUsage, inspectGeminiAvailability, reachedGeminiLimit, type GeminiBlockedReason, type GeminiUsageLimits } from "../src/services/geminiUsageGuard.js";
 import type { GeminiUsageData, GeminiUsageRecord, GeminiUsageReservation, GeminiUsageSettlement, GeminiUsageTracker } from "../src/services/geminiUsageTracker.js";
 import { createGeminiCycleContext, generateWithGemini, MAX_GEMINI_ATTEMPTS_PER_ANALYSIS } from "../src/tools/llm/gemini.js";
 
@@ -56,6 +56,56 @@ test("blocks invalid configuration and unavailable tracker", async () => {
   const broken = new MemoryTracker({ records: [], usageUnknown: false });
   broken.getUsageData = async () => { throw new Error("broken"); };
   assert.equal((await checkGeminiUsage(broken, env)).allowed, false);
+});
+
+test("read-only availability inspector reports every distinct blocked reason without reservation or mutation", async () => {
+  const now = new Date("2026-10-07T08:00:00.000Z");
+  const record = (totalTokens = 1): GeminiUsageRecord => ({
+    timestamp: now.toISOString(), provider: "gemini", operation: "analysis", requestCount: 1,
+    inputTokens: 0, outputTokens: 0, totalTokens, model: "gemini-3.8-flash",
+  });
+  const blockedCases: Array<{ reason: GeminiBlockedReason; data: GeminiUsageData; environment: typeof env }> = [
+    { reason: "usage_unknown", data: { records: [], usageUnknown: true }, environment: env },
+    { reason: "daily_request_limit", data: { records: [record()], usageUnknown: false }, environment: { ...env, GEMINI_DAILY_REQUEST_LIMIT: "1" } },
+    { reason: "weekly_request_limit", data: { records: [record()], usageUnknown: false }, environment: { ...env, GEMINI_DAILY_REQUEST_LIMIT: "2", GEMINI_WEEKLY_REQUEST_LIMIT: "1" } },
+    { reason: "monthly_request_limit", data: { records: [record()], usageUnknown: false }, environment: { ...env, GEMINI_DAILY_REQUEST_LIMIT: "2", GEMINI_WEEKLY_REQUEST_LIMIT: "2", GEMINI_MONTHLY_REQUEST_LIMIT: "1" } },
+    { reason: "daily_token_limit", data: { records: [record(10)], usageUnknown: false }, environment: { ...env, GEMINI_DAILY_REQUEST_LIMIT: "2", GEMINI_WEEKLY_REQUEST_LIMIT: "2", GEMINI_MONTHLY_REQUEST_LIMIT: "2", GEMINI_DAILY_TOKEN_LIMIT: "10" } },
+    { reason: "weekly_token_limit", data: { records: [record(10)], usageUnknown: false }, environment: { ...env, GEMINI_DAILY_REQUEST_LIMIT: "2", GEMINI_WEEKLY_REQUEST_LIMIT: "2", GEMINI_MONTHLY_REQUEST_LIMIT: "2", GEMINI_DAILY_TOKEN_LIMIT: "11", GEMINI_WEEKLY_TOKEN_LIMIT: "10" } },
+    { reason: "monthly_token_limit", data: { records: [record(10)], usageUnknown: false }, environment: { ...env, GEMINI_DAILY_REQUEST_LIMIT: "2", GEMINI_WEEKLY_REQUEST_LIMIT: "2", GEMINI_MONTHLY_REQUEST_LIMIT: "2", GEMINI_DAILY_TOKEN_LIMIT: "11", GEMINI_WEEKLY_TOKEN_LIMIT: "11", GEMINI_MONTHLY_TOKEN_LIMIT: "10" } },
+    { reason: "usage_state_unavailable", data: { records: [], usageUnknown: false }, environment: env },
+    { reason: "invalid_configuration", data: { records: [], usageUnknown: false }, environment: { ...env, GEMINI_API_KEY: "" } },
+  ];
+
+  for (const blocked of blockedCases) {
+    let reads = 0;
+    const reader = {
+      async getUsageData() {
+        reads += 1;
+        if (blocked.reason === "usage_state_unavailable") throw new Error("unavailable");
+        return structuredClone(blocked.data);
+      },
+    };
+    const availability = await inspectGeminiAvailability(reader, blocked.environment, now);
+    assert.deepEqual(availability, { allowed: false, reason: blocked.reason });
+    assert.equal(reads, blocked.reason === "invalid_configuration" ? 0 : 1);
+  }
+});
+
+test("availability inspection is read-only and a later dispatch guard still fails closed after state changes", async () => {
+  const tracker = new MemoryTracker({ records: [], usageUnknown: false });
+  const initial = await inspectGeminiAvailability(tracker, env);
+  assert.equal(initial.allowed, true);
+  assert.equal(tracker.recordCalls, 0);
+  assert.equal(tracker.settlementCalls, 0);
+
+  tracker.data.usageUnknown = true;
+  let fetchCalls = 0;
+  await assert.rejects(generateWithGemini("test", {
+    usageTracker: tracker,
+    fetchImplementation: (async () => { fetchCalls += 1; return jsonResponse(successfulBody); }) as typeof fetch,
+  }), /blocked by usage guard/);
+  assert.equal(fetchCalls, 0);
+  assert.equal(tracker.recordCalls, 0);
 });
 
 test("blocked requests never call fetch or reserve usage", async () => {

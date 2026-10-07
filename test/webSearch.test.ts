@@ -59,6 +59,11 @@ async function runDefaultSearches(
         return braveResponse();
       },
     }),
+    geminiPreflight: async () => ({
+      allowed: true,
+      counts: { dailyRequests: 0, weeklyRequests: 0, monthlyRequests: 0, dailyTokens: 0, weeklyTokens: 0, monthlyTokens: 0 },
+      limits: { dailyRequests: 5, weeklyRequests: 20, monthlyRequests: 50, dailyTokens: 10_000, weeklyTokens: 30_000, monthlyTokens: 100_000 },
+    }),
   });
   return { fetches, bodies };
 }

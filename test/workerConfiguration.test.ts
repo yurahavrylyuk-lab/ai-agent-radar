@@ -4,11 +4,12 @@ import { D1BraveUsageStore } from "../src/services/d1BraveUsageStore.js";
 import { D1DiscoveryHistory } from "../src/services/d1DiscoveryHistory.js";
 import { D1GeminiUsageStore } from "../src/services/d1GeminiUsageStore.js";
 import { D1NotificationHistory } from "../src/services/d1NotificationHistory.js";
-import { createRadarRuntimeConfiguration } from "../src/services/radarRuntimeConfiguration.js";
+import { createMonitoringRuntimeConfiguration, createRadarRuntimeConfiguration } from "../src/services/radarRuntimeConfiguration.js";
 import type { MonitoringCycleResult } from "../src/types/index.js";
 import worker, {
   createWorkerMonitoringDependencies,
   createWorkerPersistence,
+  createScheduledCycleSummary,
   handleScheduledMonitoring,
   MAX_SCHEDULED_ERROR_LENGTH,
   runScheduledMonitoring,
@@ -85,6 +86,10 @@ test("Worker runtime configuration preserves configured limits and rejects missi
   const missing = environment();
   missing.GEMINI_API_KEY = "";
   assert.throws(() => createRadarRuntimeConfiguration(missing), /GEMINI_API_KEY is required/);
+  assert.doesNotThrow(() => createMonitoringRuntimeConfiguration(missing));
+  const missingBrave = environment();
+  missingBrave.BRAVE_SEARCH_API_KEY = "";
+  assert.throws(() => createMonitoringRuntimeConfiguration(missingBrave), /BRAVE_SEARCH_API_KEY is required/);
 });
 
 test("Worker composition uses D1 stores and exposes a scheduled handler without invoking it from fetch", async () => {
@@ -161,6 +166,30 @@ test("scheduled monitoring runs one cycle and emits one structured summary with 
       },
     ],
   });
+});
+
+test("scheduled summary exposes only the exact bounded Gemini blocked reason", async () => {
+  const summaries: ScheduledCycleSummary[] = [];
+  await runScheduledMonitoring(environment(), {
+    runCycle: async () => monitoringResult({
+      searchResultsReceived: 0,
+      resultsProcessed: 0,
+      newDiscoveries: 0,
+      analysesAttempted: 0,
+      geminiProviderAttempts: 0,
+      geminiFallbacks: 0,
+      analysesUsingFallbackModel: 0,
+      geminiBlockedReason: "weekly_token_limit",
+      outcomes: [],
+    }),
+    logInfo: (summary) => summaries.push(summary),
+  });
+  assert.equal(summaries.length, 1);
+  assert.equal(summaries[0]?.geminiBlockedReason, "weekly_token_limit");
+  const serialized = JSON.stringify(summaries[0]);
+  assert.ok(!serialized.includes("gemini-test-key"));
+  assert.ok(!serialized.includes("https://"));
+  assert.ok(!("geminiBlockedReason" in createScheduledCycleSummary(monitoringResult(), environment())));
 });
 
 test("scheduled handler registers and awaits the single monitoring promise", async () => {

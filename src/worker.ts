@@ -2,9 +2,10 @@ import { D1BraveUsageStore } from "./services/d1BraveUsageStore.js";
 import { D1DiscoveryHistory } from "./services/d1DiscoveryHistory.js";
 import { D1GeminiUsageStore } from "./services/d1GeminiUsageStore.js";
 import { D1NotificationHistory } from "./services/d1NotificationHistory.js";
+import { inspectGeminiAvailability } from "./services/geminiUsageGuard.js";
 import { analyzeSearchResult } from "./services/analysisAgent.js";
 import { processSearchResult } from "./services/discoveryProcessor.js";
-import { createRadarRuntimeConfiguration } from "./services/radarRuntimeConfiguration.js";
+import { createMonitoringRuntimeConfiguration } from "./services/radarRuntimeConfiguration.js";
 import { createGeminiCycleContext, generateWithGemini } from "./tools/llm/gemini.js";
 import { sendWithResend } from "./tools/email/resend.js";
 import { searchWeb } from "./tools/webSearch.js";
@@ -63,6 +64,7 @@ export interface ScheduledCycleSummary {
   freshStoriesSent: number;
   replayStoriesSent: number;
   replayLookupTruncated: boolean;
+  geminiBlockedReason?: MonitoringCycleResult["geminiBlockedReason"];
   outcomesTotal: number;
   outcomesOmitted: number;
   outcomes: Array<{
@@ -146,6 +148,7 @@ export function createScheduledCycleSummary(
     freshStoriesSent: result.freshStoriesSent,
     replayStoriesSent: result.replayStoriesSent,
     replayLookupTruncated: result.replayLookupTruncated,
+    ...(result.geminiBlockedReason === undefined ? {} : { geminiBlockedReason: result.geminiBlockedReason }),
     outcomesTotal: result.outcomes.length,
     outcomesOmitted: Math.max(0, result.outcomes.length - outcomes.length),
     outcomes,
@@ -164,13 +167,14 @@ export function createWorkerPersistence(env: RadarWorkerEnv) {
 
 /** Creates cloud-ready cycle dependencies without invoking a monitoring cycle. */
 export function createWorkerMonitoringDependencies(env: RadarWorkerEnv): MonitoringCycleDependencies {
-  const configuration = createRadarRuntimeConfiguration(env as unknown as Record<string, string | undefined>);
+  const configuration = createMonitoringRuntimeConfiguration(env as unknown as Record<string, string | undefined>);
   const persistence = createWorkerPersistence(env);
   const geminiCycleContext = createGeminiCycleContext();
 
   return {
     history: persistence.discoveryHistory,
     geminiCycleContext,
+    geminiPreflight: (now) => inspectGeminiAvailability(persistence.geminiUsageStore, configuration.environment, now),
     search: (query) => searchWeb(query, {
       usageTracker: persistence.braveUsageStore,
       environment: configuration.environment,
