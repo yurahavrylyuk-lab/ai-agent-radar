@@ -5,7 +5,7 @@ import { D1NotificationHistory } from "./services/d1NotificationHistory.js";
 import { analyzeSearchResult } from "./services/analysisAgent.js";
 import { processSearchResult } from "./services/discoveryProcessor.js";
 import { createRadarRuntimeConfiguration } from "./services/radarRuntimeConfiguration.js";
-import { generateWithGemini } from "./tools/llm/gemini.js";
+import { createGeminiCycleContext, generateWithGemini } from "./tools/llm/gemini.js";
 import { sendWithResend } from "./tools/email/resend.js";
 import { searchWeb } from "./tools/webSearch.js";
 import { runMonitoringCycle, type MonitoringCycleDependencies } from "./services/monitor.js";
@@ -23,7 +23,8 @@ export interface RadarWorkerEnv {
   BRAVE_WEEKLY_SEARCH_LIMIT: string;
   BRAVE_MONTHLY_SEARCH_LIMIT: string;
   GEMINI_API_KEY: string;
-  GEMINI_MODEL: string;
+  /** @deprecated Ignored; the approved model pool is source-controlled. */
+  GEMINI_MODEL?: string;
   GEMINI_DAILY_REQUEST_LIMIT: string;
   GEMINI_WEEKLY_REQUEST_LIMIT: string;
   GEMINI_MONTHLY_REQUEST_LIMIT: string;
@@ -53,6 +54,10 @@ export interface ScheduledCycleSummary {
   notificationsNotEligible: number;
   failures: number;
   stoppedByAnalysisCap: boolean;
+  geminiProviderAttempts: number;
+  geminiFallbacks: number;
+  analysesUsingFallbackModel: number;
+  geminiRequestsByModel: MonitoringCycleResult["geminiRequestsByModel"];
   replayCandidatesConsidered: number;
   replayCandidatesEligible: number;
   freshStoriesSent: number;
@@ -132,6 +137,10 @@ export function createScheduledCycleSummary(
     notificationsNotEligible: result.notificationsNotEligible,
     failures: result.failures,
     stoppedByAnalysisCap: result.stoppedByAnalysisCap,
+    geminiProviderAttempts: result.geminiProviderAttempts,
+    geminiFallbacks: result.geminiFallbacks,
+    analysesUsingFallbackModel: result.analysesUsingFallbackModel,
+    geminiRequestsByModel: { ...result.geminiRequestsByModel },
     replayCandidatesConsidered: result.replayCandidatesConsidered,
     replayCandidatesEligible: result.replayCandidatesEligible,
     freshStoriesSent: result.freshStoriesSent,
@@ -157,9 +166,11 @@ export function createWorkerPersistence(env: RadarWorkerEnv) {
 export function createWorkerMonitoringDependencies(env: RadarWorkerEnv): MonitoringCycleDependencies {
   const configuration = createRadarRuntimeConfiguration(env as unknown as Record<string, string | undefined>);
   const persistence = createWorkerPersistence(env);
+  const geminiCycleContext = createGeminiCycleContext();
 
   return {
     history: persistence.discoveryHistory,
+    geminiCycleContext,
     search: (query) => searchWeb(query, {
       usageTracker: persistence.braveUsageStore,
       environment: configuration.environment,
@@ -170,7 +181,11 @@ export function createWorkerMonitoringDependencies(env: RadarWorkerEnv): Monitor
         generate: (input) => generateWithGemini(input, {
           usageTracker: persistence.geminiUsageStore,
           environment: configuration.environment,
+          cycleContext: geminiCycleContext,
         }),
+        onValidatedAnalysis: (response) => {
+          if (response.usedFallback) geminiCycleContext.analysesUsingFallbackModel += 1;
+        },
       }),
     }),
     notification: {

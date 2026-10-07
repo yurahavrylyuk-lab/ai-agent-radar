@@ -11,6 +11,7 @@
 - Preserve safety checks: apply the same content-safety validation to the retried response as to the original.
 - Delay between retries: fixed 5-second wait (no exponential back-off required at this stage).
 - After 3 retries are exhausted without success, surface the error to the caller as a permanent failure.
+- Approved multi-model extension: after one model exhausts verified HTTP 503/UNAVAILABLE retries, advance once to the next source-controlled model in `gemini-3.8-flash` → `gemini-3.6-flash` → `gemini-3.5-flash-lite`. A structurally verified model-specific 429 may advance without same-model retry. Ambiguous/shared 429, authentication, permission, request, policy, transport, accounting, and semantic failures remain terminal. Existing global request/token guards run before every dispatch and are not increased.
 
 ### Implementation Steps
 1. Identify the Gemini HTTP client wrapper in `src/`.
@@ -21,7 +22,7 @@
    - On success, return result.
 3. Wrap every Gemini API call site with `retryOn503`.
 4. Ensure usage counters are incremented inside `fn` before the throw/return, not outside, so each attempt is counted.
-5. Add unit tests in `test/` covering: success on first try, success on second try (after one 503), failure after 3 retries, no retry on 500, no retry on 429.
+5. Add unit tests in `test/` covering: success on first try, success on second try (after one 503), failure after 3 retries, no retry on 500, terminal ambiguous/shared 429, and the separately approved structurally model-specific 429 fallback.
 
 ---
 

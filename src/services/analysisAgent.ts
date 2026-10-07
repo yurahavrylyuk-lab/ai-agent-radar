@@ -4,10 +4,12 @@ import { agentAnalysisCategories, type AgentAnalysis, type AgentAnalysisCategory
 
 const categories: readonly AgentAnalysisCategory[] = agentAnalysisCategories;
 
-type AnalysisGenerator = (input: string) => Promise<Pick<LlmResult, "outputText">>;
+type AnalysisGeneratorResult = Pick<LlmResult, "outputText"> & Partial<Pick<LlmResult, "usedFallback">>;
+type AnalysisGenerator = (input: string) => Promise<AnalysisGeneratorResult>;
 
 interface AnalysisAgentDependencies {
   generate?: AnalysisGenerator;
+  onValidatedAnalysis?: (result: AnalysisGeneratorResult) => void;
 }
 
 function isNonEmptyString(value: unknown): value is string {
@@ -91,5 +93,7 @@ function parsedAnalysis(outputText: string, result: SearchResult): AgentAnalysis
 export async function analyzeSearchResult(result: SearchResult, dependencies: AnalysisAgentDependencies = {}): Promise<AgentAnalysis> {
   const generate = dependencies.generate ?? generateWithGemini;
   const response = await generate(analysisPrompt(result));
-  return parsedAnalysis(response.outputText, result);
+  const analysis = parsedAnalysis(response.outputText, result);
+  dependencies.onValidatedAnalysis?.(response);
+  return analysis;
 }

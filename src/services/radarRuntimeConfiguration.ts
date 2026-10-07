@@ -38,8 +38,6 @@ export function createRadarRuntimeConfiguration(source: RuntimeEnvironment): Rad
   for (const name of requiredRadarSecretNames) {
     if (!environment[name]?.trim()) throw new Error(`${name} is required.`);
   }
-  if (!environment.GEMINI_MODEL?.trim()) throw new Error("GEMINI_MODEL is required.");
-
   getBraveUsageLimits(environment);
   getGeminiUsageLimits(environment);
   return { environment };

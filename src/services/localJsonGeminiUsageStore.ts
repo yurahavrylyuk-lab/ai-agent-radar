@@ -1,11 +1,14 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, rename, unlink, writeFile, type FileHandle } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import {
   isGeminiUsageRecord,
   type GeminiUsageData,
   type GeminiUsageRecord,
+  type GeminiUsageReservation,
+  type GeminiUsageSettlement,
   type GeminiUsageStore,
 } from "./geminiUsageTracker.js";
+import type { ApprovedGeminiModel } from "../config/geminiModels.js";
 
 function copyRecord(record: GeminiUsageRecord): GeminiUsageRecord {
   return { ...record };
@@ -13,6 +16,8 @@ function copyRecord(record: GeminiUsageRecord): GeminiUsageRecord {
 
 /** Local, atomic JSON implementation of the Gemini usage persistence boundary. */
 export class LocalJsonGeminiUsageStore implements GeminiUsageStore {
+  private readonly reservationLocks = new Map<string, FileHandle>();
+
   constructor(private readonly filePath = resolve(process.cwd(), "data", "gemini-usage.json")) {}
 
   async getUsageData(): Promise<GeminiUsageData> {
@@ -39,6 +44,50 @@ export class LocalJsonGeminiUsageStore implements GeminiUsageStore {
   async markUsageUnknown(): Promise<void> {
     const data = await this.getUsageData();
     await this.write({ ...data, usageUnknown: true });
+  }
+
+  async reserveRequest(record: GeminiUsageRecord & { model: ApprovedGeminiModel }): Promise<GeminiUsageReservation> {
+    if (!isGeminiUsageRecord(record) || record.inputTokens !== 0 || record.outputTokens !== 0 || record.totalTokens !== 0) {
+      throw new Error("Gemini usage reservation has an invalid format.");
+    }
+    await mkdir(dirname(this.filePath), { recursive: true });
+    const lock = await open(`${this.filePath}.reservation.lock`, "wx", 0o600).catch(() => {
+      throw new Error("Gemini usage reservation could not acquire exclusive local admission.");
+    });
+    try {
+      const data = await this.getUsageData();
+      if (data.usageUnknown) throw new Error("Gemini usage state is unavailable for reservation.");
+      const index = data.records.length;
+      const reservation = { id: `local:${index}:${record.timestamp}`, record: copyRecord(record) as GeminiUsageRecord & { model: ApprovedGeminiModel } };
+      await this.write({ records: [...data.records, copyRecord(record)], usageUnknown: true });
+      this.reservationLocks.set(reservation.id, lock);
+      return reservation;
+    } catch (error) {
+      await lock.close().catch(() => undefined);
+      await unlink(`${this.filePath}.reservation.lock`).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  async settleRequest(reservation: GeminiUsageReservation, usage: GeminiUsageSettlement): Promise<void> {
+    const match = /^local:(\d+):(.+)$/.exec(reservation.id);
+    if (!match || !isGeminiUsageRecord({ ...reservation.record, ...usage })) {
+      throw new Error("Gemini usage settlement has an invalid format.");
+    }
+    const data = await this.getUsageData();
+    const lock = this.reservationLocks.get(reservation.id);
+    const index = Number(match[1]);
+    const record = data.records[index];
+    if (!lock || !data.usageUnknown || !record || match[2] !== reservation.record.timestamp ||
+      record.timestamp !== reservation.record.timestamp || record.model !== reservation.record.model ||
+      record.inputTokens !== 0 || record.outputTokens !== 0 || record.totalTokens !== 0) {
+      throw new Error("Gemini usage reservation could not be settled safely.");
+    }
+    const records = data.records.map((item, itemIndex) => itemIndex === index ? { ...item, ...usage } : item);
+    await this.write({ records, usageUnknown: false });
+    await lock.close();
+    await unlink(`${this.filePath}.reservation.lock`);
+    this.reservationLocks.delete(reservation.id);
   }
 
   private async write(data: GeminiUsageData): Promise<void> {

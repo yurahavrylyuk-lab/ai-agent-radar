@@ -39,6 +39,14 @@ class SqliteD1Statement {
     return { success: true, results: [], meta: { changes: result.changes } as D1Meta };
   }
 
+  async batchResult(): Promise<D1Result> {
+    if (/\bRETURNING\b/i.test(this.query)) {
+      const results = this.database.prepare(this.sqliteQuery()).all(...this.values);
+      return { success: true, results, meta: { changes: results.length } as D1Meta };
+    }
+    return this.run();
+  }
+
   private sqliteQuery(): string {
     return this.query.replace(/\?\d+/g, "?");
   }
@@ -50,12 +58,26 @@ class SqliteD1Database {
   prepare(query: string): SqliteD1Statement {
     return new SqliteD1Statement(this.database, query);
   }
+
+  async batch(statements: SqliteD1Statement[]): Promise<D1Result[]> {
+    this.database.exec("BEGIN");
+    try {
+      const results: D1Result[] = [];
+      for (const statement of statements) results.push(await statement.batchResult());
+      this.database.exec("COMMIT");
+      return results;
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+  }
 }
 
 async function withDatabase(callback: (database: Database.Database, d1: D1Database) => Promise<void>): Promise<void> {
   const database = new Database(":memory:");
   try {
     database.exec(await readFile(new URL("../migrations/0001_initial.sql", import.meta.url), "utf8"));
+    database.exec(await readFile(new URL("../migrations/0003_gemini_usage_model.sql", import.meta.url), "utf8"));
     await callback(database, new SqliteD1Database(database) as unknown as D1Database);
   } finally {
     database.close();
@@ -184,6 +206,7 @@ test("D1 Gemini usage round-trips totals, preserves window semantics, and fails 
       inputTokens: 9,
       outputTokens: 4,
       totalTokens: 112,
+      model: null,
     });
     const data = await store.getUsageData();
     assert.equal(data.records.length, 1);
@@ -203,6 +226,24 @@ test("D1 Gemini usage round-trips totals, preserves window semantics, and fails 
       GEMINI_WEEKLY_TOKEN_LIMIT: "30000",
       GEMINI_MONTHLY_TOKEN_LIMIT: "100000",
     })).allowed, true);
+
+    const reservation = await store.reserveRequest({
+      timestamp: "2026-09-20T12:30:00.000Z",
+      provider: "gemini",
+      operation: "analysis",
+      requestCount: 1,
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      model: "gemini-3.8-flash",
+    });
+    assert.equal((await store.getUsageData()).usageUnknown, true);
+    await assert.rejects(store.reserveRequest({ ...reservation.record, timestamp: "2026-09-20T12:31:00.000Z" }), /could not be acquired safely/);
+    await store.settleRequest(reservation, { inputTokens: 2, outputTokens: 1, totalTokens: 4 });
+    const settled = await store.getUsageData();
+    assert.equal(settled.usageUnknown, false);
+    assert.equal(settled.records[1]?.model, "gemini-3.8-flash");
+    assert.equal(settled.records[1]?.totalTokens, 4);
 
     database.pragma("ignore_check_constraints = ON");
     database.prepare("UPDATE gemini_usage_state SET usage_unknown = 2 WHERE id = 1").run();

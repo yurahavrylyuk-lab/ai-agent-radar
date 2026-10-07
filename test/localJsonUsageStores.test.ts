@@ -79,6 +79,32 @@ test("local Gemini JSON store preserves thinking-inclusive total-token records",
   });
 });
 
+test("local Gemini JSON store reserves and settles exact-model usage atomically", async () => {
+  await withTemporaryFile("gemini-usage.json", async (filePath) => {
+    const store = new LocalJsonGeminiUsageStore(filePath);
+    const reservation = await store.reserveRequest({
+      timestamp: "2026-09-20T10:00:00.000Z",
+      provider: "gemini",
+      operation: "analysis",
+      requestCount: 1,
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      model: "gemini-3.8-flash",
+    });
+    assert.equal((await store.getUsageData()).usageUnknown, true);
+    await assert.rejects(store.reserveRequest(reservation.record), /exclusive local admission/);
+    await store.settleRequest(reservation, { inputTokens: 9, outputTokens: 4, totalTokens: 112 });
+    assert.deepEqual(await store.getUsageData(), {
+      usageUnknown: false,
+      records: [{ ...reservation.record, inputTokens: 9, outputTokens: 4, totalTokens: 112 }],
+    });
+    const secondStore = new LocalJsonGeminiUsageStore(filePath);
+    const nextReservation = await secondStore.reserveRequest({ ...reservation.record, timestamp: "2026-09-20T10:01:00.000Z" });
+    assert.equal(nextReservation.record.model, "gemini-3.8-flash");
+  });
+});
+
 test("corrupted Gemini JSON state fails closed without being overwritten", async () => {
   await withTemporaryFile("gemini-usage.json", async (filePath) => {
     await writeFile(filePath, JSON.stringify({ records: [], usageUnknown: "unknown" }), "utf8");

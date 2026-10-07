@@ -109,6 +109,10 @@ export interface MonitoringCycleResult {
   notificationsNotEligible: number;
   failures: number;
   stoppedByAnalysisCap: boolean;
+  geminiProviderAttempts: number;
+  geminiFallbacks: number;
+  analysesUsingFallbackModel: number;
+  geminiRequestsByModel: Record<"gemini-3.8-flash" | "gemini-3.6-flash" | "gemini-3.5-flash-lite", number>;
   replayCandidatesConsidered: number;
   replayCandidatesEligible: number;
   freshStoriesSent: number;
