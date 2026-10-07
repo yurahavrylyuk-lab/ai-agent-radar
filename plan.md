@@ -200,29 +200,66 @@ recorded through the existing notification history. P5 remains TODO.
 
 ---
 
-## P5 · User Feedback Signal (Relevant / Not Relevant)
+## P5 · Discovery Reliability
 
-**Goal:** Add **"Relevant or Useful"** and **"Not relevant or Not useful"** feedback links to emails, store the feedback signal, and use it softly in future ranking. Provide the ability to inspect and reset feedback.
+**Status:** TODO — Architect approval required before implementation.
 
-### Implementation Steps
-1. **Email template:** Append two feedback links to each story block (lead and concise):
-   - `[Relevant or Useful]` → links to a feedback endpoint with `storyId` + `signal=positive`.
-   - `[Not relevant or Not useful]` → links to a feedback endpoint with `storyId` + `signal=negative`.
-2. **Feedback storage:** Create a feedback store (e.g., a new table in `migrations/` if using D1, or a KV namespace entry) with schema: `{ storyId, url, signal, timestamp }`.
-3. **Feedback endpoint:** Add a route/handler in `src/` that:
-   - Accepts `storyId` and `signal` query params.
-   - Validates and stores the record.
-   - Returns a plain confirmation page (no redirect to external URLs).
-4. **Soft ranking integration:** In the relevance scoring step, apply a lightweight multiplier:
-   - Positive feedback on a story's domain/topic → small score boost (e.g., ×1.1).
-   - Negative feedback → small score penalty (e.g., ×0.9).
-   - Cap influence so feedback alone cannot override a large relevance gap.
-5. **Inspect & reset:**
-   - Add an admin route/command to list all stored feedback records.
-   - Add an admin route/command to reset (delete) all feedback records.
-   - Protect admin routes (e.g., via a shared secret header).
-6. Add tests covering: storing positive feedback, storing negative feedback, score boost/penalty application, inspect endpoint returns correct records, reset clears all records.
-7. Document the feedback feature in `docs/`.
+Improve discovery recall for important recent AI, IT, programming, and developer-tool news without increasing the approved Brave daily limit.
+
+Required future design scope:
+
+- Brave freshness up to 7 days, with `freshness = "pw"` as the preferred concept.
+- Better recall of important recent news through stronger deterministic coverage of official and high-value sources, including OpenAI, Anthropic, Google AI, GitHub, Microsoft, and other justified AI/developer sources.
+- Preserve the Brave daily limit of 10, deduplication, the maximum of four fresh Gemini analyses per cycle, P3 priority, P4 fallback, durable replay, and Gemini request/token quotas.
+- Preserve bounded partial-Brave-failure behavior; do not add unbounded retries or provider calls merely to test whether news exists.
+
+Concrete acceptance case: a major official release such as **GPT-6.1 Sol**, published within the configured freshness window, has a materially better chance of entering the analysis candidate set.
+
+**Architecture gate:** Architect must inspect the current discovery/query pipeline and approve the bounded implementation design before P5 work begins.
+
+---
+
+## P6 · X.com Source Integration
+
+**Status:** TODO — after P5. Architect approval required before implementation.
+
+Add X.com as a bounded, high-signal discovery source using selected trustworthy AI and developer accounts, with possible bounded X search only when Architect-approved.
+
+Required future design scope:
+
+- normalize X post/source identity and deduplicate it against Brave and existing discoveries;
+- send accepted X discoveries through the same analysis, ranking, replay, and email pipeline;
+- define trust/spam filtering so X is not an unrestricted noisy feed;
+- define API/authentication, rate-limit, cost, account-selection, and failure-isolation boundaries;
+- preserve Brave and Gemini limits, four fresh analyses, one digest, existing deduplication, and notification history.
+
+**Architecture gate:** no X implementation, API subscription, credential change, or production configuration change without explicit architecture approval.
+
+---
+
+## P7 · User Feedback
+
+**Status:** TODO — after P6. Architect approval required before implementation.
+
+Add per-story **Relevant / Useful** and **Not relevant / Not useful** feedback, identified by stable story identity and stored with sufficient context for a soft, bounded future ranking influence.
+
+Required future design scope:
+
+- feedback HTTP surface and persistence;
+- protected inspect and reset routes or an equivalent operator workflow;
+- authentication/security, abuse, replay, and idempotency controls;
+- a bounded ranking influence that does not replace Gemini relevance or dominate a large relevance gap;
+- any required migration and rollback approach.
+
+**Architecture gate:** P7 changes the HTTP surface and persistence/security model, so implementation begins only after explicit architecture approval.
+
+---
+
+## Execution Order
+
+`P0 → P1 → P2 → P3 → P4 → P5 → P6 → P7`
+
+Current next product item: **P5 — Discovery Reliability**. Do not begin P6 or P7 unless P5 is complete or explicitly deferred by the human owner.
 
 ---
 
@@ -235,7 +272,9 @@ recorded through the existing notification history. P5 remains TODO.
 | P2 | `BRAVE_DAILY_SEARCH_LIMIT` remains 10; `BRAVE_WEEKLY_SEARCH_LIMIT` is 100; `BRAVE_MONTHLY_SEARCH_LIMIT` is 350; the quota-guard blocks requests when any limit is reached; tests assert the new weekly and monthly thresholds; docs and README reflect the new limits; production Cloudflare variable names are documented (not mutated). |
 | P3 | Topic config includes AI, IT, programming, developer-tool, and workflow categories; Codex and Claude Code receive higher priority weights than generic developer-tool matches; relevance scores for Codex and Claude Code articles exceed scores for equivalent generic articles in tests. |
 | P4 | DONE — use the human-approved exact-host registry and deterministic fail-closed source predicate only when the normal fresh-or-approved-replay/unsent score >= 7 pool is empty. Rank trusted fresh-or-replay analyzed candidates with unchanged P3 ordering, send up to four with visible "It could be relevant" labelling in HTML/plain text, or send nothing. Unknown sources remain eligible through the unchanged normal path. Preserve caps, integrity, deduplication, and notification history. |
-| P5 | Each story block in the email contains "Relevant or Useful" and "Not relevant or Not useful" feedback links; clicking a link stores the signal with storyId, URL, and timestamp; stored feedback applies a soft score multiplier in future ranking; an admin inspect route returns all feedback records; an admin reset route clears all feedback records; admin routes are protected. |
+| P5 | Architect-approved discovery improvements use Brave freshness up to 7 days (preferred `freshness = "pw"`) and deterministic official/high-value source coverage to improve recent-news recall, including the GPT-6.1 Sol acceptance case, while preserving Brave 10/day, deduplication, four fresh analyses, P3/P4 behavior, replay, and Gemini quotas. |
+| P6 | Architect-approved bounded X.com integration normalizes post/source identity, deduplicates against Brave and stored discoveries, applies trust/spam filtering, and uses the existing analysis/ranking/email pipeline without weakening current limits. |
+| P7 | Architect-approved feedback records Relevant / Useful or Not relevant / Not useful against stable story identity, has protected inspect/reset operations and security controls, and influences ranking softly without dominating relevance. |
 
 ---
 
@@ -247,8 +286,8 @@ recorded through the existing notification history. P5 remains TODO.
 - Do not invent requirements not present in the original instruction.
 - Retry logic must be scoped to HTTP 503 only; all other Gemini error codes are permanent failures.
 - Brave daily limit must remain at 10; only weekly and monthly limits change.
-- Feedback score influence must be soft (bounded multiplier) and must not allow feedback alone to override large relevance gaps.
-- Admin feedback routes must be access-controlled.
+- Any future P7 feedback influence must be soft (bounded) and must not allow feedback alone to override large relevance gaps.
+- Any future P7 inspect/reset routes must be access-controlled.
 
 ---
 
