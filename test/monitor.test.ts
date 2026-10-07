@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { DISCOVERY_QUERY_DESCRIPTORS, MONITORING_FRESHNESS } from "../src/config/discoveryQueries.js";
 import { MAX_NEW_ANALYSES_PER_CYCLE, MAX_SEARCH_FAILURE_ERROR_LENGTH, MONITORING_QUERIES, MONITORING_QUERY, runMonitoringCycle as runProductionMonitoringCycle, type MonitoringCycleDependencies } from "../src/services/monitor.js";
 import type { DiscoveryHistory } from "../src/services/discoveryHistory.js";
 import type { NotificationHistory } from "../src/services/notificationHistory.js";
@@ -94,6 +95,15 @@ function preferredResult(id: string, tool: "Codex" | "Claude Code"): SearchResul
   return { title: `${tool} release ${id}`, url: `https://example.com/${id}`, snippet: `New ${tool} developer feature.` };
 }
 
+function recentOfficialResult(id: string, hostname: string): SearchResult {
+  return {
+    title: `Official release ${id}`,
+    url: `https://${hostname}/index/${id}/`,
+    snippet: "Official product release.",
+    publishedAt: "2026-10-08T08:00:00Z",
+  };
+}
+
 function processed(result: SearchResult, status: DiscoveryProcessingResult["status"]): DiscoveryProcessingResult {
   return {
     status,
@@ -135,33 +145,35 @@ function batchNotify(status: NotificationResult["status"]) {
   };
 }
 
-test("default monitoring invokes the exact ten reviewed queries once and in order", async () => {
-  const queries: string[] = [];
+test("default monitoring invokes the exact ten reviewed queries once, in order, with weekly freshness", async () => {
+  const queries: Array<{ query: string; freshness?: "pw" }> = [];
   await runMonitoringCycle(undefined, {
-    search: async (query) => { queries.push(query); return []; },
+    search: async (query, options) => { queries.push({ query, freshness: options?.freshness }); return []; },
   });
-  assert.deepEqual(queries, [...MONITORING_QUERIES]);
-  assert.equal(new Set(queries).size, 10);
+  assert.deepEqual(queries, DISCOVERY_QUERY_DESCRIPTORS.map(({ query }) => ({ query, freshness: MONITORING_FRESHNESS })));
+  assert.equal(new Set(queries.map(({ query }) => query)).size, 10);
   assert.deepEqual(MONITORING_QUERIES, [
-    "AI news research product announcements",
-    "AI agent framework releases",
-    "AI model releases GPT Gemini open-source models capabilities",
-    "programming language compiler standard library releases",
-    "cloud DevOps Kubernetes networking security advisories",
-    "Codex AI coding assistant developer features releases",
-    "Claude Code AI coding assistant developer features releases",
-    "IDE CLI CI/CD code review developer tools releases",
-    "AI assisted software development workflow productivity examples",
-    "useful AI IT tools techniques workflow tutorials",
+    "site:openai.com",
+    "Codex AI coding assistant developer features releases workflows",
+    "site:anthropic.com",
+    "Claude Code AI coding assistant developer features releases workflows",
+    "site:blog.google OR site:ai.google.dev",
+    "AI news model releases open-source agents frameworks SDK MCP developer tools",
+    "site:github.blog",
+    "programming language compiler standard library IDE CLI CI/CD code review releases",
+    "site:devblogs.microsoft.com OR site:learn.microsoft.com",
+    "cloud DevOps Kubernetes networking security advisories developer productivity tutorials",
   ]);
+  assert.equal(DISCOVERY_QUERY_DESCRIPTORS.filter(({ kind }) => kind === "official").length, 5);
+  assert.equal(DISCOVERY_QUERY_DESCRIPTORS.filter(({ kind }) => kind === "broad").length, 5);
 });
 
 test("an explicit query preserves single-search behavior", async () => {
-  const queries: string[] = [];
+  const queries: Array<{ query: string; freshness?: "pw" }> = [];
   await runMonitoringCycle("some query", {
-    search: async (query) => { queries.push(query); return []; },
+    search: async (query, options) => { queries.push({ query, freshness: options?.freshness }); return []; },
   });
-  assert.deepEqual(queries, ["some query"]);
+  assert.deepEqual(queries, [{ query: "some query", freshness: MONITORING_FRESHNESS }]);
 });
 
 test("replay lookup runs before a successful Gemini preflight and normal discovery", async () => {
@@ -452,6 +464,63 @@ test("extra preferred candidates fill slots only when generic candidates are ins
   });
   assert.deepEqual(processedUrls, [...preferred.slice(0, 3), generic].map((item) => item.url));
   assert.equal(outcome.analysesAttempted, 4);
+});
+
+test("the synthetic GPT-6.1 Sol official fixture receives the bounded official analysis opportunity", async () => {
+  const generics = Array.from({ length: 4 }, (_, index) => searchResult(`sol-generic-${index}`));
+  const sol: SearchResult = {
+    title: "Introducing GPT-6.1 Sol",
+    url: "https://openai.com/index/test-gpt-6-1-sol/",
+    snippet: "Synthetic official OpenAI release fixture.",
+    publishedAt: "2026-10-08T08:00:00Z",
+  };
+  const codex = preferredResult("sol-codex", "Codex");
+  const claude = preferredResult("sol-claude", "Claude Code");
+  const processedUrls: string[] = [];
+  const outcome = await runMonitoringCycle(undefined, {
+    now: () => new Date("2026-10-10T08:00:00.000Z"),
+    search: async (query) => {
+      if (query === DISCOVERY_QUERY_DESCRIPTORS[0]?.query) return [...generics, sol];
+      if (query === DISCOVERY_QUERY_DESCRIPTORS[1]?.query) return [codex];
+      if (query === DISCOVERY_QUERY_DESCRIPTORS[3]?.query) return [claude];
+      return [];
+    },
+    hasDiscovery: async () => false,
+    process: async (item) => { processedUrls.push(item.url); return processed(item, "new"); },
+    notify: batchNotify("not_eligible"),
+  });
+  assert.ok(processedUrls.includes(sol.url));
+  assert.ok(processedUrls.includes(codex.url));
+  assert.ok(processedUrls.includes(claude.url));
+  assert.equal(processedUrls.length, MAX_NEW_ANALYSES_PER_CYCLE);
+  assert.equal(outcome.analysesAttempted, MAX_NEW_ANALYSES_PER_CYCLE);
+});
+
+test("a broad-first duplicate gains targeted-official provenance without a second analysis", async () => {
+  const anthropic = recentOfficialResult("cross-query", "anthropic.com");
+  const earlierGeneric = Array.from({ length: 4 }, (_, index) => searchResult(`earlier-generic-${index}`));
+  const codex = preferredResult("cross-query-codex", "Codex");
+  const claude = preferredResult("cross-query-claude", "Claude Code");
+  const processedUrls: string[] = [];
+  const outcome = await runMonitoringCycle(undefined, {
+    now: () => new Date("2026-10-10T08:00:00.000Z"),
+    search: async (query) => {
+      if (query === DISCOVERY_QUERY_DESCRIPTORS[0]?.query) return earlierGeneric;
+      if (query === DISCOVERY_QUERY_DESCRIPTORS[1]?.query) return [anthropic];
+      if (query === DISCOVERY_QUERY_DESCRIPTORS[2]?.query) return [{ ...anthropic }];
+      if (query === DISCOVERY_QUERY_DESCRIPTORS[3]?.query) return [claude];
+      if (query === DISCOVERY_QUERY_DESCRIPTORS[5]?.query) return [codex];
+      return [];
+    },
+    hasDiscovery: async () => false,
+    process: async (item) => { processedUrls.push(item.url); return processed(item, "new"); },
+    notify: batchNotify("not_eligible"),
+  });
+  assert.ok(processedUrls.includes(anthropic.url));
+  assert.ok(processedUrls.includes(codex.url));
+  assert.ok(processedUrls.includes(claude.url));
+  assert.equal(outcome.analysesAttempted, MAX_NEW_ANALYSES_PER_CYCLE);
+  assert.equal(outcome.searchResultsReceived, 8);
 });
 
 test("same-cycle duplicate URLs do not consume another analysis slot", async () => {

@@ -22,6 +22,8 @@ export interface SearchWebDependencies {
   usageTracker?: BraveUsageStore;
   environment?: RuntimeEnvironment;
   fetchImplementation?: typeof fetch;
+  /** Optional documented Brave freshness filter for bounded monitoring calls. */
+  freshness?: "pw";
 }
 
 /** Signals that the existing Brave usage guard denied a request. */
@@ -88,7 +90,11 @@ export async function searchWeb(
         "Content-Type": "application/json",
         "X-Subscription-Token": apiKey
       },
-      body: JSON.stringify({ q: query.trim(), count: 5 })
+      body: JSON.stringify({
+        q: query.trim(),
+        count: 5,
+        ...(dependencies.freshness === undefined ? {} : { freshness: dependencies.freshness }),
+      })
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown network error";

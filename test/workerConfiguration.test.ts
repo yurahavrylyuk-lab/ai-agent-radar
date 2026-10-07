@@ -4,6 +4,7 @@ import { D1BraveUsageStore } from "../src/services/d1BraveUsageStore.js";
 import { D1DiscoveryHistory } from "../src/services/d1DiscoveryHistory.js";
 import { D1GeminiUsageStore } from "../src/services/d1GeminiUsageStore.js";
 import { D1NotificationHistory } from "../src/services/d1NotificationHistory.js";
+import { MONITORING_FRESHNESS } from "../src/config/discoveryQueries.js";
 import { createMonitoringRuntimeConfiguration, createRadarRuntimeConfiguration } from "../src/services/radarRuntimeConfiguration.js";
 import type { MonitoringCycleResult } from "../src/types/index.js";
 import worker, {
@@ -106,6 +107,18 @@ test("Worker composition uses D1 stores and exposes a scheduled handler without 
   assert.equal(typeof worker.scheduled, "function");
   const response = await worker.fetch(new Request("https://worker.example"), environment());
   assert.equal(await response.text(), "AI Agent Radar worker ready");
+});
+
+test("Worker search composition forwards the monitoring freshness option without a provider request", async () => {
+  const calls: Array<{ query: string; freshness: string | undefined }> = [];
+  const dependencies = createWorkerMonitoringDependencies(environment(), {
+    searchWeb: async (query, options) => {
+      calls.push({ query, freshness: options.freshness });
+      return [];
+    },
+  });
+  await dependencies.search?.("official query", { freshness: MONITORING_FRESHNESS });
+  assert.deepEqual(calls, [{ query: "official query", freshness: "pw" }]);
 });
 
 test("scheduled monitoring runs one cycle and emits one structured summary with exact counts", async () => {

@@ -1,5 +1,14 @@
 # Daily Self-Improvement Summary
 
+## 2026-10-07 — P5 Discovery Reliability
+
+- Status: REVIEW; implementation branch `codex/p5-discovery-reliability`, baseline `46a69af998399b1b15ea0718c210d3a786da462c`.
+- Added the approved immutable 5+5 interleaved discovery descriptors and applied Brave weekly freshness (`pw`) to every default and explicit custom monitoring search while preserving direct low-level caller compatibility.
+- Added bounded, ephemeral official-query provenance: P3 retains up to two Codex/Claude Code positions, and at most one recent exact-host targeted official result can receive an additional pre-analysis position. This never changes Gemini relevance, P4 trust, normal eligibility, storage, replay, quotas, or digest ordering.
+- Validation: `npm ci`, `npm run build`, `npm test` (244/244), `npm run worker:typecheck`, and `git diff --check` passed. Independent Analyst review remains required. No provider call, deployment, Cloudflare/configuration/secret change, migration, or production merge occurred.
+
+---
+
 ## 2026-10-06 — Gemini multi-model free-tier fallback
 
 - Status: REVIEW; implementation branch `codex/gemini-multi-model-fallback`, baseline `86c80e6516f18ab07fff0ee732dc1b0e5732677f`.
