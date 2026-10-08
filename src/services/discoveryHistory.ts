@@ -1,8 +1,8 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
-import type { AgentAnalysis, StoredDiscovery } from "../types/index.js";
-import { DiscoveryHistoryError, isValidAgentAnalysis, normalizeDiscoveryUrl, validateRecentDiscoveryQuery, type DiscoveryHistory, type RecentDiscoveryQuery, type RecentDiscoveryResult } from "./discoveryHistoryCore.js";
-export { DiscoveryHistoryError, isValidAgentAnalysis, normalizeDiscoveryUrl, type DiscoveryHistory, type RecentDiscoveryQuery, type RecentDiscoveryResult } from "./discoveryHistoryCore.js";
+import type { AgentAnalysis, StoredDiscovery, XSourceProvenance } from "../types/index.js";
+import { copyXSourceProvenance, DiscoveryHistoryError, isValidAgentAnalysis, isValidXSourceProvenance, normalizeDiscoveryUrl, validateRecentDiscoveryQuery, type DiscoveryHistory, type RecentDiscoveryQuery, type RecentDiscoveryResult } from "./discoveryHistoryCore.js";
+export { DiscoveryHistoryError, isValidAgentAnalysis, isValidXSourceProvenance, normalizeDiscoveryUrl, type DiscoveryHistory, type RecentDiscoveryQuery, type RecentDiscoveryResult } from "./discoveryHistoryCore.js";
 
 interface DiscoveryHistoryData {
   discoveries: StoredDiscovery[];
@@ -24,6 +24,7 @@ function validDiscovery(value: unknown): value is StoredDiscovery {
   if (!nonEmptyString(discovery.normalizedUrl) || !validTimestamp(discovery.firstSeenAt) || !validTimestamp(discovery.lastSeenAt) || !isValidAgentAnalysis(discovery.analysis)) {
     return false;
   }
+  if (discovery.sourceProvenance !== undefined && !isValidXSourceProvenance(discovery.sourceProvenance)) return false;
 
   try {
     return discovery.normalizedUrl === normalizeDiscoveryUrl(discovery.analysis.sourceUrl);
@@ -40,11 +41,16 @@ function validHistory(value: unknown): value is DiscoveryHistoryData {
 }
 
 function copyAnalysis(analysis: AgentAnalysis): AgentAnalysis {
-  return { ...analysis, projectOpportunities: [...analysis.projectOpportunities], technologies: [...analysis.technologies] };
+  return {
+    name: analysis.name, category: analysis.category, summary: analysis.summary, relevanceScore: analysis.relevanceScore,
+    whyItMatters: analysis.whyItMatters, educationalValue: analysis.educationalValue,
+    projectOpportunities: [...analysis.projectOpportunities], technologies: [...analysis.technologies],
+    sourceTitle: analysis.sourceTitle, sourceUrl: analysis.sourceUrl,
+  };
 }
 
 function copy(discovery: StoredDiscovery): StoredDiscovery {
-  return { ...discovery, analysis: copyAnalysis(discovery.analysis) };
+  return { ...discovery, analysis: copyAnalysis(discovery.analysis), sourceProvenance: copyXSourceProvenance(discovery.sourceProvenance) };
 }
 
 export class JsonDiscoveryHistory implements DiscoveryHistory {
@@ -81,8 +87,9 @@ export class JsonDiscoveryHistory implements DiscoveryHistory {
     return (await this.getDiscovery(url)) !== undefined;
   }
 
-  async recordDiscovery(analysis: AgentAnalysis, seenAt = new Date()): Promise<StoredDiscovery> {
+  async recordDiscovery(analysis: AgentAnalysis, seenAt = new Date(), sourceProvenance?: XSourceProvenance): Promise<StoredDiscovery> {
     if (!isValidAgentAnalysis(analysis)) throw new DiscoveryHistoryError("Discovery analysis is invalid and cannot be recorded.");
+    if (sourceProvenance !== undefined && !isValidXSourceProvenance(sourceProvenance)) throw new DiscoveryHistoryError("Discovery source provenance is invalid.");
     if (Number.isNaN(seenAt.getTime())) throw new DiscoveryHistoryError("Discovery timestamp is invalid.");
 
     const normalizedUrl = normalizeDiscoveryUrl(analysis.sourceUrl);
@@ -91,7 +98,7 @@ export class JsonDiscoveryHistory implements DiscoveryHistory {
     if (existing) return copy(existing);
 
     const timestamp = seenAt.toISOString();
-    const discovery: StoredDiscovery = { normalizedUrl, firstSeenAt: timestamp, lastSeenAt: timestamp, analysis: copyAnalysis(analysis) };
+    const discovery: StoredDiscovery = { normalizedUrl, firstSeenAt: timestamp, lastSeenAt: timestamp, analysis: copyAnalysis(analysis), sourceProvenance: copyXSourceProvenance(sourceProvenance) };
     await this.write({ discoveries: [...data.discoveries, discovery] });
     return copy(discovery);
   }

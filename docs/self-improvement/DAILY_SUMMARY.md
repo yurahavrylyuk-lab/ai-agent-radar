@@ -1,5 +1,14 @@
 # Daily Self-Improvement Summary
 
+## 2026-10-08 — P6 selected-account X discovery
+
+- Status: REVIEW; implementation branch `codex/p6-x-source-integration`, baseline `01ef0787cad02c49d453f781e1b106a247b7e5d7`.
+- Implemented the approved five immutable X user IDs as opaque strings; exact bounded timeline requests; no retry/pagination/redirect resolution; conservative durable request/read/cost reservations; strict post, author, timestamp, reference and external-link validation; D1/local cursor/inbox state; existing four-analysis selection; validated application-owned provenance; P4 exclusion; digest attribution; and bounded scheduled metrics.
+- P6 remains disabled by default. Migration `0004`, `X_BEARER_TOKEN`, credits, spending cap, flag enablement, Cloudflare changes and deployment were not performed. No X, Brave, Gemini, Resend, or other live provider call occurred.
+- Validation: `npm ci`, `npm run build`, `npm test` (277/277), `npm run worker:typecheck`, `git diff --check`, `npm ls --depth=0`, and a Wrangler dry-run bundle audit passed. The Worker bundle contains no local JSON store, Node filesystem/path module, dotenv, or OpenAI cloud dependency. Independent Analyst review remains required; commit/PR evidence is supplied in the Builder handoff.
+
+---
+
 ## 2026-10-07 — P5 Discovery Reliability
 
 - Status: REVIEW; implementation branch `codex/p5-discovery-reliability`, baseline `46a69af998399b1b15ea0718c210d3a786da462c`.

@@ -122,7 +122,8 @@ export async function notifyDeliveryDigest(
   );
   const fallback = normalCandidates.length === 0;
   const eligibleCandidates = fallback
-    ? unsentCandidates.filter((candidate) => isTrustedFallbackSource(candidate.discovery.analysis.sourceUrl))
+    ? unsentCandidates.filter((candidate) => candidate.discovery.sourceProvenance?.kind !== "x"
+      && isTrustedFallbackSource(candidate.discovery.analysis.sourceUrl))
     : normalCandidates;
 
   if (eligibleCandidates.length === 0) {

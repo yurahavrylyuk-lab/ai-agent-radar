@@ -6,10 +6,11 @@ import { D1BraveUsageStore } from "../src/services/d1BraveUsageStore.js";
 import { D1DiscoveryHistory } from "../src/services/d1DiscoveryHistory.js";
 import { D1GeminiUsageStore } from "../src/services/d1GeminiUsageStore.js";
 import { D1NotificationHistory } from "../src/services/d1NotificationHistory.js";
+import { D1XStore } from "../src/services/d1XStore.js";
 import { checkBraveSearchUsage } from "../src/services/usageGuard.js";
 import { checkGeminiUsage, getGeminiUsageCounts } from "../src/services/geminiUsageGuard.js";
 import worker, { type RadarWorkerEnv } from "../src/worker.js";
-import type { AgentAnalysis } from "../src/types/index.js";
+import type { AgentAnalysis, XSourceProvenance } from "../src/types/index.js";
 
 class SqliteD1Statement {
   constructor(
@@ -36,7 +37,7 @@ class SqliteD1Statement {
 
   async run(): Promise<D1Result> {
     const result = this.database.prepare(this.sqliteQuery()).run(...this.values);
-    return { success: true, results: [], meta: { changes: result.changes } as D1Meta };
+    return { success: true, results: [], meta: { changes: result.changes, last_row_id: Number(result.lastInsertRowid) } as D1Meta };
   }
 
   async batchResult(): Promise<D1Result> {
@@ -115,6 +116,34 @@ test("D1 discovery history starts empty, round-trips analysis, deduplicates, and
     assert.equal(touched?.firstSeenAt, first.firstSeenAt);
     assert.equal(touched?.lastSeenAt, "2026-09-20T12:00:00.000Z");
     assert.deepEqual(touched?.analysis, first.analysis);
+  });
+});
+
+test("D1 discovery history round-trips strict application-owned X provenance", async () => {
+  await withDatabase(async (_database, d1) => {
+    const history = new D1DiscoveryHistory(d1);
+    const provenance: XSourceProvenance = { kind: "x", postId: "9007199254740993000", authorId: "1353836358901501952", postUrl: "https://x.com/i/web/status/9007199254740993000", label: "Anthropic" };
+    const recorded = await history.recordDiscovery(analysis("https://example.com/x"), new Date("2026-10-08T08:00:00.000Z"), provenance);
+    assert.deepEqual(recorded.sourceProvenance, provenance);
+    assert.deepEqual((await history.touchDiscovery(recorded.normalizedUrl, new Date("2026-10-08T09:00:00.000Z")))?.sourceProvenance, provenance);
+  });
+});
+
+test("D1 X store applies additive schema and atomically persists request, page and cursor state", async () => {
+  await withDatabase(async (database, d1) => {
+    database.exec(await readFile(new URL("../migrations/0004_x_discovery.sql", import.meta.url), "utf8"));
+    const store = new D1XStore(d1);
+    const reservation = await store.reserveRequest("4398626122", new Date("2026-10-08T08:00:00.000Z"), {
+      cycleRequestsAlreadyReserved: 0, requestsPerCycle: 5, requestsPerDay: 5, requestsPerIsoWeek: 35, requestsPerMonth: 155,
+      reservedPostsPerRequest: 10, reservedPostsPerMonth: 1550, reservedMicroUsdPerMonth: 8_000_000, reservedMicroUsdPerRequest: 50_000,
+    });
+    assert.equal(reservation.allowed, true);
+    await store.settleRequest(reservation.reservationId!, "success");
+    await store.commitPage("4398626122", "9007199254740993123", [{ postId: "9007199254740993000", authorId: "4398626122", storyUrl: "https://example.com/x", createdAt: "2026-10-07T08:00:00.000Z", state: "pending", editIds: ["9007199254740993000"], payload: { postId: "9007199254740993000", authorId: "4398626122", storyUrl: "https://example.com/x", createdAt: "2026-10-07T08:00:00.000Z", text: "Release", canonicalPostUrl: "https://x.com/i/web/status/9007199254740993000", label: "OpenAI", approvedHandle: "OpenAI", editIds: ["9007199254740993000"] } }], new Date("2026-10-08T08:00:00.000Z"));
+    assert.equal((await store.getPollState("4398626122")).sinceId, "9007199254740993123");
+    assert.equal((await store.listPending(new Date("2026-10-08T08:00:00.000Z"), 350)).records.length, 1);
+    await store.markStoryProcessed("https://example.com/x");
+    assert.equal((await store.listPending(new Date("2026-10-08T08:00:00.000Z"), 350)).records.length, 0);
   });
 });
 

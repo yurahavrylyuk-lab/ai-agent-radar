@@ -1,19 +1,14 @@
-import { JsonDiscoveryHistory, DiscoveryHistoryError, type DiscoveryHistory } from "./discoveryHistory.js";
-import { normalizeDiscoveryUrl } from "./discoveryHistoryCore.js";
+import { DiscoveryHistoryError, normalizeDiscoveryUrl, type DiscoveryHistory } from "./discoveryHistoryCore.js";
 import { getNotificationReplayWindow } from "../config/notificationReplay.js";
 import { DISCOVERY_QUERY_DESCRIPTORS, MONITORING_FRESHNESS, MONITORING_QUERIES, type DiscoveryQueryDescriptor } from "../config/discoveryQueries.js";
 import { getPreAnalysisCandidatePriority, hasOfficialPreAnalysisPriority, selectPreAnalysisCandidates } from "./discoveryPriority.js";
-import { processSearchResult } from "./discoveryProcessor.js";
-import { NotificationHistoryError } from "./notificationHistory.js";
+import { NotificationHistoryError } from "./notificationHistoryCore.js";
 import { notifyDeliveryDigest, type DigestDeliveryResult, type NotificationOrchestratorDependencies } from "./notificationOrchestrator.js";
-import { LocalJsonBraveUsageStore } from "./localJsonBraveUsageStore.js";
-import { LocalJsonGeminiUsageStore } from "./localJsonGeminiUsageStore.js";
-import { inspectGeminiAvailability, type GeminiAvailability, type GeminiBlockedReason } from "./geminiUsageGuard.js";
-import { JsonNotificationHistory } from "./notificationHistory.js";
-import { createGeminiCycleContext, generateWithGemini, type GeminiCycleContext } from "../tools/llm/gemini.js";
-import { analyzeSearchResult } from "./analysisAgent.js";
-import { BraveUsageGuardDeniedError, searchWeb } from "../tools/webSearch.js";
-import type { DeliveryCandidate, DiscoveryProcessingResult, MonitoringCycleResult, MonitoringSearchFailure, NotificationResult, SearchResult } from "../types/index.js";
+import { type GeminiAvailability, type GeminiBlockedReason } from "./geminiUsageGuard.js";
+import { createGeminiCycleContext, type GeminiCycleContext } from "../tools/llm/gemini.js";
+import { xPostIdFromUrl, type XDiscoveryResult } from "./xDiscovery.js";
+import { BraveUsageGuardDeniedError } from "../tools/webSearch.js";
+import type { DeliveryCandidate, DiscoveryProcessingResult, MonitoringCycleResult, MonitoringSearchFailure, NotificationResult, SearchResult, XSourceProvenance } from "../types/index.js";
 
 export const MONITORING_QUERY = "new AI agent developer tool framework release";
 export { MONITORING_QUERIES };
@@ -23,7 +18,7 @@ export const MAX_SEARCH_FAILURE_ERROR_LENGTH = 240;
 export interface MonitoringSearchOptions { freshness?: "pw"; }
 type WebSearch = (query: string, options?: MonitoringSearchOptions) => Promise<SearchResult[]>;
 type DiscoveryLookup = (url: string) => Promise<boolean>;
-type DiscoveryProcessor = (result: SearchResult) => Promise<DiscoveryProcessingResult>;
+type DiscoveryProcessor = (result: SearchResult, sourceProvenance?: XSourceProvenance) => Promise<DiscoveryProcessingResult>;
 type NotificationProcessor = (candidates: DeliveryCandidate[]) => Promise<DigestDeliveryResult>;
 
 export interface MonitoringCycleDependencies {
@@ -40,6 +35,8 @@ export interface MonitoringCycleDependencies {
   geminiCycleContext?: GeminiCycleContext;
   /** Read-only pre-discovery Gemini admission snapshot. */
   geminiPreflight?: (now: Date) => Promise<GeminiAvailability>;
+  collectX?: (now: Date) => Promise<XDiscoveryResult>;
+  markXStoryProcessed?: (storyUrl: string) => Promise<void>;
 }
 
 const geminiBlockedReasons = new Set<GeminiBlockedReason>([
@@ -118,6 +115,13 @@ function emptyResult(
     freshStoriesSent: 0,
     replayStoriesSent: 0,
     replayLookupTruncated: false,
+    xRequestsAttempted: 0,
+    xPostsReceived: 0,
+    xCandidatesAdmitted: 0,
+    xDuplicates: 0,
+    xAccountsFailed: 0,
+    xTruncated: false,
+    xFailures: [],
     outcomes: [],
   };
 }
@@ -139,32 +143,23 @@ export async function runMonitoringCycle(
   const queryDescriptors: readonly DiscoveryQueryDescriptor[] = query === undefined
     ? DISCOVERY_QUERY_DESCRIPTORS
     : [{ id: "custom", query, kind: "broad" }];
-  const searchResults: Array<{ result: SearchResult; descriptor: DiscoveryQueryDescriptor }> = [];
+  const searchResults: Array<{ result: SearchResult; descriptor: DiscoveryQueryDescriptor; sourceProvenance?: XSourceProvenance; xStoryUrl?: string }> = [];
   const searchFailures: MonitoringSearchFailure[] = [];
   const result = emptyResult(query ?? MONITORING_QUERIES.join(" | "), 0, searchFailures);
-  const discoveryHistory = dependencies.history ?? new JsonDiscoveryHistory();
+  const discoveryHistory = dependencies.history;
+  if (!discoveryHistory) throw new Error("Monitoring cycle discovery history is required.");
   const hasDiscovery = dependencies.hasDiscovery ?? (async (url: string) => (await discoveryHistory.getDiscovery(url)) !== undefined);
-  const geminiUsageStore = new LocalJsonGeminiUsageStore();
   const geminiPreflight = dependencies.geminiPreflight
-    ?? ((now: Date) => inspectGeminiAvailability(geminiUsageStore, globalThis.process.env, now));
-  const search = dependencies.search ?? ((searchQuery: string, options?: MonitoringSearchOptions) => searchWeb(searchQuery, {
-    usageTracker: new LocalJsonBraveUsageStore(),
-    freshness: options?.freshness,
+    ?? (async () => ({ allowed: false, reason: "usage_state_unavailable" }));
+  const search = dependencies.search ?? (async () => { throw new Error("Monitoring cycle search dependency is required."); });
+  const process = dependencies.process ?? (async () => { throw new Error("Monitoring cycle processing dependency is required."); });
+  const collectX = dependencies.collectX ?? (async () => ({
+    candidates: [], postStoryUrls: new Map(), requestsAttempted: 0, postsReceived: 0,
+    candidatesAdmitted: 0, duplicates: 0, accountsFailed: 0, truncated: false,
+    failures: [], blockedReason: "disabled" as const,
   }));
-  const process = dependencies.process ?? ((searchResult: SearchResult) => processSearchResult(searchResult, {
-    history: discoveryHistory,
-    analyze: (r) => analyzeSearchResult(r, {
-      generate: (input) => generateWithGemini(input, {
-        usageTracker: geminiUsageStore,
-        environment: globalThis.process.env,
-        cycleContext: geminiCycleContext,
-      }),
-      onValidatedAnalysis: (response) => {
-        if (response.usedFallback) geminiCycleContext.analysesUsingFallbackModel += 1;
-      },
-    }),
-  }));
-  const notification = dependencies.notification ?? { history: new JsonNotificationHistory() };
+  const markXStoryProcessed = dependencies.markXStoryProcessed ?? (async () => undefined);
+  const notification = dependencies.notification;
   const notify = dependencies.notify ?? ((candidates: DeliveryCandidate[]) => notifyDeliveryDigest(candidates, notification));
   const syncGeminiMetrics = () => {
     result.geminiProviderAttempts = geminiCycleContext.providerAttempts;
@@ -216,6 +211,43 @@ export async function runMonitoringCycle(
         + `First failure at query ${firstFailure.queryOrdinal}: ${firstFailure.error}`,
       );
     }
+
+    if (query === undefined) {
+      let xDiscovery: XDiscoveryResult;
+      try {
+        xDiscovery = await collectX(cycleStartedAt);
+      } catch {
+        xDiscovery = { candidates: [], postStoryUrls: new Map(), requestsAttempted: 0, postsReceived: 0, candidatesAdmitted: 0, duplicates: 0, accountsFailed: 0, truncated: false, failures: [], blockedReason: "state_unavailable" };
+      }
+      result.xRequestsAttempted = xDiscovery.requestsAttempted;
+      result.xPostsReceived = xDiscovery.postsReceived;
+      result.xCandidatesAdmitted = xDiscovery.candidatesAdmitted;
+      result.xDuplicates = xDiscovery.duplicates;
+      result.xAccountsFailed = xDiscovery.accountsFailed;
+      result.xTruncated = xDiscovery.truncated;
+      result.xFailures = xDiscovery.failures.slice(0, 5);
+      if (xDiscovery.blockedReason) result.xBlockedReason = xDiscovery.blockedReason;
+
+      if (xDiscovery.blockedReason !== "disabled") {
+        for (let index = searchResults.length - 1; index >= 0; index -= 1) {
+          const observed = searchResults[index];
+          const postId = xPostIdFromUrl(observed.result.url);
+          if (!postId) continue;
+          const storyUrl = xDiscovery.postStoryUrls.get(postId);
+          if (!storyUrl) { searchResults.splice(index, 1); continue; }
+          const matched = xDiscovery.candidates.find((candidate) => candidate.provenance.postId === postId || candidate.provenance.postUrl.endsWith(`/${postId}`));
+          observed.result = { ...observed.result, url: storyUrl };
+          observed.xStoryUrl = storyUrl;
+          if (matched) observed.sourceProvenance = matched.provenance;
+        }
+      }
+      searchResults.push(...xDiscovery.candidates.map((candidate) => ({
+        result: candidate.result,
+        descriptor: { id: "x_selected_account", query: "", kind: "broad" as const },
+        sourceProvenance: candidate.provenance,
+        xStoryUrl: candidate.storyUrl,
+      })));
+    }
   }
   result.searchResultsReceived = searchResults.length;
   result.failures = searchFailures.length;
@@ -231,11 +263,13 @@ export async function runMonitoringCycle(
     knownDiscovery: boolean;
     repeatedInBatch: boolean;
     officialPriority: boolean;
+    sourceProvenance?: XSourceProvenance;
+    xStoryUrl?: string;
   };
   const candidates: Candidate[] = [];
   const firstCandidateByUrl = new Map<string, Candidate>();
   for (const observation of searchResults) {
-    const { result: searchResult, descriptor } = observation;
+    const { result: searchResult, descriptor, sourceProvenance, xStoryUrl } = observation;
     let normalizedUrl: string;
     try {
       normalizedUrl = normalizeDiscoveryUrl(searchResult.url);
@@ -245,6 +279,7 @@ export async function runMonitoringCycle(
 
     const firstCandidate = firstCandidateByUrl.get(normalizedUrl);
     if (firstCandidate) {
+      if (sourceProvenance) result.xDuplicates += 1;
       firstCandidate.officialPriority ||= hasOfficialPreAnalysisPriority(searchResult, descriptor, cycleStartedAt);
       candidates.push({
         searchResult,
@@ -252,6 +287,8 @@ export async function runMonitoringCycle(
         knownDiscovery: firstCandidate.knownDiscovery,
         repeatedInBatch: true,
         officialPriority: false,
+        sourceProvenance,
+        xStoryUrl,
       });
       continue;
     }
@@ -268,8 +305,11 @@ export async function runMonitoringCycle(
       knownDiscovery,
       repeatedInBatch: false,
       officialPriority: hasOfficialPreAnalysisPriority(searchResult, descriptor, cycleStartedAt),
+      sourceProvenance,
+      xStoryUrl,
     };
     candidates.push(candidate);
+    if (sourceProvenance && knownDiscovery) result.xDuplicates += 1;
     firstCandidateByUrl.set(normalizedUrl, candidate);
   }
 
@@ -297,7 +337,7 @@ export async function runMonitoringCycle(
 
     let processed: DiscoveryProcessingResult;
     try {
-      processed = await process(searchResult);
+      processed = await process(searchResult, candidate.sourceProvenance);
     } catch (error) {
       if (error instanceof DiscoveryHistoryError) {
         throw new Error(`Monitoring cycle aborted: discovery history is unavailable: ${errorMessage(error)}`);
@@ -313,6 +353,10 @@ export async function runMonitoringCycle(
     if (processed.status === "duplicate") result.duplicates += 1;
     processedItems.push({ searchResult, processed });
     successfullyProcessedUrls.add(candidate.normalizedUrl);
+    if (candidate.xStoryUrl) {
+      try { await markXStoryProcessed(candidate.xStoryUrl); }
+      catch { result.xBlockedReason = "state_unavailable"; }
+    }
   }
   }
 

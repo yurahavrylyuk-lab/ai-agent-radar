@@ -4,6 +4,7 @@ import { D1BraveUsageStore } from "../src/services/d1BraveUsageStore.js";
 import { D1DiscoveryHistory } from "../src/services/d1DiscoveryHistory.js";
 import { D1GeminiUsageStore } from "../src/services/d1GeminiUsageStore.js";
 import { D1NotificationHistory } from "../src/services/d1NotificationHistory.js";
+import { D1XStore } from "../src/services/d1XStore.js";
 import { MONITORING_FRESHNESS } from "../src/config/discoveryQueries.js";
 import { createMonitoringRuntimeConfiguration, createRadarRuntimeConfiguration } from "../src/services/radarRuntimeConfiguration.js";
 import type { MonitoringCycleResult } from "../src/types/index.js";
@@ -35,6 +36,7 @@ function environment(): RadarWorkerEnv {
     GEMINI_MONTHLY_TOKEN_LIMIT: "100000",
     RESEND_API_KEY: "resend-test-key",
     NOTIFICATION_EMAIL: "radar@example.test",
+    X_DISCOVERY_ENABLED: "false",
   };
 }
 
@@ -61,6 +63,14 @@ function monitoringResult(overrides: Partial<MonitoringCycleResult> = {}): Monit
     freshStoriesSent: 1,
     replayStoriesSent: 2,
     replayLookupTruncated: false,
+    xRequestsAttempted: 5,
+    xPostsReceived: 12,
+    xCandidatesAdmitted: 3,
+    xDuplicates: 1,
+    xAccountsFailed: 1,
+    xTruncated: true,
+    xFailures: [{ accountOrdinal: 2, reason: "provider_error" }],
+    xBlockedReason: "rate_limit",
     outcomes: [
       {
         sourceTitle: "Secret title should never be logged",
@@ -100,6 +110,7 @@ test("Worker composition uses D1 stores and exposes a scheduled handler without 
   assert.ok(persistence.notificationHistory instanceof D1NotificationHistory);
   assert.ok(persistence.braveUsageStore instanceof D1BraveUsageStore);
   assert.ok(persistence.geminiUsageStore instanceof D1GeminiUsageStore);
+  assert.ok(persistence.xStore instanceof D1XStore);
   assert.ok(dependencies.history instanceof D1DiscoveryHistory, "replay discovery history must use D1");
   assert.equal(typeof dependencies.search, "function");
   assert.equal(typeof dependencies.process, "function");
@@ -161,6 +172,14 @@ test("scheduled monitoring runs one cycle and emits one structured summary with 
     freshStoriesSent: 1,
     replayStoriesSent: 2,
     replayLookupTruncated: false,
+    xRequestsAttempted: 5,
+    xPostsReceived: 12,
+    xCandidatesAdmitted: 3,
+    xDuplicates: 1,
+    xAccountsFailed: 1,
+    xTruncated: true,
+    xFailures: [{ accountOrdinal: 2, reason: "provider_error" }],
+    xBlockedReason: "rate_limit",
     outcomesTotal: 2,
     outcomesOmitted: 0,
     outcomes: [
@@ -232,6 +251,7 @@ test("scheduled handler registers and awaits the single monitoring promise", asy
 test("scheduled summary bounds outcomes and redacts secrets, email addresses, URLs, and source content", async () => {
   const env = environment();
   env.CONTROLLED_EXECUTION_TOKEN = "controlled-execution-secret";
+  env.X_BEARER_TOKEN = "x-bearer-secret";
   const longError = [
     "Request failed for https://example.test/private/story?id=123&token=something",
     env.BRAVE_SEARCH_API_KEY,
@@ -239,6 +259,7 @@ test("scheduled summary bounds outcomes and redacts secrets, email addresses, UR
     env.RESEND_API_KEY,
     env.NOTIFICATION_EMAIL,
     env.CONTROLLED_EXECUTION_TOKEN,
+    env.X_BEARER_TOKEN,
     "another@example.test",
     "Bearer bearer-secret",
     "x".repeat(MAX_SCHEDULED_ERROR_LENGTH + 40),

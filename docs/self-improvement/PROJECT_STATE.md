@@ -19,6 +19,7 @@ Bootstrap date: 2026-09-20. The human-provided production handoff supplies the v
 Cloudflare Cron
 → Cloudflare Worker
 → Brave Search
+→ optional bounded selected-account X polling (disabled by default)
 → D1 deduplication
 → Gemini analysis
 → D1 discovery persistence
@@ -42,6 +43,7 @@ Cloudflare Cron
 - Search: Brave Search.
 - Analysis: Google Gemini through the reviewed ordered pool `gemini-3.8-flash`, `gemini-3.6-flash`, and `gemini-3.5-flash-lite`. Runtime environment input cannot add, remove, or reorder models; `GEMINI_MODEL` is deprecated and ignored. The pool is restricted to approved included Free Tier capacity; paid fallback is disabled.
 - Email: Resend.
+- Optional discovery: P6 X selected-account polling is implemented but disabled by default and is not a verified production provider. Its immutable v1 identity registry is source-controlled; handles are display-only.
 - OpenAI: not used in the cloud production execution path. Local legacy tooling/dependencies do not authorize inclusion in the deployed Worker runtime.
 
 ## Limits
@@ -53,6 +55,7 @@ Maximum per autonomous monitoring cycle:
 - Gemini provider attempts: each logical analysis permits at most four attempts per approved model (12 theoretical), but the unchanged global request/token guard runs before every dispatch and the cycle freezes its initial remaining request allowance. With the configured daily request limit of 5, a normal cycle cannot dispatch more than the remaining portion of those five requests.
 - Resend: 1 email.
 - OpenAI: 0 calls.
+- X: 0 calls while disabled. A separately activated cycle is bounded to five sequential account-timeline requests and 50 conservatively reserved Post reads, with no retry or pagination; it shares the existing four-analysis/one-email ceilings.
 
 Approved repository Brave request limits for P2:
 
@@ -91,6 +94,7 @@ These are ceilings, not consumption targets. Provider quota changes require expl
 - P3 digest ordering gives relevant Codex and Claude Code discoveries a deterministic `+1` priority bonus capped at `10`, with preferred-tool status breaking an otherwise exact tie at the ceiling. This is a post-eligibility ordering signal: it does not mutate the stored Gemini relevance score and never makes a below-threshold story eligible.
 - P3 topic coverage includes AI/ML (including Gemini, GPT, and open-source models), IT/infrastructure (cloud, DevOps, Kubernetes, networking, and security advisories), programming releases, and developer tools/workflows (IDEs, CLI, CI/CD, code review, productivity tooling, techniques, and tutorials).
 - P5 keeps the ten-query/ten-request ceiling and applies Brave `freshness: "pw"` to every default and explicit custom monitoring search. The fixed list interleaves five targeted official-source queries (OpenAI, Anthropic, Google AI, GitHub Blog, Microsoft) with five broad queries. At most one recent, exact-host candidate observed through its matching official query may receive an additional bounded pre-analysis opportunity after P3's up-to-two Codex/Claude Code positions; this ephemeral signal is not source trust, relevance, or notification eligibility. Generic stable-order candidates fill available capacity, and all existing quota, partial-failure, deduplication, replay, P4, and four-analysis limits remain authoritative.
+- P6 polls only the five approved X user IDs, sequentially and in fixed order, after usable Brave acquisition. Returned original public text posts are normalized by immutable post ID, strict author/timestamp/entity checks, and at most one safe structured external destination. X candidates append to the existing unified selection pool without P5 official priority or a dedicated slot. Application-owned provenance is not accepted from Gemini, survives persistence/replay, appears as digest attribution, and excludes every X-derived story from below-threshold P4 fallback.
 
 ## Persistence
 
@@ -101,6 +105,7 @@ Production persistence uses Cloudflare D1 for:
 - Brave usage.
 - Gemini usage.
 - Gemini usage state.
+- Disabled-by-default P6 X poll cursors, pending inbox metadata, and conservative request reservations after migration `0004_x_discovery.sql` is separately applied.
 
 Gemini usage migration `0003_gemini_usage_model.sql` adds nullable exact-model attribution. Historical rows remain null/unknown-model and continue to count globally. New dispatches reserve a zero-token, exact-model request and set usage state unknown before network I/O; a completed response settles that same record and restores known state. Ambiguous transport, invalid usage, or failed settlement remains fail-closed and prevents later requests.
 
@@ -116,8 +121,11 @@ Secrets are Cloudflare Worker secret bindings. Record binding names only, never 
 - `GEMINI_API_KEY`.
 - `RESEND_API_KEY`.
 - `NOTIFICATION_EMAIL`.
+- `X_BEARER_TOKEN` only after separate P6 activation approval; it is not required while `X_DISCOVERY_ENABLED` is absent/false.
 
-Never commit Brave, Gemini, or Resend API keys, the notification email address, temporary authentication secrets, or deployment credentials. Do not copy secrets into plans, reviews, summaries, logs, or validation output.
+Never commit Brave, Gemini, Resend, or X credentials, the notification email address, temporary authentication secrets, or deployment credentials. Do not copy secrets into plans, reviews, summaries, logs, or validation output.
+
+P6 activation is not part of its implementation checkpoint. It additionally requires human verification of current X terms, endpoint entitlement and price; application of additive migration `0004`; creation of `X_BEARER_TOKEN`; `X_DISCOVERY_ENABLED=true`; prepaid credits with auto-recharge off; and a provider-side spending cap. Rollback disables X first and retains its additive tables/provenance. A pre-P6 Worker rollback is unsafe for replay until provenance containment is reviewed.
 
 The production Worker bundle must not include local JSON persistence, Node filesystem modules, dotenv, or an OpenAI cloud dependency. Production must not expose a public/manual monitoring endpoint.
 

@@ -36,12 +36,22 @@ export interface AgentAnalysis {
   sourceUrl: string;
 }
 
+/** Application-owned X attribution. This is never accepted from model output. */
+export interface XSourceProvenance {
+  kind: "x";
+  postId: string;
+  authorId: string;
+  postUrl: string;
+  label: string;
+}
+
 /** A validated analysis retained under its normalized source URL identity. */
 export interface StoredDiscovery {
   normalizedUrl: string;
   firstSeenAt: string;
   lastSeenAt: string;
   analysis: AgentAnalysis;
+  sourceProvenance?: XSourceProvenance;
 }
 
 export type DiscoveryProcessingResult =
@@ -98,6 +108,31 @@ export interface MonitoringSearchFailure {
   error: string;
 }
 
+export type XBlockedReason =
+  | "disabled"
+  | "config"
+  | "auth"
+  | "rate_limit"
+  | "budget"
+  | "state_unavailable"
+  | "price_expired"
+  | "contract_drift";
+
+export type XAccountFailureReason =
+  | "auth"
+  | "rate_limit"
+  | "account_unavailable"
+  | "timeout"
+  | "provider_error"
+  | "malformed_response"
+  | "state_unavailable"
+  | "contract_drift";
+
+export interface XAccountFailure {
+  accountOrdinal: number;
+  reason: XAccountFailureReason;
+}
+
 export interface MonitoringCycleResult {
   query: string;
   searchResultsReceived: number;
@@ -120,6 +155,14 @@ export interface MonitoringCycleResult {
   freshStoriesSent: number;
   replayStoriesSent: number;
   replayLookupTruncated: boolean;
+  xRequestsAttempted: number;
+  xPostsReceived: number;
+  xCandidatesAdmitted: number;
+  xDuplicates: number;
+  xAccountsFailed: number;
+  xTruncated: boolean;
+  xFailures: XAccountFailure[];
+  xBlockedReason?: XBlockedReason;
   /** Present only when pre-discovery Gemini admission blocked new discovery for this cycle. */
   geminiBlockedReason?: GeminiBlockedReason;
   outcomes: MonitoringCycleOutcome[];

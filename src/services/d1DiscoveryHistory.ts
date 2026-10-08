@@ -1,13 +1,15 @@
 import {
   DiscoveryHistoryError,
+  copyXSourceProvenance,
   isValidAgentAnalysis,
+  isValidXSourceProvenance,
   normalizeDiscoveryUrl,
   validateRecentDiscoveryQuery,
   type DiscoveryHistory,
   type RecentDiscoveryQuery,
   type RecentDiscoveryResult,
 } from "./discoveryHistoryCore.js";
-import type { AgentAnalysis, StoredDiscovery } from "../types/index.js";
+import type { AgentAnalysis, StoredDiscovery, XSourceProvenance } from "../types/index.js";
 
 interface DiscoveryRow {
   normalized_url: string;
@@ -17,11 +19,16 @@ interface DiscoveryRow {
 }
 
 function copyAnalysis(analysis: AgentAnalysis): AgentAnalysis {
-  return { ...analysis, projectOpportunities: [...analysis.projectOpportunities], technologies: [...analysis.technologies] };
+  return {
+    name: analysis.name, category: analysis.category, summary: analysis.summary, relevanceScore: analysis.relevanceScore,
+    whyItMatters: analysis.whyItMatters, educationalValue: analysis.educationalValue,
+    projectOpportunities: [...analysis.projectOpportunities], technologies: [...analysis.technologies],
+    sourceTitle: analysis.sourceTitle, sourceUrl: analysis.sourceUrl,
+  };
 }
 
 function copy(discovery: StoredDiscovery): StoredDiscovery {
-  return { ...discovery, analysis: copyAnalysis(discovery.analysis) };
+  return { ...discovery, analysis: copyAnalysis(discovery.analysis), sourceProvenance: copyXSourceProvenance(discovery.sourceProvenance) };
 }
 
 function isTimestamp(value: string): boolean {
@@ -34,22 +41,28 @@ function discoveryFromRow(row: DiscoveryRow): StoredDiscovery {
     throw new DiscoveryHistoryError("D1 discovery history contains an invalid record.");
   }
 
-  let analysis: unknown;
+  let persisted: unknown;
   try {
-    analysis = JSON.parse(row.analysis_json);
+    persisted = JSON.parse(row.analysis_json);
   } catch {
     throw new DiscoveryHistoryError("D1 discovery history contains invalid analysis JSON.");
   }
 
-  if (!isValidAgentAnalysis(analysis) || row.normalized_url !== normalizeDiscoveryUrl(analysis.sourceUrl)) {
+  if (!isValidAgentAnalysis(persisted) || row.normalized_url !== normalizeDiscoveryUrl(persisted.sourceUrl)) {
     throw new DiscoveryHistoryError("D1 discovery history contains an invalid record.");
   }
+  const persistedRecord = persisted as AgentAnalysis & { sourceProvenance?: unknown };
+  if (persistedRecord.sourceProvenance !== undefined && !isValidXSourceProvenance(persistedRecord.sourceProvenance)) {
+    throw new DiscoveryHistoryError("D1 discovery history contains invalid source provenance.");
+  }
+  const analysis: AgentAnalysis = copyAnalysis(persistedRecord);
 
   return {
     normalizedUrl: row.normalized_url,
     firstSeenAt: row.first_seen_at,
     lastSeenAt: row.last_seen_at,
     analysis: copyAnalysis(analysis),
+    sourceProvenance: copyXSourceProvenance(persistedRecord.sourceProvenance as XSourceProvenance | undefined),
   };
 }
 
@@ -105,8 +118,9 @@ export class D1DiscoveryHistory implements DiscoveryHistory {
     return (await this.getDiscovery(url)) !== undefined;
   }
 
-  async recordDiscovery(analysis: AgentAnalysis, seenAt = new Date()): Promise<StoredDiscovery> {
+  async recordDiscovery(analysis: AgentAnalysis, seenAt = new Date(), sourceProvenance?: XSourceProvenance): Promise<StoredDiscovery> {
     if (!isValidAgentAnalysis(analysis)) throw new DiscoveryHistoryError("Discovery analysis is invalid and cannot be recorded.");
+    if (sourceProvenance !== undefined && !isValidXSourceProvenance(sourceProvenance)) throw new DiscoveryHistoryError("Discovery source provenance is invalid.");
     if (Number.isNaN(seenAt.getTime())) throw new DiscoveryHistoryError("Discovery timestamp is invalid.");
 
     const normalizedUrl = normalizeDiscoveryUrl(analysis.sourceUrl);
@@ -114,7 +128,7 @@ export class D1DiscoveryHistory implements DiscoveryHistory {
     try {
       await this.database.prepare(
         "INSERT OR IGNORE INTO discoveries (normalized_url, first_seen_at, last_seen_at, analysis_json) VALUES (?1, ?2, ?3, ?4)",
-      ).bind(normalizedUrl, timestamp, timestamp, JSON.stringify(copyAnalysis(analysis))).run();
+      ).bind(normalizedUrl, timestamp, timestamp, JSON.stringify({ ...copyAnalysis(analysis), ...(sourceProvenance ? { sourceProvenance: copyXSourceProvenance(sourceProvenance) } : {}) })).run();
       const discovery = await this.getDiscovery(normalizedUrl);
       if (!discovery) throw new DiscoveryHistoryError("Recorded D1 discovery could not be retrieved safely.");
       return discovery;
