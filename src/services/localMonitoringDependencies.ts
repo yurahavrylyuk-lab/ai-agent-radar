@@ -32,6 +32,7 @@ export function createLocalMonitoringDependencies(
       freshness: options?.freshness,
     }),
     collectX: (now) => collectXDiscoveries({ store: xStore, environment, now }),
+    resolveXPost: (postId) => xStore.getStoryByPostId(postId),
     markXStoryProcessed: (storyUrl) => xStore.markStoryProcessed(storyUrl),
     process: (result, sourceProvenance) => processSearchResult(result, {
       history,

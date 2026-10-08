@@ -211,6 +211,7 @@ export function createWorkerMonitoringDependencies(
       freshness: options?.freshness,
     }),
     collectX: (now) => collectXDiscoveries({ store: persistence.xStore, environment: configuration.environment, now }),
+    resolveXPost: (postId) => persistence.xStore.getStoryByPostId(postId),
     markXStoryProcessed: (storyUrl) => persistence.xStore.markStoryProcessed(storyUrl),
     process: (result, sourceProvenance) => processSearchResult(result, {
       history: persistence.discoveryHistory,
