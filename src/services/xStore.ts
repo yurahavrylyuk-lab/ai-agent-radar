@@ -1,5 +1,9 @@
 import type { XSourceProvenance } from "../types/index.js";
 
+export const X_PENDING_PAYLOAD_LIMIT = 350;
+export const X_PENDING_RETENTION_MS = 7 * 86_400_000;
+const decimalId = /^[1-9]\d{0,24}$/;
+
 export type XUsageOutcome = "reserved" | "success" | "error" | "unknown";
 export type XInboxState = "pending" | "processed" | "filtered" | "expired";
 
@@ -47,6 +51,43 @@ export interface XUsageReservationLimits {
 }
 
 export interface XReservationResult { allowed: boolean; reservationId?: number; reason?: "budget" | "state_unavailable"; }
+
+/** Validates one frozen identity without coercing opaque decimal IDs to numbers. */
+export function validateXInboxRecordIdentity(record: XInboxRecord): void {
+  if (!decimalId.test(record.postId) || record.editIds.length === 0
+      || record.editIds.some((id) => !decimalId.test(id))
+      || new Set(record.editIds).size !== record.editIds.length
+      || !record.editIds.includes(record.postId)) {
+    throw new Error("X inbox edit identity is invalid.");
+  }
+}
+
+/** Rejects pages where one opaque Post/edit ID would identify different frozen records. */
+export function validateXInboxPageIdentities(posts: readonly XInboxRecord[]): void {
+  const ownerById = new Map<string, string>();
+  const recordByPostId = new Map<string, XInboxRecord>();
+  for (const post of posts) {
+    validateXInboxRecordIdentity(post);
+    const prior = recordByPostId.get(post.postId);
+    if (prior && (prior.authorId !== post.authorId || prior.storyUrl !== post.storyUrl
+        || JSON.stringify(prior.editIds) !== JSON.stringify(post.editIds))) {
+      throw new Error("X inbox page contains conflicting frozen records.");
+    }
+    recordByPostId.set(post.postId, post);
+    for (const id of post.editIds) {
+      const owner = ownerById.get(id);
+      if (owner !== undefined && owner !== post.postId) {
+        throw new Error("X inbox page contains a conflicting edit alias.");
+      }
+      ownerById.set(id, post.postId);
+    }
+  }
+}
+
+export function compareOldestXInboxRecord(left: XInboxRecord, right: XInboxRecord): number {
+  return left.createdAt < right.createdAt ? -1 : left.createdAt > right.createdAt ? 1
+    : left.postId < right.postId ? -1 : left.postId > right.postId ? 1 : 0;
+}
 
 export interface XStore {
   getPollState(authorId: string): Promise<{ sinceId?: string; disabledReason?: string }>;

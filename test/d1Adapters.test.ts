@@ -11,6 +11,7 @@ import { checkBraveSearchUsage } from "../src/services/usageGuard.js";
 import { checkGeminiUsage, getGeminiUsageCounts } from "../src/services/geminiUsageGuard.js";
 import worker, { type RadarWorkerEnv } from "../src/worker.js";
 import type { AgentAnalysis, XSourceProvenance } from "../src/types/index.js";
+import type { XInboxRecord } from "../src/services/xStore.js";
 
 class SqliteD1Statement {
   constructor(
@@ -100,6 +101,33 @@ function analysis(url = "https://example.com/discovery?quoted='value'"): AgentAn
   };
 }
 
+const xOpaqueId = (index: number) => (9_007_199_254_740_000_000n + BigInt(index)).toString();
+function xRecord(index: number, options: { createdAt?: string; editIds?: string[]; storyUrl?: string } = {}): XInboxRecord {
+  const postId = xOpaqueId(index);
+  const createdAt = options.createdAt ?? "2026-10-07T08:00:00.000Z";
+  const storyUrl = options.storyUrl ?? `https://example.com/x-${index}`;
+  const editIds = options.editIds ?? [postId];
+  return {
+    postId,
+    authorId: "4398626122",
+    storyUrl,
+    createdAt,
+    state: "pending",
+    editIds,
+    payload: {
+      postId,
+      authorId: "4398626122",
+      storyUrl,
+      createdAt,
+      text: `Release ${index}`,
+      canonicalPostUrl: `https://x.com/i/web/status/${postId}`,
+      label: "OpenAI",
+      approvedHandle: "OpenAI",
+      editIds: [...editIds],
+    },
+  };
+}
+
 test("D1 discovery history starts empty, round-trips analysis, deduplicates, and touches lastSeenAt", async () => {
   await withDatabase(async (_database, d1) => {
     const history = new D1DiscoveryHistory(d1);
@@ -144,6 +172,89 @@ test("D1 X store applies additive schema and atomically persists request, page a
     assert.equal((await store.listPending(new Date("2026-10-08T08:00:00.000Z"), 350)).records.length, 1);
     await store.markStoryProcessed("https://example.com/x");
     assert.equal((await store.listPending(new Date("2026-10-08T08:00:00.000Z"), 350)).records.length, 0);
+  });
+});
+
+test("D1 X store rejects alias conflicts atomically and preserves exact re-observation", async () => {
+  await withDatabase(async (database, d1) => {
+    database.exec(await readFile(new URL("../migrations/0004_x_discovery.sql", import.meta.url), "utf8"));
+    const store = new D1XStore(d1);
+    const alias = xOpaqueId(99);
+    for (const editIds of [[], [xOpaqueId(1), xOpaqueId(1)], [alias]]) {
+      await assert.rejects(store.commitPage("4398626122", xOpaqueId(49), [xRecord(1, { editIds })], new Date("2026-10-08T08:00:00.000Z")), /edit identity is invalid/);
+      assert.deepEqual(await store.getPollState("4398626122"), {});
+    }
+    await assert.rejects(store.commitPage("4398626122", xOpaqueId(50), [
+      xRecord(1, { editIds: [xOpaqueId(1), alias] }),
+      xRecord(2, { editIds: [xOpaqueId(2), alias] }),
+    ], new Date("2026-10-08T08:00:00.000Z")), /conflicting edit alias/);
+    assert.deepEqual(await store.getPollState("4398626122"), {});
+    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM x_inbox").get().count, 0);
+
+    const original = xRecord(1, { editIds: [xOpaqueId(1), alias] });
+    await store.commitPage("4398626122", xOpaqueId(51), [original], new Date("2026-10-08T08:00:00.000Z"));
+    await store.commitPage("4398626122", xOpaqueId(52), [original], new Date("2026-10-08T08:00:00.000Z"));
+    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM x_inbox").get().count, 1);
+    assert.equal((await store.getStoryByPostId(alias))?.storyUrl, original.storyUrl);
+    assert.equal(typeof (await store.listPending(new Date("2026-10-08T08:00:00.000Z"), 350)).records[0].postId, "string");
+
+    await assert.rejects(store.commitPage("4398626122", xOpaqueId(53), [
+      xRecord(2, { editIds: [xOpaqueId(2), alias] }),
+    ], new Date("2026-10-08T08:00:00.000Z")), /conflicts with a frozen story/);
+    assert.equal((await store.getPollState("4398626122")).sinceId, xOpaqueId(52));
+    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM x_inbox").get().count, 1);
+  });
+});
+
+test("D1 X store enforces expiry and deterministic 350-record cap in commit transaction", async () => {
+  await withDatabase(async (database, d1) => {
+    database.exec(await readFile(new URL("../migrations/0004_x_discovery.sql", import.meta.url), "utf8"));
+    const store = new D1XStore(d1);
+    await store.commitPage("4398626122", xOpaqueId(699), [
+      xRecord(999, { createdAt: "2026-09-30T08:00:00.000Z" }),
+      ...Array.from({ length: 349 }, (_, index) => xRecord(index + 1, { createdAt: "2026-10-07T06:00:00.000Z" })),
+    ], new Date("2026-10-07T07:00:00.000Z"));
+    await store.commitPage("4398626122", xOpaqueId(700), [
+      xRecord(350, { createdAt: "2026-10-08T07:00:00.000Z" }),
+      xRecord(351, { createdAt: "2026-10-08T07:00:00.000Z" }),
+    ], new Date("2026-10-08T08:00:00.000Z"));
+    const counts = database.prepare("SELECT state, COUNT(*) AS count FROM x_inbox GROUP BY state ORDER BY state").all() as Array<{ state: string; count: number }>;
+    assert.deepEqual(counts, [{ state: "expired", count: 2 }, { state: "pending", count: 350 }]);
+    const old = database.prepare("SELECT state, payload_json FROM x_inbox WHERE post_id = ?").get(xOpaqueId(999)) as { state: string; payload_json: string | null };
+    const tie = database.prepare("SELECT state, payload_json FROM x_inbox WHERE post_id = ?").get(xOpaqueId(1)) as { state: string; payload_json: string | null };
+    assert.deepEqual(old, { state: "expired", payload_json: null });
+    assert.deepEqual(tie, { state: "expired", payload_json: null });
+    assert.equal((await store.getPollState("4398626122")).sinceId, xOpaqueId(700));
+    const restarted = new D1XStore(d1);
+    const pending = await restarted.listPending(new Date("2026-10-08T08:00:00.000Z"), 350);
+    assert.equal(pending.records.length, 350);
+    assert.deepEqual(pending.records.slice(0, 2).map((item) => item.postId), [xOpaqueId(350), xOpaqueId(351)]);
+  });
+});
+
+test("D1 X store cleanup failure rolls back inbox and cursor in the same batch", async () => {
+  await withDatabase(async (database, d1) => {
+    database.exec(await readFile(new URL("../migrations/0004_x_discovery.sql", import.meta.url), "utf8"));
+    const store = new D1XStore(d1);
+    await store.commitPage("4398626122", xOpaqueId(80), [xRecord(1, { createdAt: "2026-09-30T08:00:00.000Z" })], new Date("2026-10-01T08:00:00.000Z"));
+    database.exec("CREATE TRIGGER fail_x_cleanup BEFORE UPDATE OF state ON x_inbox BEGIN SELECT RAISE(ABORT, 'injected cleanup failure'); END");
+    await assert.rejects(store.commitPage("4398626122", xOpaqueId(81), [xRecord(2)], new Date("2026-10-08T08:00:00.000Z")), /injected cleanup failure/);
+    assert.equal((await store.getPollState("4398626122")).sinceId, xOpaqueId(80));
+    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM x_inbox").get().count, 1);
+    const existing = database.prepare("SELECT state, payload_json FROM x_inbox WHERE post_id = ?").get(xOpaqueId(1)) as { state: string; payload_json: string | null };
+    assert.equal(existing.state, "pending");
+    assert.ok(existing.payload_json);
+  });
+});
+
+test("D1 X store fails closed when persisted aliases make lookup ambiguous", async () => {
+  await withDatabase(async (database, d1) => {
+    database.exec(await readFile(new URL("../migrations/0004_x_discovery.sql", import.meta.url), "utf8"));
+    const alias = xOpaqueId(90);
+    for (const item of [xRecord(1, { editIds: [xOpaqueId(1), alias] }), xRecord(2, { editIds: [xOpaqueId(2), alias] })]) {
+      database.prepare("INSERT INTO x_inbox VALUES (?, ?, ?, ?, ?, ?, ?)").run(item.postId, item.authorId, item.storyUrl, item.createdAt, JSON.stringify(item.payload), item.state, JSON.stringify(item.editIds));
+    }
+    await assert.rejects(new D1XStore(d1).getStoryByPostId(alias), /ambiguous/);
   });
 });
 

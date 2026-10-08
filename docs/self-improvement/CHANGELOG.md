@@ -5,6 +5,7 @@
 - Added the human-approved five-account immutable-ID registry and a disabled-by-default, bounded X timeline acquisition path with strict normalization, durable conservative usage/cursor/inbox state, and no retries or pagination.
 - Added application-owned X provenance across D1/JSON/replay, visible digest attribution, unified four-slot selection, P4 fallback exclusion, and bounded secret-free scheduled metrics.
 - Review correction preserves Brave article content while unioning first validated X provenance for same-story observations, and wires durable post-ID resolution for Brave-observed X status URLs without degrading ordinary Brave discovery.
+- Final review correction rejects malformed or ambiguous edit aliases and makes seven-day expiry plus the 350-pending payload cap atomic with page/cursor commits in both D1 and local JSON persistence.
 - Added unapplied migration `0004`; no credentials, paid credits, live provider request, production migration, Cloudflare/D1 mutation, deployment, P7 work, or production merge occurred.
 
 ## 2026-10-07 — P5 Discovery Reliability ready for review

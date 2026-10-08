@@ -78,6 +78,29 @@ test("account mismatch rejects the page without advancing cursor and charges res
   assert.equal(result.accountsFailed, 1); assert.equal(result.failures[0].reason, "malformed_response"); assert.equal(store.poll.get(source.userId)?.sinceId, "100"); assert.equal(store.usages[0].outcome, "error");
 });
 
+test("missing or duplicate edit history rejects the page without cursor or inbox mutation", async () => {
+  for (const invalid of [
+    raw({ edit_history_tweet_ids: undefined }),
+    raw({ edit_history_tweet_ids: ["9007199254740993123", "9007199254740993123"] }),
+    raw({ edit_history_tweet_ids: ["9007199254740993000"] }),
+  ]) {
+    const store = new MemoryXStore();
+    store.poll.set(source.userId, { sinceId: "100" });
+    const result = await collectXDiscoveries({
+      store,
+      environment: { X_DISCOVERY_ENABLED: "true", X_BEARER_TOKEN: "token" },
+      now,
+      sources: [source],
+      read: async () => ({ data: [invalid], truncated: false }),
+    });
+    assert.equal(result.accountsFailed, 1);
+    assert.equal(result.failures[0].reason, "malformed_response");
+    assert.equal(store.poll.get(source.userId)?.sinceId, "100");
+    assert.equal(store.inbox.length, 0);
+    assert.equal(store.usages[0].outcome, "error");
+  }
+});
+
 test("temporary one-account failure continues while auth and rate-limit failures stop further accounts", async () => {
   const firstTwo = APPROVED_X_SOURCES.slice(0, 2);
   const store = new MemoryXStore(); let calls = 0;

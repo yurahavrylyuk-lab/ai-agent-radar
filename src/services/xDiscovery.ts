@@ -76,8 +76,13 @@ function normalizePost(raw: unknown, source: ApprovedXSource, cycleStartedAt: Da
   if (!Array.isArray(refs)) throw new XRequestError("X post references were invalid.", "malformed_response");
   if (refs.some((ref) => ref && typeof ref === "object" && ["replied_to", "retweeted", "quoted"].includes(String((ref as Record<string, unknown>).type)))) return { filtered: true };
   if (post.withheld !== undefined || post.possibly_sensitive === true || !post.text.trim()) return { filtered: true };
-  const editIds = post.edit_history_tweet_ids === undefined ? [post.id] : post.edit_history_tweet_ids;
-  if (!Array.isArray(editIds) || editIds.length === 0 || !editIds.every((id) => typeof id === "string" && decimalId.test(id))) throw new XRequestError("X edit history was invalid.", "malformed_response");
+  const editIds = post.edit_history_tweet_ids;
+  if (!Array.isArray(editIds) || editIds.length === 0
+      || !editIds.every((id) => typeof id === "string" && decimalId.test(id))
+      || new Set(editIds).size !== editIds.length
+      || !editIds.includes(post.id)) {
+    throw new XRequestError("X edit history was invalid.", "malformed_response");
+  }
   const identity = editIds[0] as string;
   const urls = post.entities && typeof post.entities === "object" && !Array.isArray(post.entities)
     ? (post.entities as Record<string, unknown>).urls : undefined;

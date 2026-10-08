@@ -1,7 +1,22 @@
 import { mkdir, open, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import type { XSourceProvenance } from "../types/index.js";
-import { isoWeekStart, utcDayStart, utcMonthStart, type XInboxRecord, type XRequestReservation, type XReservationResult, type XStore, type XUsageReservationLimits, type XUsageOutcome } from "./xStore.js";
+import {
+  X_PENDING_PAYLOAD_LIMIT,
+  X_PENDING_RETENTION_MS,
+  compareOldestXInboxRecord,
+  isoWeekStart,
+  utcDayStart,
+  utcMonthStart,
+  validateXInboxPageIdentities,
+  validateXInboxRecordIdentity,
+  type XInboxRecord,
+  type XRequestReservation,
+  type XReservationResult,
+  type XStore,
+  type XUsageReservationLimits,
+  type XUsageOutcome,
+} from "./xStore.js";
 
 interface XLocalData {
   pollState: Record<string, { sinceId?: string; lastSuccessAt?: string; disabledReason?: string }>;
@@ -13,6 +28,36 @@ interface XLocalData {
 
 const emptyData = (): XLocalData => ({ pollState: {}, inbox: [], usage: [], nextUsageId: 1 });
 const copyRecord = (record: XInboxRecord): XInboxRecord => ({ ...record, editIds: [...record.editIds], payload: record.payload ? { ...record.payload, editIds: [...record.payload.editIds] } : undefined });
+
+function validateStoredInboxIdentities(records: readonly XInboxRecord[]): Map<string, string> {
+  const primaryIds = new Set<string>();
+  const ownerById = new Map<string, string>();
+  for (const record of records) {
+    validateXInboxRecordIdentity(record);
+    if (primaryIds.has(record.postId)) throw new Error("X inbox identity state is ambiguous.");
+    primaryIds.add(record.postId);
+    for (const id of record.editIds) {
+      const owner = ownerById.get(id);
+      if (owner !== undefined && owner !== record.postId) throw new Error("X inbox identity state is ambiguous.");
+      ownerById.set(id, record.postId);
+    }
+  }
+  return ownerById;
+}
+
+function enforcePendingBounds(data: XLocalData, now: Date, limit: number, retentionMs: number): boolean {
+  if (Number.isNaN(now.getTime())) throw new Error("X pending retention requires a valid timestamp.");
+  const cutoff = now.getTime() - retentionMs;
+  for (const row of data.inbox) {
+    const createdAt = Date.parse(row.createdAt);
+    if (!Number.isFinite(createdAt)) throw new Error("X inbox contains an invalid createdAt timestamp.");
+    if (row.state === "pending" && createdAt < cutoff) { row.state = "expired"; row.payload = undefined; }
+  }
+  const pending = data.inbox.filter((row) => row.state === "pending").sort(compareOldestXInboxRecord);
+  const overflow = Math.max(0, pending.length - limit);
+  for (const row of pending.slice(0, overflow)) { row.state = "expired"; row.payload = undefined; }
+  return overflow > 0;
+}
 
 export class LocalJsonXStore implements XStore {
   constructor(private readonly filePath = resolve(process.cwd(), "data", "x-discovery.json")) {}
@@ -49,11 +94,27 @@ export class LocalJsonXStore implements XStore {
   }
 
   async commitPage(authorId: string, sinceId: string | undefined, posts: XInboxRecord[], lastSuccessAt: Date): Promise<void> {
+    validateXInboxPageIdentities(posts);
+    if (Number.isNaN(lastSuccessAt.getTime())) throw new Error("X page commit requires a valid timestamp.");
     await this.withExclusiveWrite(async (data) => {
+      const ownerById = validateStoredInboxIdentities(data.inbox);
       for (const post of posts) {
-        const existing = data.inbox.find((item) => item.postId === post.postId || item.editIds.some((id) => post.editIds.includes(id)));
-        if (!existing) data.inbox.push(copyRecord(post));
+        const owners = new Set(post.editIds.map((id) => ownerById.get(id)).filter((id): id is string => id !== undefined));
+        if (owners.size > 1 || (owners.size === 1 && !owners.has(post.postId))) {
+          throw new Error("X inbox edit identity conflicts with a frozen story.");
+        }
+        const existing = data.inbox.find((item) => item.postId === post.postId);
+        if (existing) {
+          if (existing.authorId !== post.authorId || existing.storyUrl !== post.storyUrl) {
+            throw new Error("X inbox edit identity conflicts with a frozen story.");
+          }
+          for (const id of post.editIds) if (!existing.editIds.includes(id)) { existing.editIds.push(id); ownerById.set(id, post.postId); }
+        } else {
+          data.inbox.push(copyRecord(post));
+          for (const id of post.editIds) ownerById.set(id, post.postId);
+        }
       }
+      enforcePendingBounds(data, lastSuccessAt, X_PENDING_PAYLOAD_LIMIT, X_PENDING_RETENTION_MS);
       const state = data.pollState[authorId] ?? {};
       data.pollState[authorId] = { ...state, ...(sinceId ? { sinceId } : {}), lastSuccessAt: lastSuccessAt.toISOString() };
       return [undefined, data];
@@ -61,26 +122,15 @@ export class LocalJsonXStore implements XStore {
   }
 
   async listPending(now: Date, limit: number) {
-    await this.withExclusiveWrite(async (data) => {
-      for (const row of data.inbox) {
-        if (row.state === "pending" && new Date(row.createdAt).getTime() + 7 * 86_400_000 < now.getTime()) {
-          row.state = "expired"; row.payload = undefined;
-        }
-      }
-      return [undefined, data];
+    return this.withExclusiveWrite(async (data) => {
+      validateStoredInboxIdentities(data.inbox);
+      const truncated = enforcePendingBounds(data, now, limit, X_PENDING_RETENTION_MS);
+      const records = data.inbox.filter((row) => row.state === "pending")
+        .sort((left, right) => left.createdAt > right.createdAt ? -1 : left.createdAt < right.createdAt ? 1
+          : left.postId < right.postId ? -1 : left.postId > right.postId ? 1 : 0)
+        .map(copyRecord);
+      return [{ records, truncated }, data];
     });
-    let truncated = false;
-    await this.withExclusiveWrite(async (data) => {
-      const pending = data.inbox.filter((row) => row.state === "pending")
-        .sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0)
-          || (BigInt(a.postId) < BigInt(b.postId) ? -1 : BigInt(a.postId) > BigInt(b.postId) ? 1 : 0));
-      const overflow = Math.max(0, pending.length - limit);
-      truncated = overflow > 0;
-      for (const row of pending.slice(0, overflow)) { row.state = "expired"; row.payload = undefined; }
-      return [undefined, data];
-    });
-    const pending = (await this.read()).inbox.filter((row) => row.state === "pending");
-    return { records: pending.map(copyRecord), truncated };
   }
 
   async markStoryProcessed(storyUrl: string): Promise<void> {
@@ -91,7 +141,11 @@ export class LocalJsonXStore implements XStore {
   }
 
   async getStoryByPostId(postId: string): Promise<{ storyUrl: string; provenance?: XSourceProvenance } | undefined> {
-    const row = (await this.read()).inbox.find((item) => item.postId === postId || item.editIds.includes(postId));
+    const data = await this.read();
+    validateStoredInboxIdentities(data.inbox);
+    const rows = data.inbox.filter((item) => item.postId === postId || item.editIds.includes(postId));
+    if (rows.length > 1) throw new Error("X inbox identity state is ambiguous.");
+    const row = rows[0];
     if (!row) return undefined;
     const payload = row.payload;
     return { storyUrl: row.storyUrl, ...(payload ? { provenance: { kind: "x", postId: row.postId, authorId: row.authorId, postUrl: payload.canonicalPostUrl, label: payload.label } as const } : {}) };
