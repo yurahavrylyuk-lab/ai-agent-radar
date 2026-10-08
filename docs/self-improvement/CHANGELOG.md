@@ -1,5 +1,12 @@
 # Self-improvement changelog
 
+## 2026-10-08 — Gemini ambiguity-accounting hotfix ready for review
+
+- Added explicit UTC accounting windows and durable `legacy`, `reserved`, `exact`, `confirmed_zero`, `transport_ambiguous`, and retired states without inventing token usage.
+- Added D1-enforced single unresolved ownership, atomic admission checks, exact identity settlement, crash-safe blocking, and provider-free retirement after all active windows expire.
+- Added migration `0005`, offline lineage evidence, and an incident-specific row-17 runbook whose only eventual mutation is the separately authorized legacy latch clear after `2026-11-01T00:00:00Z`.
+- Preserved model ordering, retries/fallbacks, quotas, replay, Brave, Resend, Cron, and health-only HTTP behavior. P6/X is absent from this deployable production-based branch. No production action or provider call occurred.
+
 ## 2026-10-07 — P5 Discovery Reliability ready for review
 
 - Added the approved ten-query configuration: five interleaved targeted official-source queries and five broad AI/developer-topic queries, all using Brave weekly freshness for monitoring.

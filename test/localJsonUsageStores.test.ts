@@ -6,6 +6,11 @@ import test from "node:test";
 import { LocalJsonBraveUsageStore } from "../src/services/localJsonBraveUsageStore.js";
 import { LocalJsonGeminiUsageStore } from "../src/services/localJsonGeminiUsageStore.js";
 
+const geminiAdmission = {
+  cycleRequestsRemaining: 5,
+  limits: { dailyRequests: 5, weeklyRequests: 20, monthlyRequests: 50, dailyTokens: 10_000, weeklyTokens: 30_000, monthlyTokens: 100_000 },
+};
+
 async function withTemporaryFile(
   name: string,
   callback: (filePath: string) => Promise<void>,
@@ -91,16 +96,19 @@ test("local Gemini JSON store reserves and settles exact-model usage atomically"
       outputTokens: 0,
       totalTokens: 0,
       model: "gemini-3.8-flash",
-    });
-    assert.equal((await store.getUsageData()).usageUnknown, true);
-    await assert.rejects(store.reserveRequest(reservation.record), /exclusive local admission/);
+    }, geminiAdmission);
+    assert.equal((await store.getUsageData()).usageUnknown, false);
+    await assert.rejects(store.reserveRequest(reservation.record, geminiAdmission), /unresolved request/);
+    const restartedWhileReserved = new LocalJsonGeminiUsageStore(filePath);
+    assert.equal((await restartedWhileReserved.getUsageData()).records[0]?.accountingStatus, "reserved");
+    await assert.rejects(restartedWhileReserved.reserveRequest({ ...reservation.record, id: undefined, accountingStatus: undefined }, geminiAdmission), /unresolved request/);
     await store.settleRequest(reservation, { inputTokens: 9, outputTokens: 4, totalTokens: 112 });
     assert.deepEqual(await store.getUsageData(), {
       usageUnknown: false,
-      records: [{ ...reservation.record, inputTokens: 9, outputTokens: 4, totalTokens: 112 }],
+      records: [{ ...reservation.record, inputTokens: 9, outputTokens: 4, totalTokens: 112, accountingStatus: "exact", settledAt: (await store.getUsageData()).records[0]?.settledAt }],
     });
     const secondStore = new LocalJsonGeminiUsageStore(filePath);
-    const nextReservation = await secondStore.reserveRequest({ ...reservation.record, timestamp: "2026-09-20T10:01:00.000Z" });
+    const nextReservation = await secondStore.reserveRequest({ ...reservation.record, id: undefined, accountingStatus: undefined, timestamp: new Date().toISOString() }, geminiAdmission);
     assert.equal(nextReservation.record.model, "gemini-3.8-flash");
   });
 });

@@ -1,5 +1,6 @@
 import type { RuntimeEnvironment } from "./radarRuntimeConfiguration.js";
-import { isGeminiUsageRecord, type GeminiUsageData, type GeminiUsageRecord, type GeminiUsageStore } from "./geminiUsageTracker.js";
+import { getGeminiUtcAccountingWindows, isGeminiTimestampInAnyActiveWindow, parseGeminiUsageTimestamp } from "./geminiAccountingWindows.js";
+import { geminiAccountingStatusOf, isGeminiUsageRecord, type GeminiUsageData, type GeminiUsageRecord, type GeminiUsageStore } from "./geminiUsageTracker.js";
 
 export interface GeminiUsageLimits { dailyRequests: number; weeklyRequests: number; monthlyRequests: number; dailyTokens: number; weeklyTokens: number; monthlyTokens: number; }
 export interface GeminiUsageCounts extends GeminiUsageLimits {}
@@ -51,14 +52,15 @@ export function validateGeminiConfiguration(env: RuntimeEnvironment = process.en
   return getGeminiUsageLimits(env);
 }
 
-function weekStart(date: Date): number { const value = new Date(date); value.setHours(0, 0, 0, 0); value.setDate(value.getDate() - ((value.getDay() + 6) % 7)); return value.getTime(); }
 export function getGeminiUsageCounts(records: GeminiUsageRecord[], now = new Date()): GeminiUsageCounts {
-  if (Number.isNaN(now.getTime())) throw new Error("Gemini usage evaluation time is invalid.");
+  const windows = getGeminiUtcAccountingWindows(now);
   const counts: GeminiUsageCounts = { dailyRequests: 0, weeklyRequests: 0, monthlyRequests: 0, dailyTokens: 0, weeklyTokens: 0, monthlyTokens: 0 };
   for (const record of records) {
-    const date = new Date(record.timestamp); if (Number.isNaN(date.getTime())) throw new Error("Gemini usage file contains an invalid request timestamp.");
-    const day = date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth() && date.getDate() === now.getDate();
-    const week = weekStart(date) === weekStart(now); const month = date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth();
+    const timestamp = parseGeminiUsageTimestamp(record.timestamp);
+    if (timestamp > windows.now) throw new Error("Gemini usage contains a future request timestamp.");
+    const day = timestamp >= windows.dayStart && timestamp < windows.nextDayStart;
+    const week = timestamp >= windows.weekStart && timestamp < windows.nextWeekStart;
+    const month = timestamp >= windows.monthStart && timestamp < windows.nextMonthStart;
     if (day) { counts.dailyRequests++; counts.dailyTokens += record.totalTokens; }
     if (week) { counts.weeklyRequests++; counts.weeklyTokens += record.totalTokens; }
     if (month) { counts.monthlyRequests++; counts.monthlyTokens += record.totalTokens; }
@@ -87,6 +89,33 @@ function isGeminiUsageData(value: unknown): value is GeminiUsageData {
   return typeof data.usageUnknown === "boolean" && Array.isArray(data.records) && data.records.every(isGeminiUsageRecord);
 }
 
+function structuredAccountingBlock(data: GeminiUsageData, now: Date): "usage_unknown" | undefined {
+  const unresolved = data.records.filter((record) => {
+    const status = geminiAccountingStatusOf(record);
+    return status === "reserved" || status === "transport_ambiguous";
+  });
+  if (unresolved.length > 1) throw new Error("Gemini usage contains conflicting unresolved reservations.");
+  if (unresolved.length === 1) return "usage_unknown";
+
+  for (const record of data.records) {
+    const status = geminiAccountingStatusOf(record);
+    const timestamp = parseGeminiUsageTimestamp(record.timestamp);
+    const nowInstant = now.getTime();
+    if (timestamp > nowInstant) throw new Error("Gemini usage contains a future request timestamp.");
+    if (record.settledAt !== undefined && record.settledAt !== null) {
+      const settledAt = parseGeminiUsageTimestamp(record.settledAt);
+      if (settledAt < timestamp || settledAt > nowInstant) throw new Error("Gemini usage contains an invalid settlement timestamp.");
+    }
+    if (record.retiredAt !== undefined && record.retiredAt !== null) {
+      const retiredAt = parseGeminiUsageTimestamp(record.retiredAt);
+      if (retiredAt < timestamp || retiredAt > nowInstant) throw new Error("Gemini usage contains an invalid retirement timestamp.");
+    }
+    if (status === "retired_outside_accounting_windows" && isGeminiTimestampInAnyActiveWindow(record.timestamp, now)) {
+      return "usage_unknown";
+    }
+  }
+}
+
 /**
  * Reads only local accounting/configuration state. It never reserves usage, clears a latch,
  * calls a provider, or mutates persistence; availability is an admission snapshot, not a remote probe.
@@ -105,7 +134,9 @@ export async function inspectGeminiAvailability(
   try {
     data = await reader.getUsageData();
     if (!isGeminiUsageData(data)) throw new Error("Gemini usage state is invalid.");
+    const structuredBlock = structuredAccountingBlock(data, now);
     counts = getGeminiUsageCounts(data.records, now);
+    if (structuredBlock) return { allowed: false, reason: structuredBlock };
   } catch { return { allowed: false, reason: "usage_state_unavailable" }; }
 
   if (data.usageUnknown) return { allowed: false, reason: "usage_unknown" };

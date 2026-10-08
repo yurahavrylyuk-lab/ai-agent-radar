@@ -1,5 +1,14 @@
 # Daily Self-Improvement Summary
 
+## 2026-10-08 — Gemini ambiguity-accounting hotfix
+
+- Status: REVIEW; implementation branch `codex/gemini-ambiguity-hardening`, exact deployed-production baseline `01ef0787cad02c49d453f781e1b106a247b7e5d7`. P6/X and migration `0004` are intentionally excluded.
+- Added explicit UTC day/Monday-week/month accounting, structured reservation states, D1-fenced single-owner admission and compare-and-set settlement, durable transport ambiguity, provider-free operator retirement, and a separately authorized legacy row-17 recovery runbook. No token value is guessed; the legacy latch and row 17 remain unchanged.
+- Offline validation: `npm ci`, `npm run build`, `npm test` (260/260), `npm run worker:typecheck`, `git diff --check`, `npm ls --depth=0`, local D1 migration-lineage rehearsal, and Wrangler dry-run passed. The dry-run bundle contains the same four pre-existing local-JSON `node:fs/promises` / `node:path` import groups as the unmodified production-base bundle; this hotfix adds no new unsupported dependency category, but the inherited bundle-composition gap remains a warning for separate review.
+- No production migration, D1 mutation, latch clear, recovery, deployment, monitoring cycle, provider call, X activation, P7 work, merge, or modification of the Architect's normal workspace occurred. Independent Analyst review remains required.
+
+---
+
 ## 2026-10-07 — P5 Discovery Reliability
 
 - Status: REVIEW; implementation branch `codex/p5-discovery-reliability`, baseline `46a69af998399b1b15ea0718c210d3a786da462c`.

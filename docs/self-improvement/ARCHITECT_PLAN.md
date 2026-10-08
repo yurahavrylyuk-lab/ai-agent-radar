@@ -1,5 +1,13 @@
 # Architect Plan
 
+## Gemini ambiguity-accounting hotfix — approved Builder scope
+
+Implementation is isolated from deployed production commit `01ef0787cad02c49d453f781e1b106a247b7e5d7`; P6 and its `0004_x_discovery.sql` migration are intentionally absent. The approved hotfix adds explicit UTC accounting, durable `legacy` / `reserved` / `exact` / `confirmed_zero` / `transport_ambiguous` / `retired_outside_accounting_windows` states, D1-fenced admission, exact settlement, fail-closed transport ambiguity, and operator-only retirement without token estimates. Migration `0005_gemini_ambiguity_accounting.sql`, deployment, and every production recovery remain separate human approvals.
+
+Legacy row 17 at `2026-10-08T08:02:03.393Z` remains historical unknown usage with unchanged `0/0/0` placeholders. It is active through its UTC day, Monday-start week, and calendar month; its first safe retirement boundary is `2026-11-01T00:00:00Z`. The incident-specific procedure may eventually change only `gemini_usage_state.usage_unknown` from `1` to `0` after exact proof and separate authorization. See `GEMINI_ACCOUNTING_RECOVERY.md`.
+
+---
+
 ## P5 — Discovery Reliability: architecture revision 1
 
 Architecture status: HUMAN-APPROVED; implementation is at REVIEW. P5 here means Discovery Reliability under the current roadmap, not the old user-feedback proposal (now P7).

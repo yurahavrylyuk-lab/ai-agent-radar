@@ -13,9 +13,9 @@ import type { AgentAnalysis } from "../src/types/index.js";
 
 class SqliteD1Statement {
   constructor(
-    private readonly database: Database.Database,
-    private readonly query: string,
-    private readonly values: unknown[] = [],
+    protected readonly database: Database.Database,
+    protected readonly query: string,
+    protected readonly values: unknown[] = [],
   ) {}
 
   bind(...values: unknown[]): SqliteD1Statement {
@@ -53,7 +53,7 @@ class SqliteD1Statement {
 }
 
 class SqliteD1Database {
-  constructor(private readonly database: Database.Database) {}
+  constructor(protected readonly database: Database.Database) {}
 
   prepare(query: string): SqliteD1Statement {
     return new SqliteD1Statement(this.database, query);
@@ -73,11 +73,35 @@ class SqliteD1Database {
   }
 }
 
+class LostMutationResponseStatement extends SqliteD1Statement {
+  constructor(database: Database.Database, query: string, values: unknown[] = [], private readonly lostResponsePattern: RegExp) {
+    super(database, query, values);
+  }
+
+  override bind(...values: unknown[]): LostMutationResponseStatement {
+    return new LostMutationResponseStatement(this.database, this.query, values, this.lostResponsePattern);
+  }
+
+  override async first<T>(): Promise<T | null> {
+    const result = await super.first<T>();
+    if (this.lostResponsePattern.test(this.query)) throw new Error("simulated lost D1 mutation response");
+    return result;
+  }
+}
+
+class LostMutationResponseDatabase extends SqliteD1Database {
+  constructor(database: Database.Database, private readonly lostResponsePattern: RegExp) { super(database); }
+  override prepare(query: string): LostMutationResponseStatement {
+    return new LostMutationResponseStatement(this.database, query, [], this.lostResponsePattern);
+  }
+}
+
 async function withDatabase(callback: (database: Database.Database, d1: D1Database) => Promise<void>): Promise<void> {
   const database = new Database(":memory:");
   try {
     database.exec(await readFile(new URL("../migrations/0001_initial.sql", import.meta.url), "utf8"));
     database.exec(await readFile(new URL("../migrations/0003_gemini_usage_model.sql", import.meta.url), "utf8"));
+    database.exec(await readFile(new URL("../migrations/0005_gemini_ambiguity_accounting.sql", import.meta.url), "utf8"));
     await callback(database, new SqliteD1Database(database) as unknown as D1Database);
   } finally {
     database.close();
@@ -228,6 +252,10 @@ test("D1 Gemini usage round-trips totals, preserves window semantics, and fails 
       GEMINI_MONTHLY_TOKEN_LIMIT: "100000",
     })).allowed, true);
 
+    const admission = {
+      cycleRequestsRemaining: 5,
+      limits: { dailyRequests: 5, weeklyRequests: 20, monthlyRequests: 50, dailyTokens: 10_000, weeklyTokens: 30_000, monthlyTokens: 100_000 },
+    };
     const reservation = await store.reserveRequest({
       timestamp: "2026-09-20T12:30:00.000Z",
       provider: "gemini",
@@ -237,18 +265,146 @@ test("D1 Gemini usage round-trips totals, preserves window semantics, and fails 
       outputTokens: 0,
       totalTokens: 0,
       model: "gemini-3.8-flash",
-    });
-    assert.equal((await store.getUsageData()).usageUnknown, true);
-    await assert.rejects(store.reserveRequest({ ...reservation.record, timestamp: "2026-09-20T12:31:00.000Z" }), /could not be acquired safely/);
+    }, admission);
+    assert.equal((await store.getUsageData()).usageUnknown, false);
+    assert.equal((await store.getUsageData()).records[1]?.accountingStatus, "reserved");
+    await assert.rejects(store.reserveRequest({ ...reservation.record, id: undefined, accountingStatus: undefined, timestamp: "2026-09-20T12:31:00.000Z" }, admission), /could not be (admitted|reserved) safely/);
     await store.settleRequest(reservation, { inputTokens: 2, outputTokens: 1, totalTokens: 4 });
     const settled = await store.getUsageData();
     assert.equal(settled.usageUnknown, false);
     assert.equal(settled.records[1]?.model, "gemini-3.8-flash");
     assert.equal(settled.records[1]?.totalTokens, 4);
+    assert.equal(settled.records[1]?.accountingStatus, "exact");
 
     database.pragma("ignore_check_constraints = ON");
     database.prepare("UPDATE gemini_usage_state SET usage_unknown = 2 WHERE id = 1").run();
     await assert.rejects(store.getUsageData());
+  });
+});
+
+test("migration 0005 preserves legacy rows and enforces one unresolved structured request", async () => {
+  const database = new Database(":memory:");
+  try {
+    database.exec(await readFile(new URL("../migrations/0001_initial.sql", import.meta.url), "utf8"));
+    database.exec(await readFile(new URL("../migrations/0003_gemini_usage_model.sql", import.meta.url), "utf8"));
+    database.prepare("INSERT INTO gemini_usage (timestamp, provider, operation, request_count, input_tokens, output_tokens, total_tokens, model) VALUES (?, 'gemini', 'analysis', 1, 0, 0, 0, ?)")
+      .run("2026-10-08T08:02:03.393Z", "gemini-3.8-flash");
+    database.exec(await readFile(new URL("../migrations/0005_gemini_ambiguity_accounting.sql", import.meta.url), "utf8"));
+    const legacy = database.prepare("SELECT accounting_status, ambiguity_reason, settled_at, retired_at FROM gemini_usage WHERE id = 1").get() as Record<string, unknown>;
+    assert.deepEqual(legacy, { accounting_status: "legacy", ambiguity_reason: null, settled_at: null, retired_at: null });
+    database.prepare("INSERT INTO gemini_usage (timestamp, provider, operation, request_count, input_tokens, output_tokens, total_tokens, model, accounting_status) VALUES (?, 'gemini', 'analysis', 1, 0, 0, 0, ?, 'reserved')")
+      .run("2025-01-01T00:00:00.000Z", "gemini-3.8-flash");
+    assert.throws(() => database.prepare("INSERT INTO gemini_usage (timestamp, provider, operation, request_count, input_tokens, output_tokens, total_tokens, model, accounting_status, ambiguity_reason) VALUES (?, 'gemini', 'analysis', 1, 0, 0, 0, ?, 'transport_ambiguous', 'timeout')")
+      .run("2025-01-02T00:00:00.000Z", "gemini-3.6-flash"), /UNIQUE constraint failed/);
+  } finally {
+    database.close();
+  }
+});
+
+test("D1 atomic admission admits only one concurrent owner and stale ownership cannot settle it", async () => {
+  await withDatabase(async (_database, d1) => {
+    const store = new D1GeminiUsageStore(d1);
+    const admission = {
+      cycleRequestsRemaining: 5,
+      limits: { dailyRequests: 5, weeklyRequests: 20, monthlyRequests: 50, dailyTokens: 10_000, weeklyTokens: 30_000, monthlyTokens: 100_000 },
+    };
+    const request = {
+      timestamp: new Date().toISOString(), provider: "gemini" as const, operation: "analysis", requestCount: 1 as const,
+      inputTokens: 0, outputTokens: 0, totalTokens: 0, model: "gemini-3.8-flash" as const,
+    };
+    const attempts = await Promise.allSettled([
+      store.reserveRequest(request, admission),
+      store.reserveRequest({ ...request, model: "gemini-3.6-flash" }, admission),
+    ]);
+    assert.equal(attempts.filter((item) => item.status === "fulfilled").length, 1);
+    assert.equal(attempts.filter((item) => item.status === "rejected").length, 1);
+    const winner = attempts.find((item): item is PromiseFulfilledResult<Awaited<ReturnType<typeof store.reserveRequest>>> => item.status === "fulfilled")!.value;
+    await assert.rejects(store.settleRequest({ ...winner, record: { ...winner.record, timestamp: "2020-01-01T00:00:00.000Z" } }, { inputTokens: 1, outputTokens: 1, totalTokens: 2 }), /could not be settled safely/);
+    await assert.rejects(store.settleRequest({ ...winner, record: { ...winner.record, operation: "other" } }, { inputTokens: 1, outputTokens: 1, totalTokens: 2 }), /could not be settled safely/);
+    assert.equal((await store.getUsageData()).records.find((record) => record.id === winner.record.id)?.accountingStatus, "reserved");
+    await store.markRequestAmbiguous(winner, "abandoned_reservation");
+    assert.equal((await store.getUsageData()).records.find((record) => record.id === winner.record.id)?.accountingStatus, "transport_ambiguous");
+  });
+});
+
+test("D1 lost admission response is authoritatively reread and never returned as dispatch permission", async () => {
+  const database = new Database(":memory:");
+  try {
+    database.exec(await readFile(new URL("../migrations/0001_initial.sql", import.meta.url), "utf8"));
+    database.exec(await readFile(new URL("../migrations/0003_gemini_usage_model.sql", import.meta.url), "utf8"));
+    database.exec(await readFile(new URL("../migrations/0005_gemini_ambiguity_accounting.sql", import.meta.url), "utf8"));
+    const d1 = new LostMutationResponseDatabase(database, /^INSERT INTO gemini_usage/);
+    const store = new D1GeminiUsageStore(d1 as unknown as D1Database);
+    await assert.rejects(store.reserveRequest({
+      timestamp: new Date().toISOString(), provider: "gemini", operation: "analysis", requestCount: 1,
+      inputTokens: 0, outputTokens: 0, totalTokens: 0, model: "gemini-3.8-flash",
+    }, {
+      cycleRequestsRemaining: 5,
+      limits: { dailyRequests: 5, weeklyRequests: 20, monthlyRequests: 50, dailyTokens: 10_000, weeklyTokens: 30_000, monthlyTokens: 100_000 },
+    }), /outcome is uncertain/);
+    const durable = await store.getUsageData();
+    assert.equal(durable.records.length, 1);
+    assert.equal(durable.records[0]?.accountingStatus, "reserved");
+  } finally {
+    database.close();
+  }
+});
+
+test("D1 lost exact-settlement response is resolved by authoritative reread without a second write", async () => {
+  const database = new Database(":memory:");
+  try {
+    database.exec(await readFile(new URL("../migrations/0001_initial.sql", import.meta.url), "utf8"));
+    database.exec(await readFile(new URL("../migrations/0003_gemini_usage_model.sql", import.meta.url), "utf8"));
+    database.exec(await readFile(new URL("../migrations/0005_gemini_ambiguity_accounting.sql", import.meta.url), "utf8"));
+    const normalStore = new D1GeminiUsageStore(new SqliteD1Database(database) as unknown as D1Database);
+    const admission = { cycleRequestsRemaining: 5, limits: { dailyRequests: 5, weeklyRequests: 20, monthlyRequests: 50, dailyTokens: 10_000, weeklyTokens: 30_000, monthlyTokens: 100_000 } };
+    const reservation = await normalStore.reserveRequest({
+      timestamp: new Date().toISOString(), provider: "gemini", operation: "analysis", requestCount: 1,
+      inputTokens: 0, outputTokens: 0, totalTokens: 0, model: "gemini-3.8-flash",
+    }, admission);
+    const uncertainStore = new D1GeminiUsageStore(new LostMutationResponseDatabase(database, /^UPDATE gemini_usage SET input_tokens/) as unknown as D1Database);
+    await uncertainStore.settleRequest(reservation, { inputTokens: 9, outputTokens: 4, totalTokens: 112 });
+    const record = (await normalStore.getUsageData()).records[0];
+    assert.equal(record?.accountingStatus, "exact");
+    assert.equal(record?.totalTokens, 112);
+    await assert.rejects(
+      normalStore.settleRequest({ ...reservation, record: { ...reservation.record, operation: "other" } }, { inputTokens: 9, outputTokens: 4, totalTokens: 112 }),
+      /could not be settled safely/,
+    );
+  } finally {
+    database.close();
+  }
+});
+
+test("D1 operator retirement and admission serialize without overlapping unresolved ownership", async () => {
+  await withDatabase(async (database, d1) => {
+    database.prepare("INSERT INTO gemini_usage (timestamp, provider, operation, request_count, input_tokens, output_tokens, total_tokens, model, accounting_status, ambiguity_reason) VALUES (?, 'gemini', 'analysis', 1, 0, 0, 0, ?, 'transport_ambiguous', 'timeout')")
+      .run("2025-01-01T00:00:00.000Z", "gemini-3.8-flash");
+    const id = Number((database.prepare("SELECT id FROM gemini_usage WHERE accounting_status = 'transport_ambiguous'").get() as { id: number }).id);
+    const store = new D1GeminiUsageStore(d1);
+    const expectation = { id, timestamp: "2025-01-01T00:00:00.000Z", model: "gemini-3.8-flash" as const, ambiguityReason: "timeout" as const };
+    const admission = {
+      cycleRequestsRemaining: 5,
+      limits: { dailyRequests: 5, weeklyRequests: 20, monthlyRequests: 50, dailyTokens: 10_000, weeklyTokens: 30_000, monthlyTokens: 100_000 },
+    };
+    const outcomes = await Promise.allSettled([
+      store.retireAmbiguousRequest(expectation),
+      store.reserveRequest({ timestamp: new Date().toISOString(), provider: "gemini", operation: "analysis", requestCount: 1, inputTokens: 0, outputTokens: 0, totalTokens: 0, model: "gemini-3.6-flash" }, admission),
+    ]);
+    assert.equal(outcomes[0]?.status, "fulfilled");
+    const data = await store.getUsageData();
+    assert.ok(data.records.filter((record) => ["reserved", "transport_ambiguous"].includes(record.accountingStatus ?? "legacy")).length <= 1);
+  });
+});
+
+test("D1 adapter fails closed if the unresolved uniqueness invariant is corrupted", async () => {
+  await withDatabase(async (database, d1) => {
+    database.exec("DROP INDEX gemini_usage_one_unresolved_request");
+    for (const [index, status] of ["reserved", "transport_ambiguous"].entries()) {
+      database.prepare("INSERT INTO gemini_usage (timestamp, provider, operation, request_count, input_tokens, output_tokens, total_tokens, model, accounting_status, ambiguity_reason) VALUES (?, 'gemini', 'analysis', 1, 0, 0, 0, ?, ?, ?)")
+        .run(`2025-01-0${index + 1}T00:00:00.000Z`, "gemini-3.8-flash", status, status === "transport_ambiguous" ? "timeout" : null);
+    }
+    await assert.rejects(new D1GeminiUsageStore(d1).getUsageData(), /conflicting unresolved/);
   });
 });
 
