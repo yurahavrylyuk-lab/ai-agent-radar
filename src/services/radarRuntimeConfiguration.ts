@@ -22,6 +22,8 @@ export const radarConfigurationNames = [
   "GEMINI_DAILY_TOKEN_LIMIT",
   "GEMINI_WEEKLY_TOKEN_LIMIT",
   "GEMINI_MONTHLY_TOKEN_LIMIT",
+  "X_DISCOVERY_ENABLED",
+  "X_BEARER_TOKEN",
 ] as const;
 
 export interface RadarRuntimeConfiguration {

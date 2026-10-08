@@ -1,4 +1,4 @@
-import { agentAnalysisCategories, type AgentAnalysis, type AgentAnalysisCategory, type StoredDiscovery } from "../types/index.js";
+import { agentAnalysisCategories, type AgentAnalysis, type AgentAnalysisCategory, type StoredDiscovery, type XSourceProvenance } from "../types/index.js";
 
 export class DiscoveryHistoryError extends Error {}
 
@@ -16,7 +16,7 @@ export interface RecentDiscoveryResult {
 export interface DiscoveryHistory {
   getDiscovery(url: string): Promise<StoredDiscovery | undefined>;
   listRecentDiscoveries(query: RecentDiscoveryQuery): Promise<RecentDiscoveryResult>;
-  recordDiscovery(analysis: AgentAnalysis, seenAt?: Date): Promise<StoredDiscovery>;
+  recordDiscovery(analysis: AgentAnalysis, seenAt?: Date, sourceProvenance?: XSourceProvenance): Promise<StoredDiscovery>;
   touchDiscovery(url: string, seenAt?: Date): Promise<StoredDiscovery | undefined>;
 }
 
@@ -31,6 +31,26 @@ export function isValidAgentAnalysis(value: unknown): value is AgentAnalysis {
     nonEmptyString(analysis.summary) && typeof analysis.relevanceScore === "number" && Number.isInteger(analysis.relevanceScore) && analysis.relevanceScore >= 1 && analysis.relevanceScore <= 10 &&
     nonEmptyString(analysis.whyItMatters) && nonEmptyString(analysis.educationalValue) && stringArray(analysis.projectOpportunities) && stringArray(analysis.technologies) &&
     nonEmptyString(analysis.sourceTitle) && nonEmptyString(analysis.sourceUrl);
+}
+
+export function isValidXSourceProvenance(value: unknown): value is XSourceProvenance {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const item = value as Record<string, unknown>;
+  if (item.kind !== "x" || !nonEmptyString(item.postId) || !/^[1-9]\d{0,24}$/.test(item.postId)
+      || !nonEmptyString(item.authorId) || !/^[1-9]\d{0,24}$/.test(item.authorId)
+      || !nonEmptyString(item.label) || !nonEmptyString(item.postUrl)) return false;
+  try {
+    const url = new URL(item.postUrl);
+    return url.protocol === "https:" && url.hostname === "x.com" && url.port === ""
+      && url.username === "" && url.password === "" && url.search === "" && url.hash === ""
+      && url.pathname === `/i/web/status/${item.postId}`;
+  } catch {
+    return false;
+  }
+}
+
+export function copyXSourceProvenance(value: XSourceProvenance | undefined): XSourceProvenance | undefined {
+  return value ? { ...value } : undefined;
 }
 
 export function normalizeDiscoveryUrl(value: string): string {

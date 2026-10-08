@@ -3,7 +3,7 @@
 AI Agent Radar is a Node.js and TypeScript project for discovering practical AI-agent, AI-product, and developer-tool updates. Each manually started monitoring cycle follows this local pipeline:
 
 ```text
-Brave Search → deduplication → Gemini analysis → relevance filtering → Resend email notification
+Brave Search + optional bounded X polling → deduplication → Gemini analysis → relevance filtering → Resend email notification
 ```
 
 The project is an educational discovery and project-idea radar: its aim is not just to summarize news, but to surface what is worth learning from or building with.
@@ -27,8 +27,8 @@ The repository now contains the code foundation for a future Cloudflare Worker w
 Current:
 
 - Local JSON runtime state remains the default local implementation.
-- D1 adapters exist for discoveries, notifications, Brave usage, and Gemini usage.
-- The versioned D1 schema lives in `migrations/`; migration `0003` adds nullable Gemini model attribution while preserving historical rows.
+- D1 adapters exist for discoveries, notifications, Brave/Gemini usage, and the disabled-by-default P6 X inbox/cursor/budget state.
+- The versioned D1 schema lives in `migrations/`; migration `0003` adds nullable Gemini model attribution, while unapplied migration `0004` adds only P6 X tables.
 
 Production schedule: `0 8 * * *` UTC (daily at 08:00 UTC). Each scheduled event runs one bounded monitoring cycle: up to ten quota-guarded Brave searches, up to four new Gemini analyses, and at most one Resend notification. D1 preserves deduplication, usage, discoveries, and notification history.
 
@@ -43,6 +43,14 @@ The existing global limits (5/20/50 requests and 10,000/30,000/100,000 tokens)
 remain fail-closed and normally stop the theoretical 12-attempt chain early.
 `GEMINI_MODEL` is deprecated and ignored; it cannot alter the reviewed pool.
 The pool uses only the approved included Free Tier capacity; paid fallback is not enabled.
+
+### P6 selected-account X discovery
+
+P6 adds a disabled-by-default, source-controlled selected-account timeline adapter. Its fixed v1 registry contains the immutable decimal-string user IDs approved for OpenAI, Anthropic, Google DeepMind, GitHub, and Microsoft, in that order. Handles are display metadata only; the runtime performs no user lookup, account discovery, search, pagination, redirect resolution, or retry.
+
+When later activated, the adapter reserves worst-case local usage before each request and is bounded to five requests/50 Post reads per cycle, 5/35/155 requests by UTC day/ISO week/calendar month, 1,550 reserved reads/month, and an $8 source-controlled monthly ceiling at the approved price. Price approval expires and fails closed. X candidates share the existing four Gemini analysis positions and one digest; no X-only lane exists. X-owned provenance survives D1/JSON persistence and replay, provides visible digest attribution, and prevents below-threshold P4 fallback.
+
+`X_DISCOVERY_ENABLED` defaults to false. Production activation is a separate human decision requiring migration `0004`, the `X_BEARER_TOKEN` Worker secret, current X terms/price/endpoint verification, prepaid-credit approval with auto-recharge off, and a provider-side spending cap. This implementation task does not perform any of those actions.
 
 Repository Brave request limits are configured as:
 

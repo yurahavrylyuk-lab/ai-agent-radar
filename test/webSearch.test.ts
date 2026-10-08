@@ -51,6 +51,12 @@ async function runDefaultSearches(
   let fetches = 0;
   const bodies: unknown[] = [];
   await runMonitoringCycle(undefined, {
+    history: {
+      getDiscovery: async () => undefined,
+      listRecentDiscoveries: async () => ({ discoveries: [], truncated: false }),
+      recordDiscovery: async () => { throw new Error("not used"); },
+      touchDiscovery: async () => undefined,
+    },
     search: (query, options) => searchWeb(query, {
       usageTracker: tracker,
       environment,

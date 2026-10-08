@@ -75,6 +75,21 @@ function sectionLabel(value: string): string {
   return `<p style="margin: 0 0 8px; color: ${ACCENT}; font-family: Arial, Helvetica, sans-serif; font-size: 12px; font-weight: 700; letter-spacing: 1.2px; line-height: 16px; text-transform: uppercase;">${value}</p>`;
 }
 
+function xAttributionText(story: StoredDiscovery): string {
+  const source = story.sourceProvenance;
+  if (!source) return "";
+  return story.analysis.sourceUrl === source.postUrl
+    ? `\nReported on X by ${source.label}`
+    : `\nReported on X by ${source.label}\nX POST\n${source.postUrl}`;
+}
+
+function xAttributionHtml(story: StoredDiscovery): string {
+  const source = story.sourceProvenance;
+  if (!source) return "";
+  const secondary = story.analysis.sourceUrl === source.postUrl ? "" : ` &middot; <a href="${escapeHtml(safeHref(source.postUrl))}" style="color: ${ACCENT};">View X post</a>`;
+  return `<p style="margin: 10px 0 0; color: ${SECONDARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 13px; line-height: 19px;">Reported on X by ${escapeHtml(source.label)}${secondary}</p>`;
+}
+
 /** Formats a stored discovery without deciding eligibility or delivering email. */
 export function formatDiscoveryEmail(discovery: StoredDiscovery): DiscoveryEmailContent {
   const analysis = discovery.analysis;
@@ -109,7 +124,7 @@ ${analysis.technologies.join(", ") || "None"}
 
 ORIGINAL SOURCE
 ${analysis.sourceTitle}
-${sourceUrl}
+${sourceUrl}${xAttributionText(discovery)}
 
 AI Agent Radar
 Automated AI discovery monitor`,
@@ -151,7 +166,7 @@ Automated AI discovery monitor`,
                   <tr><td style="padding: 22px 0; border-top: 1px solid #26344d;">${sectionLabel("What you can learn")}<p style="margin: 0; color: ${PRIMARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 16px; line-height: 24px;">${escapeHtml(analysis.educationalValue)}</p></td></tr>
                   <tr><td style="padding: 22px 0; border-top: 1px solid #26344d;">${sectionLabel("Project ideas")}<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width: 100%; overflow: hidden; border: 1px solid #2a3954; border-radius: 10px; background-color: ${PANEL_BACKGROUND};">${projectIdeaRows(analysis.projectOpportunities)}</table></td></tr>
                   <tr><td style="padding: 22px 0; border-top: 1px solid #26344d;">${sectionLabel("Technologies")}<div>${technologyBadges(analysis.technologies)}</div></td></tr>
-                  <tr><td style="padding: 22px 0 0; border-top: 1px solid #26344d;">${sectionLabel("Original source")}<p style="margin: 0 0 16px; color: ${PRIMARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 16px; font-weight: 700; line-height: 24px;">${escapeHtml(analysis.sourceTitle)}</p><a href="${escapedHref}" style="display: inline-block; padding: 11px 16px; border-radius: 8px; background-color: ${ACCENT}; color: #07111f; font-family: Arial, Helvetica, sans-serif; font-size: 15px; font-weight: 700; line-height: 20px; text-decoration: none;">View original source &#8594;</a><p style="margin: 14px 0 0; color: ${SECONDARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 13px; line-height: 19px; overflow-wrap: anywhere; word-break: break-word;">${escapedSourceUrl}</p></td></tr>
+                  <tr><td style="padding: 22px 0 0; border-top: 1px solid #26344d;">${sectionLabel("Original source")}<p style="margin: 0 0 16px; color: ${PRIMARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 16px; font-weight: 700; line-height: 24px;">${escapeHtml(analysis.sourceTitle)}</p><a href="${escapedHref}" style="display: inline-block; padding: 11px 16px; border-radius: 8px; background-color: ${ACCENT}; color: #07111f; font-family: Arial, Helvetica, sans-serif; font-size: 15px; font-weight: 700; line-height: 20px; text-decoration: none;">View original source &#8594;</a><p style="margin: 14px 0 0; color: ${SECONDARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 13px; line-height: 19px; overflow-wrap: anywhere; word-break: break-word;">${escapedSourceUrl}</p>${xAttributionHtml(discovery)}</td></tr>
                 </table>
               </td>
             </tr>
@@ -196,6 +211,7 @@ function leadBlockHtml(story: StoredDiscovery): string {
                 <ul style="margin: 0 0 20px; padding: 0 0 0 18px;">${keyPointItems}</ul>
                 ${sectionLabel("Source")}
                 <a href="${escapeHtml(href)}" style="display: inline-block; padding: 9px 14px; border-radius: 8px; background-color: ${ACCENT}; color: #07111f; font-family: Arial, Helvetica, sans-serif; font-size: 14px; font-weight: 700; line-height: 18px; text-decoration: none;">${escapeHtml(story.analysis.sourceTitle)} &#8594;</a>
+                ${xAttributionHtml(story)}
               </td>
             </tr>`;
 }
@@ -208,6 +224,7 @@ function conciseBlockHtml(story: StoredDiscovery, slot: number): string {
                 <p style="margin: 0 0 8px; color: ${PRIMARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 15px; font-weight: 700; line-height: 20px;">${escapeHtml(story.analysis.name)}</p>
                 <p style="margin: 0 0 10px; color: ${SECONDARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 14px; line-height: 20px;">${escapeHtml(story.analysis.summary)}</p>
                 <a href="${escapeHtml(href)}" style="color: ${ACCENT}; font-family: Arial, Helvetica, sans-serif; font-size: 13px; font-weight: 700; line-height: 18px; text-decoration: none;">${escapeHtml(story.analysis.sourceTitle)} &#8594;</a>
+                ${xAttributionHtml(story)}
               </td>
             </tr>`;
 }
@@ -235,10 +252,10 @@ export function formatDigestEmail(
       `SUMMARY\n${lead.analysis.summary}`,
       `WHY IT MATTERS\n${lead.analysis.whyItMatters}`,
       `KEY POINTS\n${textList(lead.analysis.projectOpportunities)}`,
-      `SOURCE\n${lead.analysis.sourceTitle}\n${lead.analysis.sourceUrl}`,
+      `SOURCE\n${lead.analysis.sourceTitle}\n${lead.analysis.sourceUrl}${xAttributionText(lead)}`,
     ].join("\n\n"),
     ...concise.map((story, i) =>
-      [`STORY ${i + 2}\n${story.analysis.name}`, story.analysis.summary, `SOURCE\n${story.analysis.sourceTitle}\n${story.analysis.sourceUrl}`].join("\n\n"),
+      [`STORY ${i + 2}\n${story.analysis.name}`, story.analysis.summary, `SOURCE\n${story.analysis.sourceTitle}\n${story.analysis.sourceUrl}${xAttributionText(story)}`].join("\n\n"),
     ),
     "AI Agent Radar\nAutomated AI discovery monitor",
   ];

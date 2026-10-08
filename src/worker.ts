@@ -10,6 +10,8 @@ import { createGeminiCycleContext, generateWithGemini } from "./tools/llm/gemini
 import { sendWithResend } from "./tools/email/resend.js";
 import { searchWeb } from "./tools/webSearch.js";
 import { runMonitoringCycle, type MonitoringCycleDependencies } from "./services/monitor.js";
+import { D1XStore } from "./services/d1XStore.js";
+import { collectXDiscoveries } from "./services/xDiscovery.js";
 import type { MonitoringCycleResult } from "./types/index.js";
 
 export const MAX_SCHEDULED_OUTCOMES_LOGGED = 10;
@@ -35,6 +37,8 @@ export interface RadarWorkerEnv {
   RESEND_API_KEY: string;
   NOTIFICATION_EMAIL: string;
   CONTROLLED_EXECUTION_TOKEN?: string;
+  X_DISCOVERY_ENABLED?: string;
+  X_BEARER_TOKEN?: string;
 }
 
 export interface ScheduledCycleSummary {
@@ -64,6 +68,14 @@ export interface ScheduledCycleSummary {
   freshStoriesSent: number;
   replayStoriesSent: number;
   replayLookupTruncated: boolean;
+  xRequestsAttempted: number;
+  xPostsReceived: number;
+  xCandidatesAdmitted: number;
+  xDuplicates: number;
+  xAccountsFailed: number;
+  xTruncated: boolean;
+  xFailures: MonitoringCycleResult["xFailures"];
+  xBlockedReason?: MonitoringCycleResult["xBlockedReason"];
   geminiBlockedReason?: MonitoringCycleResult["geminiBlockedReason"];
   outcomesTotal: number;
   outcomesOmitted: number;
@@ -88,6 +100,7 @@ function redactScheduledError(error: string, env: RadarWorkerEnv): string {
     env.RESEND_API_KEY,
     env.NOTIFICATION_EMAIL,
     env.CONTROLLED_EXECUTION_TOKEN,
+    env.X_BEARER_TOKEN,
   ]
     .filter((value): value is string => typeof value === "string" && value.length > 0)
     .sort((left, right) => right.length - left.length);
@@ -148,6 +161,14 @@ export function createScheduledCycleSummary(
     freshStoriesSent: result.freshStoriesSent,
     replayStoriesSent: result.replayStoriesSent,
     replayLookupTruncated: result.replayLookupTruncated,
+    xRequestsAttempted: result.xRequestsAttempted,
+    xPostsReceived: result.xPostsReceived,
+    xCandidatesAdmitted: result.xCandidatesAdmitted,
+    xDuplicates: result.xDuplicates,
+    xAccountsFailed: result.xAccountsFailed,
+    xTruncated: result.xTruncated,
+    xFailures: result.xFailures.slice(0, 5).map((failure) => ({ ...failure })),
+    ...(result.xBlockedReason === undefined ? {} : { xBlockedReason: result.xBlockedReason }),
     ...(result.geminiBlockedReason === undefined ? {} : { geminiBlockedReason: result.geminiBlockedReason }),
     outcomesTotal: result.outcomes.length,
     outcomesOmitted: Math.max(0, result.outcomes.length - outcomes.length),
@@ -162,6 +183,7 @@ export function createWorkerPersistence(env: RadarWorkerEnv) {
     notificationHistory: new D1NotificationHistory(env.DB),
     braveUsageStore: new D1BraveUsageStore(env.DB),
     geminiUsageStore: new D1GeminiUsageStore(env.DB),
+    xStore: new D1XStore(env.DB),
   };
 }
 
@@ -188,8 +210,12 @@ export function createWorkerMonitoringDependencies(
       environment: configuration.environment,
       freshness: options?.freshness,
     }),
-    process: (result) => processSearchResult(result, {
+    collectX: (now) => collectXDiscoveries({ store: persistence.xStore, environment: configuration.environment, now }),
+    resolveXPost: (postId) => persistence.xStore.getStoryByPostId(postId),
+    markXStoryProcessed: (storyUrl) => persistence.xStore.markStoryProcessed(storyUrl),
+    process: (result, sourceProvenance) => processSearchResult(result, {
       history: persistence.discoveryHistory,
+      sourceProvenance,
       analyze: (searchResult) => analyzeSearchResult(searchResult, {
         generate: (input) => generateWithGemini(input, {
           usageTracker: persistence.geminiUsageStore,

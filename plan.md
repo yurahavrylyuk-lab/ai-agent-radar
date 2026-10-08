@@ -221,7 +221,7 @@ Concrete acceptance case: a major official release such as **GPT-6.1 Sol**, publ
 
 ## P6 · X.com Source Integration
 
-**Status:** TODO — after P5. Architect approval required before implementation.
+**Status:** ✅ DONE — approved bounded implementation is ready for independent review; production activation remains disabled and separately protected.
 
 Add X.com as a bounded, high-signal discovery source using selected trustworthy AI and developer accounts, with possible bounded X search only when Architect-approved.
 
@@ -233,7 +233,7 @@ Required future design scope:
 - define API/authentication, rate-limit, cost, account-selection, and failure-isolation boundaries;
 - preserve Brave and Gemini limits, four fresh analyses, one digest, existing deduplication, and notification history.
 
-**Architecture gate:** no X implementation, API subscription, credential change, or production configuration change without explicit architecture approval.
+**Architecture gate:** satisfied for source implementation by the approved architecture and exact five-ID registry dated 2026-10-08. No API subscription, credential, migration application, paid credits, or production configuration/deployment was authorized or performed.
 
 ---
 
@@ -259,7 +259,7 @@ Required future design scope:
 
 `P0 → P1 → P2 → P3 → P4 → P5 → P6 → P7`
 
-Current next product item: **P5 — Discovery Reliability**. Do not begin P6 or P7 unless P5 is complete or explicitly deferred by the human owner.
+Current next product item: **P7 — User Feedback**. P6 production activation remains a separate human-controlled release decision.
 
 ---
 

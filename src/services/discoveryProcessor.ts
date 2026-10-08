@@ -1,6 +1,6 @@
 import { analyzeSearchResult } from "./analysisAgent.js";
 import type { DiscoveryHistory } from "./discoveryHistoryCore.js";
-import type { AgentAnalysis, DiscoveryProcessingResult, SearchResult } from "../types/index.js";
+import type { AgentAnalysis, DiscoveryProcessingResult, SearchResult, XSourceProvenance } from "../types/index.js";
 
 type AnalyzeSearchResult = (result: SearchResult) => Promise<AgentAnalysis>;
 
@@ -8,6 +8,7 @@ export interface DiscoveryProcessorDependencies {
   history?: DiscoveryHistory;
   analyze?: AnalyzeSearchResult;
   now?: () => Date;
+  sourceProvenance?: XSourceProvenance;
 }
 
 function verifySourceIntegrity(analysis: AgentAnalysis, result: SearchResult): void {
@@ -34,6 +35,6 @@ export async function processSearchResult(
   const analyze = dependencies.analyze ?? analyzeSearchResult;
   const analysis = await analyze(result);
   verifySourceIntegrity(analysis, result);
-  const discovery = await history.recordDiscovery(analysis, now());
+  const discovery = await history.recordDiscovery(analysis, now(), dependencies.sourceProvenance);
   return { status: "new", discovery };
 }

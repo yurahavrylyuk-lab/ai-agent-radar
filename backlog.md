@@ -145,7 +145,7 @@ Concrete acceptance case:
 
 ## P6 — X.com Source Integration
 
-**Status:** TODO
+**Status:** ✅ DONE — implemented and offline-validated; remains disabled pending separate production activation approval
 **Priority:** After P5
 
 Add X.com as an additional bounded discovery source.
@@ -160,7 +160,7 @@ Goals:
 - define trust/spam filtering so X does not become an unrestricted noisy firehose
 - preserve Gemini, Brave, deduplication, replay, and email safety limits
 
-**Architecture gate:** design X API/auth/rate-limit strategy before implementation.
+**Architecture gate:** completed by the human-approved selected-account architecture and exact five-ID registry dated 2026-10-08. Production migration, credential, paid credit, configuration, and deployment remain separately protected.
 
 **Done when:** the approved P6 architecture is implemented and tested with bounded, deduplicated, high-signal X discovery feeding the existing pipeline.
 
