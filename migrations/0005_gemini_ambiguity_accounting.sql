@@ -19,6 +19,9 @@ ALTER TABLE gemini_usage ADD COLUMN ambiguity_reason TEXT
 
 ALTER TABLE gemini_usage ADD COLUMN settled_at TEXT;
 ALTER TABLE gemini_usage ADD COLUMN retired_at TEXT;
+ALTER TABLE gemini_usage ADD COLUMN accounting_through TEXT;
+
+UPDATE gemini_usage SET accounting_through = timestamp;
 
 CREATE UNIQUE INDEX gemini_usage_one_unresolved_request
   ON gemini_usage ((1))
@@ -45,24 +48,49 @@ BEGIN
   SELECT RAISE(ABORT, 'invalid Gemini accounting transition');
 END;
 
+CREATE TRIGGER gemini_usage_validate_accounting_interval_insert
+BEFORE INSERT ON gemini_usage
+WHEN NEW.accounting_through IS NULL
+  OR strftime('%s', NEW.accounting_through) IS NULL
+  OR NEW.accounting_through < NEW.timestamp
+BEGIN
+  SELECT RAISE(ABORT, 'invalid Gemini accounting interval');
+END;
+
+CREATE TRIGGER gemini_usage_validate_accounting_interval_update
+BEFORE UPDATE ON gemini_usage
+WHEN NEW.accounting_through IS NULL
+  OR strftime('%s', NEW.accounting_through) IS NULL
+  OR NEW.accounting_through < NEW.timestamp
+  OR NEW.accounting_through < OLD.accounting_through
+BEGIN
+  SELECT RAISE(ABORT, 'invalid Gemini accounting interval');
+END;
+
 CREATE TRIGGER gemini_usage_validate_accounting_insert
 BEFORE INSERT ON gemini_usage
 WHEN NOT (
   (NEW.accounting_status = 'legacy'
+    AND NEW.accounting_through IS NOT NULL
     AND NEW.ambiguity_reason IS NULL AND NEW.settled_at IS NULL AND NEW.retired_at IS NULL)
   OR (NEW.accounting_status = 'reserved'
     AND NEW.input_tokens = 0 AND NEW.output_tokens = 0 AND NEW.total_tokens = 0
+    AND NEW.accounting_through = NEW.timestamp
     AND NEW.ambiguity_reason IS NULL AND NEW.settled_at IS NULL AND NEW.retired_at IS NULL)
   OR (NEW.accounting_status = 'exact'
+    AND NEW.accounting_through = NEW.settled_at
     AND NEW.ambiguity_reason IS NULL AND NEW.settled_at IS NOT NULL AND NEW.retired_at IS NULL)
   OR (NEW.accounting_status = 'confirmed_zero'
     AND NEW.input_tokens = 0 AND NEW.output_tokens = 0 AND NEW.total_tokens = 0
+    AND NEW.accounting_through = NEW.settled_at
     AND NEW.ambiguity_reason IS NULL AND NEW.settled_at IS NOT NULL AND NEW.retired_at IS NULL)
   OR (NEW.accounting_status = 'transport_ambiguous'
     AND NEW.input_tokens = 0 AND NEW.output_tokens = 0 AND NEW.total_tokens = 0
+    AND NEW.accounting_through IS NOT NULL
     AND NEW.ambiguity_reason IS NOT NULL AND NEW.settled_at IS NULL AND NEW.retired_at IS NULL)
   OR (NEW.accounting_status = 'retired_outside_accounting_windows'
     AND NEW.input_tokens = 0 AND NEW.output_tokens = 0 AND NEW.total_tokens = 0
+    AND NEW.accounting_through IS NOT NULL
     AND NEW.ambiguity_reason IS NOT NULL AND NEW.settled_at IS NULL AND NEW.retired_at IS NOT NULL)
 )
 BEGIN
@@ -73,20 +101,26 @@ CREATE TRIGGER gemini_usage_validate_accounting_update
 BEFORE UPDATE ON gemini_usage
 WHEN NOT (
   (NEW.accounting_status = 'legacy'
+    AND NEW.accounting_through IS NOT NULL
     AND NEW.ambiguity_reason IS NULL AND NEW.settled_at IS NULL AND NEW.retired_at IS NULL)
   OR (NEW.accounting_status = 'reserved'
     AND NEW.input_tokens = 0 AND NEW.output_tokens = 0 AND NEW.total_tokens = 0
+    AND NEW.accounting_through = NEW.timestamp
     AND NEW.ambiguity_reason IS NULL AND NEW.settled_at IS NULL AND NEW.retired_at IS NULL)
   OR (NEW.accounting_status = 'exact'
+    AND NEW.accounting_through = NEW.settled_at
     AND NEW.ambiguity_reason IS NULL AND NEW.settled_at IS NOT NULL AND NEW.retired_at IS NULL)
   OR (NEW.accounting_status = 'confirmed_zero'
     AND NEW.input_tokens = 0 AND NEW.output_tokens = 0 AND NEW.total_tokens = 0
+    AND NEW.accounting_through = NEW.settled_at
     AND NEW.ambiguity_reason IS NULL AND NEW.settled_at IS NOT NULL AND NEW.retired_at IS NULL)
   OR (NEW.accounting_status = 'transport_ambiguous'
     AND NEW.input_tokens = 0 AND NEW.output_tokens = 0 AND NEW.total_tokens = 0
+    AND NEW.accounting_through IS NOT NULL
     AND NEW.ambiguity_reason IS NOT NULL AND NEW.settled_at IS NULL AND NEW.retired_at IS NULL)
   OR (NEW.accounting_status = 'retired_outside_accounting_windows'
     AND NEW.input_tokens = 0 AND NEW.output_tokens = 0 AND NEW.total_tokens = 0
+    AND NEW.accounting_through IS NOT NULL
     AND NEW.ambiguity_reason IS NOT NULL AND NEW.settled_at IS NULL AND NEW.retired_at IS NOT NULL)
 )
 BEGIN

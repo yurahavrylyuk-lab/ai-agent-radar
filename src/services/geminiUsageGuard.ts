@@ -1,5 +1,5 @@
 import type { RuntimeEnvironment } from "./radarRuntimeConfiguration.js";
-import { getGeminiUtcAccountingWindows, isGeminiTimestampInAnyActiveWindow, parseGeminiUsageTimestamp } from "./geminiAccountingWindows.js";
+import { getGeminiUtcAccountingWindows, isGeminiAccountingIntervalInAnyActiveWindow, isGeminiAccountingIntervalInWindow, parseGeminiUsageTimestamp } from "./geminiAccountingWindows.js";
 import { geminiAccountingStatusOf, isGeminiUsageRecord, type GeminiUsageData, type GeminiUsageRecord, type GeminiUsageStore } from "./geminiUsageTracker.js";
 
 export interface GeminiUsageLimits { dailyRequests: number; weeklyRequests: number; monthlyRequests: number; dailyTokens: number; weeklyTokens: number; monthlyTokens: number; }
@@ -58,9 +58,13 @@ export function getGeminiUsageCounts(records: GeminiUsageRecord[], now = new Dat
   for (const record of records) {
     const timestamp = parseGeminiUsageTimestamp(record.timestamp);
     if (timestamp > windows.now) throw new Error("Gemini usage contains a future request timestamp.");
-    const day = timestamp >= windows.dayStart && timestamp < windows.nextDayStart;
-    const week = timestamp >= windows.weekStart && timestamp < windows.nextWeekStart;
-    const month = timestamp >= windows.monthStart && timestamp < windows.nextMonthStart;
+    if (record.accountingThrough !== undefined && record.accountingThrough !== null &&
+      parseGeminiUsageTimestamp(record.accountingThrough) > windows.now) {
+      throw new Error("Gemini usage contains a future accounting interval.");
+    }
+    const day = isGeminiAccountingIntervalInWindow(record.timestamp, record.accountingThrough, windows.dayStart, windows.nextDayStart);
+    const week = isGeminiAccountingIntervalInWindow(record.timestamp, record.accountingThrough, windows.weekStart, windows.nextWeekStart);
+    const month = isGeminiAccountingIntervalInWindow(record.timestamp, record.accountingThrough, windows.monthStart, windows.nextMonthStart);
     if (day) { counts.dailyRequests++; counts.dailyTokens += record.totalTokens; }
     if (week) { counts.weeklyRequests++; counts.weeklyTokens += record.totalTokens; }
     if (month) { counts.monthlyRequests++; counts.monthlyTokens += record.totalTokens; }
@@ -102,6 +106,12 @@ function structuredAccountingBlock(data: GeminiUsageData, now: Date): "usage_unk
     const timestamp = parseGeminiUsageTimestamp(record.timestamp);
     const nowInstant = now.getTime();
     if (timestamp > nowInstant) throw new Error("Gemini usage contains a future request timestamp.");
+    if (record.accountingThrough !== undefined && record.accountingThrough !== null) {
+      const accountingThrough = parseGeminiUsageTimestamp(record.accountingThrough);
+      if (accountingThrough < timestamp || accountingThrough > nowInstant) {
+        throw new Error("Gemini usage contains an invalid accounting interval.");
+      }
+    }
     if (record.settledAt !== undefined && record.settledAt !== null) {
       const settledAt = parseGeminiUsageTimestamp(record.settledAt);
       if (settledAt < timestamp || settledAt > nowInstant) throw new Error("Gemini usage contains an invalid settlement timestamp.");
@@ -110,7 +120,8 @@ function structuredAccountingBlock(data: GeminiUsageData, now: Date): "usage_unk
       const retiredAt = parseGeminiUsageTimestamp(record.retiredAt);
       if (retiredAt < timestamp || retiredAt > nowInstant) throw new Error("Gemini usage contains an invalid retirement timestamp.");
     }
-    if (status === "retired_outside_accounting_windows" && isGeminiTimestampInAnyActiveWindow(record.timestamp, now)) {
+    if (status === "retired_outside_accounting_windows" &&
+      isGeminiAccountingIntervalInAnyActiveWindow(record.timestamp, record.accountingThrough, now)) {
       return "usage_unknown";
     }
   }

@@ -1,13 +1,15 @@
 import { mkdir, open, readFile, rename, unlink, writeFile, type FileHandle } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { getGeminiUsageCounts, reachedGeminiBlockedReason } from "./geminiUsageGuard.js";
-import { isGeminiTimestampInAnyActiveWindow } from "./geminiAccountingWindows.js";
+import { isGeminiAccountingIntervalInAnyActiveWindow } from "./geminiAccountingWindows.js";
 import {
   geminiAccountingStatusOf,
   isGeminiUsageRecord,
   type GeminiAmbiguityReason,
   type GeminiAmbiguityRetirementExpectation,
   type GeminiAmbiguityRetirementResult,
+  type GeminiReservedReconciliationExpectation,
+  type GeminiReservedReconciliationResult,
   type GeminiUsageAdmission,
   type GeminiUsageData,
   type GeminiUsageRecord,
@@ -21,7 +23,10 @@ function copyRecord(record: GeminiUsageRecord): GeminiUsageRecord { return { ...
 
 /** Local, atomic JSON implementation of the Gemini usage persistence boundary. */
 export class LocalJsonGeminiUsageStore implements GeminiUsageStore {
-  constructor(private readonly filePath = resolve(process.cwd(), "data", "gemini-usage.json")) {}
+  constructor(
+    private readonly filePath = resolve(process.cwd(), "data", "gemini-usage.json"),
+    private readonly now: () => Date = () => new Date(),
+  ) {}
 
   async getUsageData(): Promise<GeminiUsageData> {
     try {
@@ -63,7 +68,7 @@ export class LocalJsonGeminiUsageStore implements GeminiUsageStore {
     record: GeminiUsageRecord & { model: ApprovedGeminiModel },
     admission: GeminiUsageAdmission,
   ): Promise<GeminiUsageReservation> {
-    if (!isGeminiUsageRecord({ ...record, accountingStatus: "reserved" }) ||
+    if (!isGeminiUsageRecord({ ...record, accountingStatus: "reserved", accountingThrough: record.timestamp }) ||
       record.inputTokens !== 0 || record.outputTokens !== 0 || record.totalTokens !== 0 ||
       !Number.isSafeInteger(admission.cycleRequestsRemaining) || admission.cycleRequestsRemaining <= 0) {
       throw new Error("Gemini usage reservation has an invalid format.");
@@ -76,7 +81,7 @@ export class LocalJsonGeminiUsageStore implements GeminiUsageStore {
         throw new Error("Gemini usage reservation conflicts with an unresolved request.");
       }
       if (data.records.some((item) => geminiAccountingStatusOf(item) === "retired_outside_accounting_windows" &&
-        isGeminiTimestampInAnyActiveWindow(item.timestamp, new Date(record.timestamp)))) {
+        isGeminiAccountingIntervalInAnyActiveWindow(item.timestamp, item.accountingThrough, new Date(record.timestamp)))) {
         throw new Error("Gemini retired ambiguity is active after a clock rollback.");
       }
       const counts = getGeminiUsageCounts(data.records, new Date(record.timestamp));
@@ -86,6 +91,7 @@ export class LocalJsonGeminiUsageStore implements GeminiUsageStore {
       const index = data.records.length;
       const nextId = data.records.reduce((maximum, item) => Math.max(maximum, item.id ?? 0), 0) + 1;
       const stored = { ...record, id: nextId, accountingStatus: "reserved" as const };
+      stored.accountingThrough = stored.timestamp;
       reservation = { id: `local:${index}:${record.timestamp}`, record: copyRecord(stored) as GeminiUsageRecord & { model: ApprovedGeminiModel } };
       await this.write({ records: [...data.records, stored], usageUnknown: false });
     });
@@ -101,7 +107,8 @@ export class LocalJsonGeminiUsageStore implements GeminiUsageStore {
       if (this.matchesReservationIdentity(record, reservation) && record.accountingStatus === "exact" && record.inputTokens === usage.inputTokens &&
         record.outputTokens === usage.outputTokens && record.totalTokens === usage.totalTokens) return;
       this.assertOwnedReserved(record, reservation);
-      const settled = { ...record, ...usage, accountingStatus: "exact" as const, settledAt: new Date().toISOString() };
+      const settledAt = this.now().toISOString();
+      const settled = { ...record, ...usage, accountingStatus: "exact" as const, settledAt, accountingThrough: settledAt };
       if (!isGeminiUsageRecord(settled)) throw new Error("Gemini usage settlement has an invalid format.");
       await this.write({ ...data, records: data.records.map((item, itemIndex) => itemIndex === index ? settled : item) });
     });
@@ -114,7 +121,8 @@ export class LocalJsonGeminiUsageStore implements GeminiUsageStore {
       const record = data.records[index];
       if (this.matchesReservationIdentity(record, reservation) && record.accountingStatus === "confirmed_zero") return;
       this.assertOwnedReserved(record, reservation);
-      const settled = { ...record, accountingStatus: "confirmed_zero" as const, settledAt: new Date().toISOString() };
+      const settledAt = this.now().toISOString();
+      const settled = { ...record, accountingStatus: "confirmed_zero" as const, settledAt, accountingThrough: settledAt };
       await this.write({ ...data, records: data.records.map((item, itemIndex) => itemIndex === index ? settled : item) });
     });
   }
@@ -126,9 +134,41 @@ export class LocalJsonGeminiUsageStore implements GeminiUsageStore {
       const record = data.records[index];
       if (this.matchesReservationIdentity(record, reservation) && record.accountingStatus === "transport_ambiguous" && record.ambiguityReason === reason) return;
       this.assertOwnedReserved(record, reservation);
-      const ambiguous = { ...record, accountingStatus: "transport_ambiguous" as const, ambiguityReason: reason };
+      const ambiguous = { ...record, accountingStatus: "transport_ambiguous" as const, ambiguityReason: reason,
+        accountingThrough: this.now().toISOString() };
       await this.write({ ...data, records: data.records.map((item, itemIndex) => itemIndex === index ? ambiguous : item) });
     });
+  }
+
+  async reconcileAbandonedReservation(
+    expectation: GeminiReservedReconciliationExpectation,
+  ): Promise<GeminiReservedReconciliationResult> {
+    let result: GeminiReservedReconciliationResult | undefined;
+    await this.withExclusiveMutation(async () => {
+      const data = await this.getUsageData();
+      if (data.usageUnknown) throw new Error("Gemini legacy usage state blocks structured reconciliation.");
+      const unresolved = data.records.filter((record) =>
+        ["reserved", "transport_ambiguous"].includes(geminiAccountingStatusOf(record)));
+      if (unresolved.length !== 1) throw new Error("Gemini reserved reconciliation requires exactly one unresolved record.");
+      const index = data.records.findIndex((record) => record.id === expectation.id);
+      const record = data.records[index];
+      if (record?.accountingStatus === "transport_ambiguous" && record.ambiguityReason === "abandoned_reservation" &&
+        this.matchesReconciliation(record, expectation)) {
+        result = "already_reconciled";
+        return;
+      }
+      if (!record || record.accountingStatus !== "reserved" || !this.matchesReconciliation(record, expectation) ||
+        record.inputTokens !== 0 || record.outputTokens !== 0 || record.totalTokens !== 0) {
+        throw new Error("Gemini reserved reconciliation preconditions were not satisfied.");
+      }
+      const reconciled = { ...record, accountingStatus: "transport_ambiguous" as const,
+        ambiguityReason: "abandoned_reservation" as const, accountingThrough: this.now().toISOString() };
+      if (!isGeminiUsageRecord(reconciled)) throw new Error("Gemini reserved reconciliation produced invalid state.");
+      await this.write({ ...data, records: data.records.map((item, itemIndex) => itemIndex === index ? reconciled : item) });
+      result = "reconciled";
+    });
+    if (!result) throw new Error("Gemini reserved reconciliation outcome is uncertain; authoritative reread is required.");
+    return result;
   }
 
   async retireAmbiguousRequest(expectation: GeminiAmbiguityRetirementExpectation): Promise<GeminiAmbiguityRetirementResult> {
@@ -144,10 +184,10 @@ export class LocalJsonGeminiUsageStore implements GeminiUsageStore {
       }
       if (!record || record.accountingStatus !== "transport_ambiguous" || !this.matchesRetirement(record, expectation) ||
         record.inputTokens !== 0 || record.outputTokens !== 0 || record.totalTokens !== 0 ||
-        isGeminiTimestampInAnyActiveWindow(record.timestamp, new Date())) {
+        isGeminiAccountingIntervalInAnyActiveWindow(record.timestamp, record.accountingThrough, this.now())) {
         throw new Error("Gemini ambiguity retirement preconditions were not satisfied.");
       }
-      const retired = { ...record, accountingStatus: "retired_outside_accounting_windows" as const, retiredAt: new Date().toISOString() };
+      const retired = { ...record, accountingStatus: "retired_outside_accounting_windows" as const, retiredAt: this.now().toISOString() };
       await this.write({ ...data, records: data.records.map((item, itemIndex) => itemIndex === index ? retired : item) });
       result = "retired";
     });
@@ -177,6 +217,11 @@ export class LocalJsonGeminiUsageStore implements GeminiUsageStore {
   private matchesRetirement(record: GeminiUsageRecord, expectation: GeminiAmbiguityRetirementExpectation): boolean {
     return record.id === expectation.id && record.timestamp === expectation.timestamp && record.model === expectation.model &&
       record.ambiguityReason === expectation.ambiguityReason;
+  }
+
+  private matchesReconciliation(record: GeminiUsageRecord, expectation: GeminiReservedReconciliationExpectation): boolean {
+    return record.id === expectation.id && record.timestamp === expectation.timestamp && record.provider === "gemini" &&
+      record.operation === expectation.operation && record.requestCount === 1 && record.model === expectation.model;
   }
 
   private async withExclusiveMutation<T>(callback: () => Promise<T>): Promise<T> {

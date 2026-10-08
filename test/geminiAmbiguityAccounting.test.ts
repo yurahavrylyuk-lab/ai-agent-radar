@@ -95,7 +95,7 @@ test("UTC count results do not depend on process timezone", () => {
 test("structured unresolved state blocks preflight while retired history outside all windows does not", async () => {
   const base = {
     id: 18, timestamp: "2026-10-08T08:03:00.000Z", provider: "gemini" as const, operation: "analysis", requestCount: 1 as const,
-    inputTokens: 0, outputTokens: 0, totalTokens: 0, model: "gemini-3.8-flash",
+    inputTokens: 0, outputTokens: 0, totalTokens: 0, model: "gemini-3.8-flash", accountingThrough: "2026-10-08T08:03:01.000Z",
   };
   const blocked = await inspectGeminiAvailability({ getUsageData: async () => ({ usageUnknown: false, records: [{ ...base, accountingStatus: "transport_ambiguous", ambiguityReason: "timeout" }] }) }, environment, new Date("2026-10-09T00:00:00.000Z"));
   assert.deepEqual(blocked, { allowed: false, reason: "usage_unknown" });
@@ -115,6 +115,7 @@ test("operator retirement refuses active windows and recognizes a safe exact tra
   const data: GeminiUsageData = { usageUnknown: false, records: [{
     ...expectation, provider: "gemini", operation: "analysis", requestCount: 1,
     inputTokens: 0, outputTokens: 0, totalTokens: 0, accountingStatus: "transport_ambiguous",
+    accountingThrough: "2026-10-08T08:03:01.000Z",
   }] };
   let retireCalls = 0;
   const store = {

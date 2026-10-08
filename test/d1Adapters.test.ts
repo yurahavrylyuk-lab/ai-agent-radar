@@ -6,6 +6,7 @@ import { D1BraveUsageStore } from "../src/services/d1BraveUsageStore.js";
 import { D1DiscoveryHistory } from "../src/services/d1DiscoveryHistory.js";
 import { D1GeminiUsageStore } from "../src/services/d1GeminiUsageStore.js";
 import { D1NotificationHistory } from "../src/services/d1NotificationHistory.js";
+import { reconcileStrandedGeminiReservation } from "../src/services/geminiAmbiguityRecovery.js";
 import { checkBraveSearchUsage } from "../src/services/usageGuard.js";
 import { checkGeminiUsage, getGeminiUsageCounts } from "../src/services/geminiUsageGuard.js";
 import worker, { type RadarWorkerEnv } from "../src/worker.js";
@@ -290,12 +291,13 @@ test("migration 0005 preserves legacy rows and enforces one unresolved structure
     database.prepare("INSERT INTO gemini_usage (timestamp, provider, operation, request_count, input_tokens, output_tokens, total_tokens, model) VALUES (?, 'gemini', 'analysis', 1, 0, 0, 0, ?)")
       .run("2026-10-08T08:02:03.393Z", "gemini-3.8-flash");
     database.exec(await readFile(new URL("../migrations/0005_gemini_ambiguity_accounting.sql", import.meta.url), "utf8"));
-    const legacy = database.prepare("SELECT accounting_status, ambiguity_reason, settled_at, retired_at FROM gemini_usage WHERE id = 1").get() as Record<string, unknown>;
-    assert.deepEqual(legacy, { accounting_status: "legacy", ambiguity_reason: null, settled_at: null, retired_at: null });
-    database.prepare("INSERT INTO gemini_usage (timestamp, provider, operation, request_count, input_tokens, output_tokens, total_tokens, model, accounting_status) VALUES (?, 'gemini', 'analysis', 1, 0, 0, 0, ?, 'reserved')")
-      .run("2025-01-01T00:00:00.000Z", "gemini-3.8-flash");
-    assert.throws(() => database.prepare("INSERT INTO gemini_usage (timestamp, provider, operation, request_count, input_tokens, output_tokens, total_tokens, model, accounting_status, ambiguity_reason) VALUES (?, 'gemini', 'analysis', 1, 0, 0, 0, ?, 'transport_ambiguous', 'timeout')")
-      .run("2025-01-02T00:00:00.000Z", "gemini-3.6-flash"), /UNIQUE constraint failed/);
+    const legacy = database.prepare("SELECT accounting_status, ambiguity_reason, accounting_through, settled_at, retired_at FROM gemini_usage WHERE id = 1").get() as Record<string, unknown>;
+    assert.deepEqual(legacy, { accounting_status: "legacy", ambiguity_reason: null,
+      accounting_through: "2026-10-08T08:02:03.393Z", settled_at: null, retired_at: null });
+    database.prepare("INSERT INTO gemini_usage (timestamp, provider, operation, request_count, input_tokens, output_tokens, total_tokens, model, accounting_status, accounting_through) VALUES (?, 'gemini', 'analysis', 1, 0, 0, 0, ?, 'reserved', ?)")
+      .run("2025-01-01T00:00:00.000Z", "gemini-3.8-flash", "2025-01-01T00:00:00.000Z");
+    assert.throws(() => database.prepare("INSERT INTO gemini_usage (timestamp, provider, operation, request_count, input_tokens, output_tokens, total_tokens, model, accounting_status, ambiguity_reason, accounting_through) VALUES (?, 'gemini', 'analysis', 1, 0, 0, 0, ?, 'transport_ambiguous', 'timeout', ?)")
+      .run("2025-01-02T00:00:00.000Z", "gemini-3.6-flash", "2025-01-02T00:00:00.000Z"), /UNIQUE constraint failed/);
   } finally {
     database.close();
   }
@@ -376,10 +378,39 @@ test("D1 lost exact-settlement response is resolved by authoritative reread with
   }
 });
 
+test("D1 stranded reservation reconciliation uses exact CAS and authoritative reread", async () => {
+  await withDatabase(async (database, d1) => {
+    const store = new D1GeminiUsageStore(d1);
+    const reservation = await store.reserveRequest({
+      timestamp: new Date().toISOString(), provider: "gemini", operation: "analysis", requestCount: 1,
+      inputTokens: 0, outputTokens: 0, totalTokens: 0, model: "gemini-3.8-flash",
+    }, { cycleRequestsRemaining: 5, limits: {
+      dailyRequests: 5, weeklyRequests: 20, monthlyRequests: 50,
+      dailyTokens: 10_000, weeklyTokens: 30_000, monthlyTokens: 100_000,
+    } });
+    const expectation = { id: reservation.record.id!, timestamp: reservation.record.timestamp,
+      model: reservation.record.model, operation: reservation.record.operation };
+    const restarted = new D1GeminiUsageStore(new SqliteD1Database(database) as unknown as D1Database);
+    await assert.rejects(reconcileStrandedGeminiReservation(restarted, expectation, new Date(), false), /original invocation/);
+    await assert.rejects(reconcileStrandedGeminiReservation(restarted,
+      { ...expectation, timestamp: "2020-01-01T00:00:00.000Z" }, new Date(), true), /identity/);
+
+    const uncertain = new D1GeminiUsageStore(new LostMutationResponseDatabase(database,
+      /^UPDATE gemini_usage SET accounting_status = 'transport_ambiguous'/) as unknown as D1Database);
+    assert.equal(await reconcileStrandedGeminiReservation(uncertain, expectation, new Date(), true), "already_reconciled");
+    const record = (await restarted.getUsageData()).records.find((item) => item.id === expectation.id)!;
+    assert.equal(record.accountingStatus, "transport_ambiguous");
+    assert.equal(record.ambiguityReason, "abandoned_reservation");
+    assert.deepEqual([record.inputTokens, record.outputTokens, record.totalTokens], [0, 0, 0]);
+    assert.ok(record.accountingThrough && record.accountingThrough >= record.timestamp);
+    assert.equal(await reconcileStrandedGeminiReservation(restarted, expectation, new Date(), true), "already_reconciled");
+  });
+});
+
 test("D1 operator retirement and admission serialize without overlapping unresolved ownership", async () => {
   await withDatabase(async (database, d1) => {
-    database.prepare("INSERT INTO gemini_usage (timestamp, provider, operation, request_count, input_tokens, output_tokens, total_tokens, model, accounting_status, ambiguity_reason) VALUES (?, 'gemini', 'analysis', 1, 0, 0, 0, ?, 'transport_ambiguous', 'timeout')")
-      .run("2025-01-01T00:00:00.000Z", "gemini-3.8-flash");
+    database.prepare("INSERT INTO gemini_usage (timestamp, provider, operation, request_count, input_tokens, output_tokens, total_tokens, model, accounting_status, ambiguity_reason, accounting_through) VALUES (?, 'gemini', 'analysis', 1, 0, 0, 0, ?, 'transport_ambiguous', 'timeout', ?)")
+      .run("2025-01-01T00:00:00.000Z", "gemini-3.8-flash", "2025-01-01T00:00:00.000Z");
     const id = Number((database.prepare("SELECT id FROM gemini_usage WHERE accounting_status = 'transport_ambiguous'").get() as { id: number }).id);
     const store = new D1GeminiUsageStore(d1);
     const expectation = { id, timestamp: "2025-01-01T00:00:00.000Z", model: "gemini-3.8-flash" as const, ambiguityReason: "timeout" as const };
@@ -401,8 +432,9 @@ test("D1 adapter fails closed if the unresolved uniqueness invariant is corrupte
   await withDatabase(async (database, d1) => {
     database.exec("DROP INDEX gemini_usage_one_unresolved_request");
     for (const [index, status] of ["reserved", "transport_ambiguous"].entries()) {
-      database.prepare("INSERT INTO gemini_usage (timestamp, provider, operation, request_count, input_tokens, output_tokens, total_tokens, model, accounting_status, ambiguity_reason) VALUES (?, 'gemini', 'analysis', 1, 0, 0, 0, ?, ?, ?)")
-        .run(`2025-01-0${index + 1}T00:00:00.000Z`, "gemini-3.8-flash", status, status === "transport_ambiguous" ? "timeout" : null);
+      database.prepare("INSERT INTO gemini_usage (timestamp, provider, operation, request_count, input_tokens, output_tokens, total_tokens, model, accounting_status, ambiguity_reason, accounting_through) VALUES (?, 'gemini', 'analysis', 1, 0, 0, 0, ?, ?, ?, ?)")
+        .run(`2025-01-0${index + 1}T00:00:00.000Z`, "gemini-3.8-flash", status,
+          status === "transport_ambiguous" ? "timeout" : null, `2025-01-0${index + 1}T00:00:00.000Z`);
     }
     await assert.rejects(new D1GeminiUsageStore(d1).getUsageData(), /conflicting unresolved/);
   });

@@ -1,9 +1,10 @@
 import type { ApprovedGeminiModel } from "../config/geminiModels.js";
-import { getGeminiAmbiguityRetirementTime, isGeminiTimestampInAnyActiveWindow } from "./geminiAccountingWindows.js";
+import { getGeminiAccountingIntervalRetirementTime, isGeminiAccountingIntervalInAnyActiveWindow, isGeminiTimestampInAnyActiveWindow } from "./geminiAccountingWindows.js";
 import {
   geminiAccountingStatusOf,
   type GeminiAmbiguityReason,
   type GeminiAmbiguityRetirementResult,
+  type GeminiReservedReconciliationResult,
   type GeminiUsageData,
   type GeminiUsageRecord,
   type GeminiUsageStore,
@@ -28,6 +29,13 @@ export interface StructuredAmbiguityExpectation {
   timestamp: string;
   model: ApprovedGeminiModel;
   ambiguityReason: GeminiAmbiguityReason;
+}
+
+export interface StrandedReservationExpectation {
+  id: number;
+  timestamp: string;
+  model: ApprovedGeminiModel;
+  operation: string;
 }
 
 export interface LegacyRow17RecoveryEvidence {
@@ -65,10 +73,40 @@ export async function retireStructuredGeminiAmbiguity(
   if (status !== "transport_ambiguous" && status !== "retired_outside_accounting_windows") {
     throw new Error("Gemini ambiguity is not in a retireable accounting state.");
   }
-  if (isGeminiTimestampInAnyActiveWindow(record.timestamp, trustedNow)) {
-    throw new Error(`Gemini ambiguity remains active until ${getGeminiAmbiguityRetirementTime(record.timestamp).toISOString()}.`);
+  if (isGeminiAccountingIntervalInAnyActiveWindow(record.timestamp, record.accountingThrough, trustedNow)) {
+    throw new Error(`Gemini ambiguity remains active until ${getGeminiAccountingIntervalRetirementTime(record.timestamp, record.accountingThrough).toISOString()}.`);
   }
   return store.retireAmbiguousRequest(expectation);
+}
+
+/** Operator-only reconciliation of a stranded pre-dispatch/in-flight reservation. */
+export async function reconcileStrandedGeminiReservation(
+  store: GeminiUsageStore,
+  expectation: StrandedReservationExpectation,
+  trustedNow: Date,
+  originalInvocationTerminated: boolean,
+): Promise<GeminiReservedReconciliationResult> {
+  if (!originalInvocationTerminated) {
+    throw new Error("Gemini reserved reconciliation requires proof that the original invocation cannot dispatch.");
+  }
+  if (Number.isNaN(trustedNow.getTime())) throw new Error("Gemini reserved reconciliation requires trusted current time.");
+  const data = await store.getUsageData();
+  if (data.usageUnknown) throw new Error("Gemini legacy usage uncertainty blocks structured reconciliation.");
+  const unresolved = data.records.filter((record) =>
+    ["reserved", "transport_ambiguous"].includes(geminiAccountingStatusOf(record)));
+  if (unresolved.length !== 1) throw new Error("Gemini reserved reconciliation requires exactly one unresolved record.");
+  const record = unresolved[0]!;
+  const exactIdentity = record.id === expectation.id && record.timestamp === expectation.timestamp &&
+    record.provider === "gemini" && record.operation === expectation.operation && record.requestCount === 1 &&
+    record.model === expectation.model && record.inputTokens === 0 && record.outputTokens === 0 && record.totalTokens === 0;
+  const recognized = record.accountingStatus === "transport_ambiguous" && record.ambiguityReason === "abandoned_reservation";
+  if (!exactIdentity || (record.accountingStatus !== "reserved" && !recognized)) {
+    throw new Error("Gemini reserved reconciliation identity does not match durable accounting.");
+  }
+  if (new Date(record.timestamp).getTime() > trustedNow.getTime()) {
+    throw new Error("Gemini reserved reconciliation time precedes the reservation.");
+  }
+  return store.reconcileAbandonedReservation(expectation);
 }
 
 /** Pure validation used by the separately authorized legacy incident runbook. */

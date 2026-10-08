@@ -44,10 +44,39 @@ export function isGeminiTimestampInAnyActiveWindow(timestamp: string, now = new 
   return requestInstant >= windows.dayStart || requestInstant >= windows.weekStart || requestInstant >= windows.monthStart;
 }
 
+/** Conservatively attributes a request to every UTC window touched by its durable accounting interval. */
+export function isGeminiAccountingIntervalInWindow(
+  timestamp: string,
+  accountingThrough: string | null | undefined,
+  windowStart: number,
+  windowEnd: number,
+): boolean {
+  const start = parseGeminiUsageTimestamp(timestamp);
+  const through = accountingThrough == null ? start : parseGeminiUsageTimestamp(accountingThrough);
+  if (through < start) throw new Error("Gemini usage contains an invalid accounting interval.");
+  return start < windowEnd && through >= windowStart;
+}
+
+export function isGeminiAccountingIntervalInAnyActiveWindow(
+  timestamp: string,
+  accountingThrough: string | null | undefined,
+  now = new Date(),
+): boolean {
+  const windows = getGeminiUtcAccountingWindows(now);
+  return isGeminiAccountingIntervalInWindow(timestamp, accountingThrough, windows.dayStart, windows.nextDayStart) ||
+    isGeminiAccountingIntervalInWindow(timestamp, accountingThrough, windows.weekStart, windows.nextWeekStart) ||
+    isGeminiAccountingIntervalInWindow(timestamp, accountingThrough, windows.monthStart, windows.nextMonthStart);
+}
+
 export function getGeminiAmbiguityRetirementTime(timestamp: string): Date {
   const request = new Date(parseGeminiUsageTimestamp(timestamp));
   const windows = getGeminiUtcAccountingWindows(request);
   return new Date(Math.max(windows.nextDayStart, windows.nextWeekStart, windows.nextMonthStart));
+}
+
+export function getGeminiAccountingIntervalRetirementTime(timestamp: string, accountingThrough?: string | null): Date {
+  const anchor = accountingThrough ?? timestamp;
+  return getGeminiAmbiguityRetirementTime(anchor);
 }
 
 export function areGeminiTimestampsInSameUtcWindows(left: string, right = new Date()): boolean {

@@ -4,6 +4,8 @@ import {
   type GeminiAmbiguityReason,
   type GeminiAmbiguityRetirementExpectation,
   type GeminiAmbiguityRetirementResult,
+  type GeminiReservedReconciliationExpectation,
+  type GeminiReservedReconciliationResult,
   type GeminiUsageAdmission,
   type GeminiUsageData,
   type GeminiUsageRecord,
@@ -25,13 +27,14 @@ interface GeminiUsageRow {
   model: string | null;
   accounting_status: GeminiUsageRecord["accountingStatus"];
   ambiguity_reason: GeminiUsageRecord["ambiguityReason"];
+  accounting_through: string | null;
   settled_at: string | null;
   retired_at: string | null;
 }
 
 interface GeminiUsageStateRow { usage_unknown: number; }
 
-const SELECT_COLUMNS = "id, timestamp, provider, operation, request_count, input_tokens, output_tokens, total_tokens, model, accounting_status, ambiguity_reason, settled_at, retired_at";
+const SELECT_COLUMNS = "id, timestamp, provider, operation, request_count, input_tokens, output_tokens, total_tokens, model, accounting_status, ambiguity_reason, accounting_through, settled_at, retired_at";
 
 function recordFromRow(row: GeminiUsageRow): GeminiUsageRecord {
   const record: GeminiUsageRecord = {
@@ -46,6 +49,7 @@ function recordFromRow(row: GeminiUsageRow): GeminiUsageRecord {
     model: row.model,
     accountingStatus: row.accounting_status,
     ambiguityReason: row.ambiguity_reason,
+    accountingThrough: row.accounting_through,
     settledAt: row.settled_at,
     retiredAt: row.retired_at,
   };
@@ -89,13 +93,13 @@ export class D1GeminiUsageStore implements GeminiUsageStore {
       throw new Error("Gemini usage record has an invalid format.");
     }
     await this.database.prepare(
-      "INSERT INTO gemini_usage (timestamp, provider, operation, request_count, input_tokens, output_tokens, total_tokens, model, accounting_status, ambiguity_reason, settled_at, retired_at) " +
-      "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+      "INSERT INTO gemini_usage (timestamp, provider, operation, request_count, input_tokens, output_tokens, total_tokens, model, accounting_status, ambiguity_reason, accounting_through, settled_at, retired_at) " +
+      "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
     ).bind(
       record.timestamp, record.provider, record.operation, record.requestCount,
       record.inputTokens, record.outputTokens, record.totalTokens, record.model ?? null,
       geminiAccountingStatusOf(record), record.ambiguityReason ?? null,
-      record.settledAt ?? null, record.retiredAt ?? null,
+      record.accountingThrough ?? record.timestamp, record.settledAt ?? null, record.retiredAt ?? null,
     ).run();
   }
 
@@ -108,7 +112,7 @@ export class D1GeminiUsageStore implements GeminiUsageStore {
     record: GeminiUsageRecord & { model: ApprovedGeminiModel },
     admission: GeminiUsageAdmission,
   ): Promise<GeminiUsageReservation> {
-    if (!isGeminiUsageRecord({ ...record, accountingStatus: "reserved" }) ||
+    if (!isGeminiUsageRecord({ ...record, accountingStatus: "reserved", accountingThrough: record.timestamp }) ||
       record.inputTokens !== 0 || record.outputTokens !== 0 || record.totalTokens !== 0 ||
       !Number.isSafeInteger(admission.cycleRequestsRemaining) || admission.cycleRequestsRemaining <= 0) {
       throw new Error("Gemini usage reservation has an invalid format.");
@@ -121,8 +125,8 @@ export class D1GeminiUsageStore implements GeminiUsageStore {
     const nextWeek = "strftime('%Y-%m-%dT00:00:00.000Z', 'now', '+' || (7 - ((CAST(strftime('%w', 'now') AS INTEGER) + 6) % 7)) || ' days')";
     const nextMonth = "strftime('%Y-%m-01T00:00:00.000Z', 'now', '+1 month')";
     const sql =
-      "INSERT INTO gemini_usage (timestamp, provider, operation, request_count, input_tokens, output_tokens, total_tokens, model, accounting_status) " +
-      `SELECT ${databaseNow}, ?1, ?2, 1, 0, 0, 0, ?3, 'reserved' ` +
+      "INSERT INTO gemini_usage (timestamp, provider, operation, request_count, input_tokens, output_tokens, total_tokens, model, accounting_status, accounting_through) " +
+      `SELECT ${databaseNow}, ?1, ?2, 1, 0, 0, 0, ?3, 'reserved', ${databaseNow} ` +
       "WHERE ?4 > 0 " +
       "AND EXISTS (SELECT 1 FROM gemini_usage_state WHERE id = 1 AND usage_unknown = 0) " +
       "AND NOT EXISTS (SELECT 1 FROM gemini_usage WHERE accounting_status IN ('reserved', 'transport_ambiguous')) " +
@@ -131,13 +135,13 @@ export class D1GeminiUsageStore implements GeminiUsageStore {
         "OR (retired_at IS NOT NULL AND (strftime('%s', retired_at) IS NULL OR retired_at < timestamp))) " +
       `AND NOT EXISTS (SELECT 1 FROM gemini_usage WHERE timestamp > ${databaseNow}) ` +
       "AND NOT EXISTS (SELECT 1 FROM gemini_usage WHERE accounting_status = 'retired_outside_accounting_windows' " +
-        `AND (timestamp >= ${dayStart} OR timestamp >= ${weekStart} OR timestamp >= ${monthStart})) ` +
-      `AND (SELECT COALESCE(SUM(request_count), 0) FROM gemini_usage WHERE timestamp >= ${dayStart} AND timestamp < ${nextDay}) < ?5 ` +
-      `AND (SELECT COALESCE(SUM(request_count), 0) FROM gemini_usage WHERE timestamp >= ${weekStart} AND timestamp < ${nextWeek}) < ?6 ` +
-      `AND (SELECT COALESCE(SUM(request_count), 0) FROM gemini_usage WHERE timestamp >= ${monthStart} AND timestamp < ${nextMonth}) < ?7 ` +
-      `AND (SELECT COALESCE(SUM(total_tokens), 0) FROM gemini_usage WHERE timestamp >= ${dayStart} AND timestamp < ${nextDay}) < ?8 ` +
-      `AND (SELECT COALESCE(SUM(total_tokens), 0) FROM gemini_usage WHERE timestamp >= ${weekStart} AND timestamp < ${nextWeek}) < ?9 ` +
-      `AND (SELECT COALESCE(SUM(total_tokens), 0) FROM gemini_usage WHERE timestamp >= ${monthStart} AND timestamp < ${nextMonth}) < ?10 ` +
+        `AND (accounting_through >= ${dayStart} OR accounting_through >= ${weekStart} OR accounting_through >= ${monthStart})) ` +
+      `AND (SELECT COALESCE(SUM(request_count), 0) FROM gemini_usage WHERE timestamp < ${nextDay} AND COALESCE(accounting_through, timestamp) >= ${dayStart}) < ?5 ` +
+      `AND (SELECT COALESCE(SUM(request_count), 0) FROM gemini_usage WHERE timestamp < ${nextWeek} AND COALESCE(accounting_through, timestamp) >= ${weekStart}) < ?6 ` +
+      `AND (SELECT COALESCE(SUM(request_count), 0) FROM gemini_usage WHERE timestamp < ${nextMonth} AND COALESCE(accounting_through, timestamp) >= ${monthStart}) < ?7 ` +
+      `AND (SELECT COALESCE(SUM(total_tokens), 0) FROM gemini_usage WHERE timestamp < ${nextDay} AND COALESCE(accounting_through, timestamp) >= ${dayStart}) < ?8 ` +
+      `AND (SELECT COALESCE(SUM(total_tokens), 0) FROM gemini_usage WHERE timestamp < ${nextWeek} AND COALESCE(accounting_through, timestamp) >= ${weekStart}) < ?9 ` +
+      `AND (SELECT COALESCE(SUM(total_tokens), 0) FROM gemini_usage WHERE timestamp < ${nextMonth} AND COALESCE(accounting_through, timestamp) >= ${monthStart}) < ?10 ` +
       "RETURNING id, timestamp";
     const statement = this.database.prepare(sql).bind(
       record.provider, record.operation, record.model, admission.cycleRequestsRemaining,
@@ -157,17 +161,19 @@ export class D1GeminiUsageStore implements GeminiUsageStore {
     if (!inserted || !Number.isSafeInteger(inserted.id) || inserted.id <= 0 || !inserted.timestamp) {
       throw new Error("Gemini usage reservation could not be admitted safely.");
     }
-    return { id: `d1:${inserted.id}`, record: { ...record, id: inserted.id, timestamp: inserted.timestamp, accountingStatus: "reserved" } };
+    return { id: `d1:${inserted.id}`, record: { ...record, id: inserted.id, timestamp: inserted.timestamp, accountingThrough: inserted.timestamp, accountingStatus: "reserved" } };
   }
 
   async settleRequest(reservation: GeminiUsageReservation, usage: GeminiUsageSettlement): Promise<void> {
-    if (!isGeminiUsageRecord({ ...reservation.record, ...usage, accountingStatus: "exact", settledAt: new Date().toISOString() })) {
+    const validationSettledAt = new Date(Math.max(Date.now(), new Date(reservation.record.timestamp).getTime())).toISOString();
+    if (!isGeminiUsageRecord({ ...reservation.record, ...usage, accountingStatus: "exact",
+      settledAt: validationSettledAt, accountingThrough: validationSettledAt })) {
       throw new Error("Gemini usage settlement has an invalid format.");
     }
     const id = reservationId(reservation.id);
     const row = await this.database.prepare(
       "UPDATE gemini_usage SET input_tokens = ?1, output_tokens = ?2, total_tokens = ?3, accounting_status = 'exact', " +
-      "settled_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') " +
+      "settled_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), accounting_through = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') " +
       "WHERE id = ?4 AND timestamp = ?5 AND provider = ?6 AND operation = ?7 AND request_count = ?8 AND model = ?9 AND accounting_status = 'reserved' " +
       "AND input_tokens = 0 AND output_tokens = 0 AND total_tokens = 0 RETURNING id",
     ).bind(
@@ -185,7 +191,8 @@ export class D1GeminiUsageStore implements GeminiUsageStore {
   async confirmZeroRequest(reservation: GeminiUsageReservation): Promise<void> {
     const id = reservationId(reservation.id);
     const row = await this.database.prepare(
-      "UPDATE gemini_usage SET accounting_status = 'confirmed_zero', settled_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') " +
+      "UPDATE gemini_usage SET accounting_status = 'confirmed_zero', settled_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), " +
+      "accounting_through = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') " +
       "WHERE id = ?1 AND timestamp = ?2 AND provider = ?3 AND operation = ?4 AND request_count = ?5 AND model = ?6 AND accounting_status = 'reserved' " +
       "AND input_tokens = 0 AND output_tokens = 0 AND total_tokens = 0 RETURNING id",
     ).bind(
@@ -203,7 +210,8 @@ export class D1GeminiUsageStore implements GeminiUsageStore {
   async markRequestAmbiguous(reservation: GeminiUsageReservation, reason: GeminiAmbiguityReason): Promise<void> {
     const id = reservationId(reservation.id);
     const row = await this.database.prepare(
-      "UPDATE gemini_usage SET accounting_status = 'transport_ambiguous', ambiguity_reason = ?1 " +
+      "UPDATE gemini_usage SET accounting_status = 'transport_ambiguous', ambiguity_reason = ?1, " +
+      "accounting_through = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') " +
       "WHERE id = ?2 AND timestamp = ?3 AND provider = ?4 AND operation = ?5 AND request_count = ?6 AND model = ?7 AND accounting_status = 'reserved' " +
       "AND input_tokens = 0 AND output_tokens = 0 AND total_tokens = 0 RETURNING id",
     ).bind(
@@ -219,15 +227,44 @@ export class D1GeminiUsageStore implements GeminiUsageStore {
     throw new Error("Gemini ambiguous outcome could not be recorded safely.");
   }
 
+  async reconcileAbandonedReservation(
+    expectation: GeminiReservedReconciliationExpectation,
+  ): Promise<GeminiReservedReconciliationResult> {
+    const row = await this.database.prepare(
+      "UPDATE gemini_usage SET accounting_status = 'transport_ambiguous', ambiguity_reason = 'abandoned_reservation', " +
+      "accounting_through = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') " +
+      "WHERE id = ?1 AND timestamp = ?2 AND provider = 'gemini' AND operation = ?3 AND request_count = 1 AND model = ?4 " +
+      "AND accounting_status = 'reserved' AND input_tokens = 0 AND output_tokens = 0 AND total_tokens = 0 " +
+      "AND EXISTS (SELECT 1 FROM gemini_usage_state WHERE id = 1 AND usage_unknown = 0) " +
+      "AND NOT EXISTS (SELECT 1 FROM gemini_usage other WHERE other.id <> gemini_usage.id " +
+        "AND other.accounting_status IN ('reserved', 'transport_ambiguous')) RETURNING id",
+    ).bind(expectation.id, expectation.timestamp, expectation.operation, expectation.model)
+      .first<{ id: number }>().catch(() => null);
+    if (row?.id === expectation.id) return "reconciled";
+    const authoritative = await this.getRecord(expectation.id);
+    if (authoritative?.id === expectation.id && authoritative.timestamp === expectation.timestamp &&
+      authoritative.provider === "gemini" && authoritative.operation === expectation.operation &&
+      authoritative.requestCount === 1 && authoritative.model === expectation.model &&
+      authoritative.accountingStatus === "transport_ambiguous" &&
+      authoritative.ambiguityReason === "abandoned_reservation" && authoritative.inputTokens === 0 &&
+      authoritative.outputTokens === 0 && authoritative.totalTokens === 0) {
+      const data = await this.getUsageData();
+      const unresolved = data.records.filter((record) =>
+        ["reserved", "transport_ambiguous"].includes(geminiAccountingStatusOf(record)));
+      if (!data.usageUnknown && unresolved.length === 1 && unresolved[0]?.id === expectation.id) return "already_reconciled";
+    }
+    throw new Error("Gemini reserved reconciliation preconditions were not satisfied.");
+  }
+
   async retireAmbiguousRequest(expectation: GeminiAmbiguityRetirementExpectation): Promise<GeminiAmbiguityRetirementResult> {
     const row = await this.database.prepare(
       "UPDATE gemini_usage SET accounting_status = 'retired_outside_accounting_windows', " +
       "retired_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') " +
       "WHERE id = ?1 AND timestamp = ?2 AND model = ?3 AND accounting_status = 'transport_ambiguous' " +
       "AND ambiguity_reason = ?4 AND input_tokens = 0 AND output_tokens = 0 AND total_tokens = 0 " +
-      "AND timestamp < strftime('%Y-%m-%dT00:00:00.000Z', 'now') " +
-      "AND timestamp < strftime('%Y-%m-%dT00:00:00.000Z', 'now', '-' || ((CAST(strftime('%w', 'now') AS INTEGER) + 6) % 7) || ' days') " +
-      "AND timestamp < strftime('%Y-%m-01T00:00:00.000Z', 'now') " +
+      "AND accounting_through < strftime('%Y-%m-%dT00:00:00.000Z', 'now') " +
+      "AND accounting_through < strftime('%Y-%m-%dT00:00:00.000Z', 'now', '-' || ((CAST(strftime('%w', 'now') AS INTEGER) + 6) % 7) || ' days') " +
+      "AND accounting_through < strftime('%Y-%m-01T00:00:00.000Z', 'now') " +
       "AND EXISTS (SELECT 1 FROM gemini_usage_state WHERE id = 1 AND usage_unknown = 0) RETURNING id",
     ).bind(expectation.id, expectation.timestamp, expectation.model, expectation.ambiguityReason)
       .first<{ id: number }>().catch(() => null);

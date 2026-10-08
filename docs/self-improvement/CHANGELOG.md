@@ -6,6 +6,7 @@
 - Added D1-enforced single unresolved ownership, atomic admission checks, exact identity settlement, crash-safe blocking, and provider-free retirement after all active windows expire.
 - Added migration `0005`, offline lineage evidence, and an incident-specific row-17 runbook whose only eventual mutation is the separately authorized legacy latch clear after `2026-11-01T00:00:00Z`.
 - Preserved model ordering, retries/fallbacks, quotas, replay, Brave, Resend, Cron, and health-only HTTP behavior. P6/X is absent from this deployable production-based branch. No production action or provider call occurred.
+- Analyst fixup added exact operator reconciliation for stranded reservations and durable interval accounting across final dispatch, retry, and fallback boundary crossings; no heuristic margin or guessed usage is used.
 
 ## 2026-10-07 — P5 Discovery Reliability ready for review
 

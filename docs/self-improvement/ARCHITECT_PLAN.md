@@ -6,6 +6,8 @@ Implementation is isolated from deployed production commit `01ef0787cad02c49d453
 
 Legacy row 17 at `2026-10-08T08:02:03.393Z` remains historical unknown usage with unchanged `0/0/0` placeholders. It is active through its UTC day, Monday-start week, and calendar month; its first safe retirement boundary is `2026-11-01T00:00:00Z`. The incident-specific procedure may eventually change only `gemini_usage_state.usage_unknown` from `1` to `0` after exact proof and separate authorization. See `GEMINI_ACCOUNTING_RECOVERY.md`.
 
+Analyst fixup: every structured request now has a durable `accounting_through` anchor. An unresolved reservation blocks globally; a terminal or ambiguous transition extends the interval through the authoritative transition time, and request/exact-token accounting applies to every UTC window overlapped by that interval. This closes the final check-to-fetch race without a timing margin or token estimate. A stranded `reserved` row has a separate operator-only, exact-identity CAS reconciliation to `transport_ambiguous` with reason `abandoned_reservation`; it still requires ordinary window-safe retirement afterward.
+
 ---
 
 ## P5 — Discovery Reliability: architecture revision 1

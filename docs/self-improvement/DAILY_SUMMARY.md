@@ -4,8 +4,9 @@
 
 - Status: REVIEW; implementation branch `codex/gemini-ambiguity-hardening`, exact deployed-production baseline `01ef0787cad02c49d453f781e1b106a247b7e5d7`. P6/X and migration `0004` are intentionally excluded.
 - Added explicit UTC day/Monday-week/month accounting, structured reservation states, D1-fenced single-owner admission and compare-and-set settlement, durable transport ambiguity, provider-free operator retirement, and a separately authorized legacy row-17 recovery runbook. No token value is guessed; the legacy latch and row 17 remain unchanged.
-- Offline validation: `npm ci`, `npm run build`, `npm test` (260/260), `npm run worker:typecheck`, `git diff --check`, `npm ls --depth=0`, local D1 migration-lineage rehearsal, and Wrangler dry-run passed. The dry-run bundle contains the same four pre-existing local-JSON `node:fs/promises` / `node:path` import groups as the unmodified production-base bundle; this hotfix adds no new unsupported dependency category, but the inherited bundle-composition gap remains a warning for separate review.
+- Offline validation: `npm ci`, `npm run build`, `npm test` (271/271), `npm run worker:typecheck`, `git diff --check`, `npm ls --depth=0`, local D1 migration-lineage rehearsal, and Wrangler dry-run passed. The dry-run bundle contains the same four pre-existing local-JSON `node:fs/promises` / `node:path` import groups as the unmodified production-base bundle; this hotfix adds no new unsupported dependency category, but the inherited bundle-composition gap remains a warning for separate review.
 - No production migration, D1 mutation, latch clear, recovery, deployment, monitoring cycle, provider call, X activation, P7 work, merge, or modification of the Architect's normal workspace occurred. Independent Analyst review remains required.
+- Analyst fixup addresses both P1 findings: stranded `reserved` rows can be reconciled only by an exact, human-operated `reserved -> transport_ambiguous` CAS after termination proof, and durable `accounting_through` intervals conservatively charge every UTC window that could contain dispatch. Final validation evidence is recorded in the Builder handoff.
 
 ---
 

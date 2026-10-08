@@ -46,6 +46,8 @@ export interface GeminiDependencies {
   retryDelayMs?: number;
   cycleContext?: GeminiCycleContext;
   now?: () => Date;
+  /** Deterministic offline hook at the final handoff before fetch; production leaves this unset. */
+  beforeDispatch?: (reservation: GeminiUsageReservation) => void | Promise<void>;
 }
 
 function sleep(ms: number): Promise<void> { return new Promise((resolve) => setTimeout(resolve, ms)); }
@@ -184,6 +186,8 @@ export async function generateWithGemini(input: string, dependencies: GeminiDepe
         await preserveAmbiguity(tracker, reservation, "abandoned_reservation");
         throw new Error("Gemini request was not dispatched because its accounting window changed after reservation.");
       }
+
+      await dependencies.beforeDispatch?.(reservation);
 
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), dependencies.timeoutMs ?? GEMINI_TIMEOUT_MS);
