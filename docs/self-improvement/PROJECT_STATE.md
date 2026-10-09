@@ -4,6 +4,8 @@
 
 This file is the durable source of truth for the production baseline, architecture, limits, safety rules, and approval boundaries. Update it only with verified evidence and the required authorization; distinguish intended changes from deployed facts.
 
+Current verified production state (2026-10-09): Worker Git SHA `366d7ea6370e6297818ec7ae9489a78b99edd3e8`, Worker version `6ad65e76-9728-4a2d-aece-15903028ad01`, migration `0005_gemini_ambiguity_accounting.sql` applied, migration `0004_x_discovery.sql` unapplied, P6/X not deployed or enabled, `usage_unknown=1`, and historical row 17 preserved as `legacy`. Recovery is forbidden before `2026-11-01T00:00:00Z` and always requires fresh verification plus separate human authorization. Before recovery, old P5 is only a blocked-safe emergency fallback while the latch remains `1`; after recovery, P5 is not an allowed rollback target, and this hotfix version or a later compatible version is the minimum rollback target.
+
 Bootstrap date: 2026-09-20. The human-provided production handoff supplies the verified production checkpoint, deployed Worker version, and controlled-test discovery below. Local read-only inspection confirmed HEAD/history, Worker entry point, configured providers/limits, Cron, pre-analysis discovery deduplication, and relevance threshold. This bootstrap did not query Cloudflare, inspect live D1 data, or repeat the production test; deployment facts remain attributed to the handoff.
 
 ## Project and purpose
@@ -107,7 +109,11 @@ Production persistence uses Cloudflare D1 for:
 - Gemini usage state.
 - Disabled-by-default P6 X poll cursors, pending inbox metadata, and conservative request reservations after migration `0004_x_discovery.sql` is separately applied.
 
-Gemini usage migration `0003_gemini_usage_model.sql` adds nullable exact-model attribution. Historical rows remain null/unknown-model and continue to count globally. New dispatches reserve a zero-token, exact-model request and set usage state unknown before network I/O; a completed response settles that same record and restores known state. Ambiguous transport, invalid usage, or failed settlement remains fail-closed and prevents later requests.
+Gemini usage migration `0003_gemini_usage_model.sql` adds nullable exact-model attribution. The integrated source contains both additive migrations: P6's still-unapplied `0004_x_discovery.sql` and the production-applied `0005_gemini_ambiguity_accounting.sql`. Production's deliberate out-of-filename-order ledger is therefore `0001`, `0002`, `0003`, `0005`, with only `0004` pending until a separate P6 activation approval. Historical Gemini rows remain `legacy`, retain their original token fields, and continue to count globally.
+
+New dispatches use explicit UTC calendar-day, Monday-start-week, and calendar-month accounting. A D1-atomic conditional insert admits at most one exact-model `reserved` request after rechecking the legacy latch, unresolved ownership, cycle allowance, and all request/token ceilings. Exact provider usage settles `reserved -> exact`; reviewed retry/fallback non-2xx responses settle `reserved -> confirmed_zero`; timeout, network, unreadable usage, and settlement uncertainty remain durably unresolved without guessed tokens. Structured reservations do not toggle the legacy latch.
+
+Every structured Gemini request persists an accounting interval from reservation timestamp through `accounting_through`; request count and exact tokens apply conservatively to every UTC window that interval overlaps. This closes dispatch-boundary crossings without a timing margin or token estimate. A stranded `reserved` row requires exact operator reconciliation to `transport_ambiguous` after termination proof. Future `transport_ambiguous` rows require provider-free retirement only after the full interval is outside all three current UTC windows. Retirement preserves zero placeholders as unknown and never starts monitoring. A retired row blocks again if clock rollback makes its interval active. See `GEMINI_ACCOUNTING_RECOVERY.md`.
 
 The same discoveries table supplies the bounded replay lookup; Proposal 1 adds no migration, retry table, or delivery-attempt table. A successful ordinary notification-history record excludes all later replay. A failed email send writes no success record and can be considered again until expiry. The accepted send-before-history-write ambiguity remains: provider acceptance followed by history failure can allow a later duplicate delivery.
 
@@ -131,7 +137,7 @@ The production Worker bundle must not include local JSON persistence, Node files
 
 ## Gemini blocked-state recovery
 
-`usage_unknown` is fail-closed and is never cleared automatically. Do not blindly reset it with SQL. First determine why accounting became unknown, inspect reservation and accounting evidence, and determine whether the provider request may have executed. Preserve the request reservation, reconcile uncertain request and thinking-inclusive token usage conservatively, and avoid counting it twice. Only after human review and explicit approval may a controlled recovery clear a specific latch; do not make a provider request merely to test whether the account works. For limit blocks, inspect recorded usage and wait for the normal window reset. For invalid configuration or unavailable usage state, inspect bindings, schema, and data integrity without printing values or substituting empty state.
+`usage_unknown` remains the fail-closed latch for legacy/unattributed uncertainty and corruption; it is never cleared automatically. Unknown historical usage is not zero usage, and no token amount may be invented. The current legacy row-17 incident remains blocked until at least `2026-11-01T00:00:00Z`; even then, clearing only its latch requires exact incident proof and separate human authorization. The row and its `0/0/0` unknown placeholders remain untouched. For structured ambiguity, use exact operator retirement instead of clearing the legacy latch. Do not make a provider request merely to test whether the account works.
 
 ## Production checkpoints
 

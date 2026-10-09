@@ -1,5 +1,11 @@
 # Self-improvement changelog
 
+## 2026-10-09 — Gemini hardening integrated with P6 source
+
+- Converged the accepted P6 source lineage with the already deployed Gemini ambiguity-accounting hotfix while retaining both `0004_x_discovery.sql` and `0005_gemini_ambiguity_accounting.sql`.
+- Production remains on hotfix Worker version `6ad65e76-9728-4a2d-aece-15903028ad01`; `0005` is applied, `0004` is not applied, P6/X remains inactive, `usage_unknown=1`, and row 17 remains preserved as legacy accounting.
+- This source-only integration does not deploy, migrate, recover Gemini usage, enable X, or call any provider.
+
 ## 2026-10-08 — P6 selected-account X integration ready for review
 
 - Added the human-approved five-account immutable-ID registry and a disabled-by-default, bounded X timeline acquisition path with strict normalization, durable conservative usage/cursor/inbox state, and no retries or pagination.
@@ -7,6 +13,14 @@
 - Review correction preserves Brave article content while unioning first validated X provenance for same-story observations, and wires durable post-ID resolution for Brave-observed X status URLs without degrading ordinary Brave discovery.
 - Final review correction rejects malformed or ambiguous edit aliases and makes seven-day expiry plus the 350-pending payload cap atomic with page/cursor commits in both D1 and local JSON persistence.
 - Added unapplied migration `0004`; no credentials, paid credits, live provider request, production migration, Cloudflare/D1 mutation, deployment, P7 work, or production merge occurred.
+
+## 2026-10-08 — Gemini ambiguity-accounting hotfix ready for review
+
+- Added explicit UTC accounting windows and durable `legacy`, `reserved`, `exact`, `confirmed_zero`, `transport_ambiguous`, and retired states without inventing token usage.
+- Added D1-enforced single unresolved ownership, atomic admission checks, exact identity settlement, crash-safe blocking, and provider-free retirement after all active windows expire.
+- Added migration `0005`, offline lineage evidence, and an incident-specific row-17 runbook whose only eventual mutation is the separately authorized legacy latch clear after `2026-11-01T00:00:00Z`.
+- Preserved model ordering, retries/fallbacks, quotas, replay, Brave, Resend, Cron, and health-only HTTP behavior. P6/X is absent from this deployable production-based branch. No production action or provider call occurred.
+- Analyst fixup added exact operator reconciliation for stranded reservations and durable interval accounting across final dispatch, retry, and fallback boundary crossings; no heuristic margin or guessed usage is used.
 
 ## 2026-10-07 — P5 Discovery Reliability ready for review
 

@@ -1,5 +1,14 @@
 # Daily Self-Improvement Summary
 
+## 2026-10-09 — Gemini hotfix/P6 source convergence
+
+- Status: INTEGRATION REVIEW; branch `codex/integrate-gemini-hotfix`, base `313a21319f0252e29651a477d3e9584512696692`, merged hotfix head `366d7ea6370e6297818ec7ae9489a78b99edd3e8` without rewriting either lineage.
+- Preserved P6/X disabled-by-default behavior and migration `0004` while adding the accepted structured Gemini accounting, recovery runbook, tests, and migration `0005`.
+- Verified production facts recorded by the authorized release steps: Worker version `6ad65e76-9728-4a2d-aece-15903028ad01`; `0005` applied; `0004` unapplied; P6/X inactive; `usage_unknown=1`; row 17 preserved as legacy. Recovery remains separately authorized and forbidden before `2026-11-01T00:00:00Z`.
+- Combined validation passed: `npm ci`, `npm run build`, `npm test` (321/321), `npm run worker:typecheck`, `git diff --check`, `npm ls --depth=0`, and `npx wrangler deploy --dry-run`.
+- Isolated Wrangler rehearsal passed for fresh `0001 -> 0002 -> 0003 -> 0004 -> 0005` and production-shaped `0001/0002/0003/0005`: after adding repository migration `0004`, Wrangler reported only `0004` pending and applied it successfully without conflicting with the structured Gemini schema.
+- This integration task performs no deployment, remote migration, recovery, latch clear, provider call, or production-state mutation. Commit and PR evidence are recorded in the final Builder handoff.
+
 ## 2026-10-08 — P6 selected-account X discovery
 
 - Status: REVIEW; implementation branch `codex/p6-x-source-integration`, baseline `01ef0787cad02c49d453f781e1b106a247b7e5d7`.
@@ -8,6 +17,14 @@
 - Corrected the final two review blockers: provider edit histories now require unique opaque decimal IDs containing the raw Post ID; D1 and local JSON reject ambiguous cross-record aliases and defensive lookups fail closed. Both stores now expire payloads and enforce the deterministic 350-pending cap atomically with page persistence and cursor advancement, including rollback on persistence/cleanup failure.
 - P6 remains disabled by default. Migration `0004`, `X_BEARER_TOKEN`, credits, spending cap, flag enablement, Cloudflare changes and deployment were not performed. No X, Brave, Gemini, Resend, or other live provider call occurred.
 - Validation after the final corrections: `npm ci`, `npm run build`, `npm test` (294/294), `npm run worker:typecheck`, `git diff --check`, `npm ls --depth=0`, and a Wrangler dry-run bundle audit passed. The Worker bundle contains no local JSON store, Node filesystem/path module, dotenv, or OpenAI cloud dependency. Independent Analyst final re-review remains required; commit/PR evidence is supplied in the Builder handoff.
+
+## 2026-10-08 — Gemini ambiguity-accounting hotfix
+
+- Status: REVIEW; implementation branch `codex/gemini-ambiguity-hardening`, exact deployed-production baseline `01ef0787cad02c49d453f781e1b106a247b7e5d7`. P6/X and migration `0004` are intentionally excluded.
+- Added explicit UTC day/Monday-week/month accounting, structured reservation states, D1-fenced single-owner admission and compare-and-set settlement, durable transport ambiguity, provider-free operator retirement, and a separately authorized legacy row-17 recovery runbook. No token value is guessed; the legacy latch and row 17 remain unchanged.
+- Offline validation: `npm ci`, `npm run build`, `npm test` (271/271), `npm run worker:typecheck`, `git diff --check`, `npm ls --depth=0`, local D1 migration-lineage rehearsal, and Wrangler dry-run passed. The dry-run bundle contains the same four pre-existing local-JSON `node:fs/promises` / `node:path` import groups as the unmodified production-base bundle; this hotfix adds no new unsupported dependency category, but the inherited bundle-composition gap remains a warning for separate review.
+- No production migration, D1 mutation, latch clear, recovery, deployment, monitoring cycle, provider call, X activation, P7 work, merge, or modification of the Architect's normal workspace occurred. Independent Analyst review remains required.
+- Analyst fixup addresses both P1 findings: stranded `reserved` rows can be reconciled only by an exact, human-operated `reserved -> transport_ambiguous` CAS after termination proof, and durable `accounting_through` intervals conservatively charge every UTC window that could contain dispatch. Final validation evidence is recorded in the Builder handoff.
 
 ---
 

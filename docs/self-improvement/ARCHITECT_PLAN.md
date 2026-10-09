@@ -1,5 +1,11 @@
 # Architect Plan
 
+## Gemini hotfix integration into P6 main — 2026-10-09
+
+This integration branch converges the accepted P6 source lineage at `313a21319f0252e29651a477d3e9584512696692` with the accepted and already deployed Gemini hotfix at `366d7ea6370e6297818ec7ae9489a78b99edd3e8`. Both migrations remain source-controlled under their approved names: `0004_x_discovery.sql` and `0005_gemini_ambiguity_accounting.sql`.
+
+Verified production remains on Worker version `6ad65e76-9728-4a2d-aece-15903028ad01`, sourced from the Gemini hotfix. Production has applied `0001`, `0002`, `0003`, and `0005`; `0004` is not applied, P6/X is not deployed or enabled, `usage_unknown=1`, and row 17 remains preserved as `legacy`. Gemini recovery remains forbidden before `2026-11-01T00:00:00Z` and still requires fresh state verification plus separate human authorization. Before recovery, old P5 is only a blocked-safe emergency fallback while the latch remains `1`; after recovery, P5 is not an allowed rollback target, and the deployed hotfix or a later compatible version is the minimum rollback target.
+
 ## P6 — X.com Source Integration: architecture revision 1
 
 Status: HUMAN-APPROVED for source implementation and REVIEW. The exact five-account identity registry was approved by the human on 2026-10-08. Production activation, migration application, credentials, paid credits, configuration and deployment remain unauthorized. Date of documentation research: 2026-10-07.
@@ -135,6 +141,13 @@ Principal risks: quiet-account selection versus noisy feeds; latest-ten truncati
 - Implemented the human-approved immutable five-ID selected-account registry, disabled-by-default timeline reader, conservative usage reservation, Worker-neutral D1/local state, additive migration `0004`, strict post/link normalization, shared four-slot integration, application-owned provenance, P4 exclusion, digest attribution, and bounded secret-free observability on `codex/p6-x-source-integration` from `01ef0787cad02c49d453f781e1b106a247b7e5d7`.
 - Human approval covered the registry identities/order and source implementation. No credential, X request, paid credit, production migration, Cloudflare/D1 mutation, deployment, or provider cycle occurred. Activation remains blocked on the separately protected prerequisites documented above.
 - Builder validation and exact commit/PR evidence are recorded in the role-owned summary after the final offline suite. Independent Analyst review is still required.
+## Gemini ambiguity-accounting hotfix — approved Builder scope
+
+Implementation is isolated from deployed production commit `01ef0787cad02c49d453f781e1b106a247b7e5d7`; P6 and its `0004_x_discovery.sql` migration are intentionally absent. The approved hotfix adds explicit UTC accounting, durable `legacy` / `reserved` / `exact` / `confirmed_zero` / `transport_ambiguous` / `retired_outside_accounting_windows` states, D1-fenced admission, exact settlement, fail-closed transport ambiguity, and operator-only retirement without token estimates. Migration `0005_gemini_ambiguity_accounting.sql`, deployment, and every production recovery remain separate human approvals.
+
+Legacy row 17 at `2026-10-08T08:02:03.393Z` remains historical unknown usage with unchanged `0/0/0` placeholders. It is active through its UTC day, Monday-start week, and calendar month; its first safe retirement boundary is `2026-11-01T00:00:00Z`. The incident-specific procedure may eventually change only `gemini_usage_state.usage_unknown` from `1` to `0` after exact proof and separate authorization. See `GEMINI_ACCOUNTING_RECOVERY.md`.
+
+Analyst fixup: every structured request now has a durable `accounting_through` anchor. An unresolved reservation blocks globally; a terminal or ambiguous transition extends the interval through the authoritative transition time, and request/exact-token accounting applies to every UTC window overlapped by that interval. This closes the final check-to-fetch race without a timing margin or token estimate. A stranded `reserved` row has a separate operator-only, exact-identity CAS reconciliation to `transport_ambiguous` with reason `abandoned_reservation`; it still requires ordinary window-safe retirement afterward.
 
 ---
 

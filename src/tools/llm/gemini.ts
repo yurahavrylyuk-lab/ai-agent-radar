@@ -1,6 +1,7 @@
 import { APPROVED_GEMINI_MODELS, type ApprovedGeminiModel } from "../../config/geminiModels.js";
 import { checkGeminiUsage } from "../../services/geminiUsageGuard.js";
-import type { GeminiUsageStore } from "../../services/geminiUsageTracker.js";
+import { areGeminiTimestampsInSameUtcWindows } from "../../services/geminiAccountingWindows.js";
+import type { GeminiAmbiguityReason, GeminiUsageReservation, GeminiUsageStore } from "../../services/geminiUsageTracker.js";
 import type { RuntimeEnvironment } from "../../services/radarRuntimeConfiguration.js";
 import type { LlmResult } from "./types.js";
 
@@ -44,6 +45,9 @@ export interface GeminiDependencies {
   timeoutMs?: number;
   retryDelayMs?: number;
   cycleContext?: GeminiCycleContext;
+  now?: () => Date;
+  /** Deterministic offline hook at the final handoff before fetch; production leaves this unset. */
+  beforeDispatch?: (reservation: GeminiUsageReservation) => void | Promise<void>;
 }
 
 function sleep(ms: number): Promise<void> { return new Promise((resolve) => setTimeout(resolve, ms)); }
@@ -126,13 +130,26 @@ function initializeFrozenAllowance(context: GeminiCycleContext, check: Awaited<R
   );
 }
 
-async function settleUsage(
+async function settleExactUsage(
   tracker: GeminiUsageStore,
   reservation: Awaited<ReturnType<GeminiUsageStore["reserveRequest"]>>,
   usage: { inputTokens: number; outputTokens: number; totalTokens: number },
   message: string,
 ): Promise<void> {
-  try { await tracker.settleRequest(reservation, usage); } catch { throw new Error(message); }
+  try { await tracker.settleRequest(reservation, usage); }
+  catch {
+    try { await tracker.markRequestAmbiguous(reservation, "settlement_uncertain"); } catch { /* The unresolved record still fails closed. */ }
+    throw new Error(message);
+  }
+}
+
+async function preserveAmbiguity(
+  tracker: GeminiUsageStore,
+  reservation: GeminiUsageReservation,
+  reason: GeminiAmbiguityReason,
+): Promise<void> {
+  try { await tracker.markRequestAmbiguous(reservation, reason); }
+  catch { throw new Error("Gemini request outcome is ambiguous, and its durable ambiguity state could not be verified safely."); }
 }
 
 export async function generateWithGemini(input: string, dependencies: GeminiDependencies = {}): Promise<LlmResult> {
@@ -143,11 +160,12 @@ export async function generateWithGemini(input: string, dependencies: GeminiDepe
   const fetchImplementation = dependencies.fetchImplementation ?? fetch;
   const retryDelayMs = dependencies.retryDelayMs ?? GEMINI_503_DELAY_MS;
   const context = dependencies.cycleContext ?? createGeminiCycleContext();
+  const now = dependencies.now ?? (() => new Date());
   const maxAttemptsPerModel = GEMINI_503_MAX_RETRIES + 1;
 
   for (const [modelIndex, model] of APPROVED_GEMINI_MODELS.entries()) {
     for (let attempt = 1; attempt <= maxAttemptsPerModel; attempt++) {
-      const usageCheck = await checkGeminiUsage(tracker, environment);
+      const usageCheck = await checkGeminiUsage(tracker, environment, now());
       if (!usageCheck.allowed) throw new Error("Gemini request blocked by usage guard.");
       initializeFrozenAllowance(context, usageCheck);
       if ((context.remainingRequests ?? 0) <= 0) throw new Error("Gemini request blocked by frozen cycle request allowance.");
@@ -155,14 +173,21 @@ export async function generateWithGemini(input: string, dependencies: GeminiDepe
       let reservation: Awaited<ReturnType<GeminiUsageStore["reserveRequest"]>>;
       try {
         reservation = await tracker.reserveRequest({
-          timestamp: new Date().toISOString(), provider: "gemini", operation: "analysis", requestCount: 1,
+          timestamp: now().toISOString(), provider: "gemini", operation: "analysis", requestCount: 1,
           inputTokens: 0, outputTokens: 0, totalTokens: 0, model,
-        });
+        }, { limits: usageCheck.limits, cycleRequestsRemaining: context.remainingRequests ?? 0 });
       } catch { throw new Error("Gemini request could not be reserved safely."); }
 
       context.remainingRequests = (context.remainingRequests ?? 1) - 1;
       context.providerAttempts += 1;
       context.requestsByModel[model] += 1;
+
+      if (!areGeminiTimestampsInSameUtcWindows(reservation.record.timestamp, now())) {
+        await preserveAmbiguity(tracker, reservation, "abandoned_reservation");
+        throw new Error("Gemini request was not dispatched because its accounting window changed after reservation.");
+      }
+
+      await dependencies.beforeDispatch?.(reservation);
 
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), dependencies.timeoutMs ?? GEMINI_TIMEOUT_MS);
@@ -175,17 +200,29 @@ export async function generateWithGemini(input: string, dependencies: GeminiDepe
           signal: controller.signal,
         });
       } catch (error) {
-        // The reservation deliberately remains unknown after an ambiguous transport outcome.
+        await preserveAmbiguity(tracker, reservation, controller.signal.aborted ? "timeout" : "network_error");
         if (controller.signal.aborted) throw new Error("Gemini request timed out after 30 seconds.");
         throw new Error(`Gemini API request failed: ${safeMessage(error, apiKey)}`);
       } finally { clearTimeout(timeout); }
 
       if (!response.ok) {
-        const body = (await response.text()).slice(0, 10_000);
+        let body: string;
+        try { body = (await response.text()).slice(0, 10_000); }
+        catch {
+          await preserveAmbiguity(tracker, reservation, "response_usage_unavailable");
+          throw new Error("Gemini API error response could not be read safely.");
+        }
         const parsed = parseErrorBody(body);
-        await settleUsage(tracker, reservation, { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-          "Gemini request failed, and the failed attempt could not be recorded safely.");
         const message = errorMessage(body, parsed, apiKey);
+        const zeroUsageIsConfirmed = isUnavailable(response.status, parsed) ||
+          (response.status === 429 && isModelSpecificQuotaFailure(parsed, model));
+
+        if (!zeroUsageIsConfirmed) {
+          await preserveAmbiguity(tracker, reservation, "response_usage_unavailable");
+          throw new Error(`Gemini API request failed with unconfirmed usage: HTTP ${response.status} ${response.statusText}: ${message}`);
+        }
+        try { await tracker.confirmZeroRequest(reservation); }
+        catch { throw new Error("Gemini request failed, and the confirmed-zero attempt could not be recorded safely."); }
 
         if (isUnavailable(response.status, parsed)) {
           if (attempt < maxAttemptsPerModel) { await sleep(retryDelayMs); continue; }
@@ -199,11 +236,19 @@ export async function generateWithGemini(input: string, dependencies: GeminiDepe
 
       let geminiResponse: GeminiResponse;
       try { geminiResponse = await response.json() as GeminiResponse; }
-      catch { throw new Error("Gemini response was not valid JSON."); }
+      catch {
+        await preserveAmbiguity(tracker, reservation, "response_usage_unavailable");
+        throw new Error("Gemini response was not valid JSON.");
+      }
 
-      const usage = usageOf(geminiResponse.usage);
+      let usage: LlmResult["usage"];
+      try { usage = usageOf(geminiResponse.usage); }
+      catch {
+        await preserveAmbiguity(tracker, reservation, "response_usage_unavailable");
+        throw new Error("Gemini response did not include valid token usage.");
+      }
       const { thoughtTokens: _thoughtTokens, ...trackedUsage } = usage;
-      await settleUsage(tracker, reservation, trackedUsage,
+      await settleExactUsage(tracker, reservation, trackedUsage,
         "Gemini request succeeded, but its usage could not be recorded safely.");
 
       console.info("[INFO] Gemini request completed.");
