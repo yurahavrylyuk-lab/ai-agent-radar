@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { APPROVED_GEMINI_MODELS, type ApprovedGeminiModel } from "../src/config/geminiModels.js";
-import { checkGeminiUsage, inspectGeminiAvailability, reachedGeminiLimit, type GeminiBlockedReason, type GeminiUsageLimits } from "../src/services/geminiUsageGuard.js";
-import type { GeminiUsageData, GeminiUsageRecord, GeminiUsageReservation, GeminiUsageSettlement, GeminiUsageTracker } from "../src/services/geminiUsageTracker.js";
+import { checkGeminiUsage, getGeminiUsageCounts, inspectGeminiAvailability, reachedGeminiLimit, type GeminiBlockedReason, type GeminiUsageLimits } from "../src/services/geminiUsageGuard.js";
+import type { GeminiAmbiguityReason, GeminiAmbiguityRetirementExpectation, GeminiReservedReconciliationExpectation, GeminiUsageAdmission, GeminiUsageData, GeminiUsageRecord, GeminiUsageReservation, GeminiUsageSettlement, GeminiUsageTracker } from "../src/services/geminiUsageTracker.js";
 import { createGeminiCycleContext, generateWithGemini, MAX_GEMINI_ATTEMPTS_PER_ANALYSIS } from "../src/tools/llm/gemini.js";
 
 const limits: GeminiUsageLimits = { dailyRequests: 5, weeklyRequests: 20, monthlyRequests: 50, dailyTokens: 10_000, weeklyTokens: 30_000, monthlyTokens: 100_000 };
@@ -13,26 +13,58 @@ Object.assign(process.env, env);
 class MemoryTracker implements GeminiUsageTracker {
   recordCalls = 0;
   settlementCalls = 0;
-  constructor(public data: GeminiUsageData, private readonly failSettlement = false) {}
+  constructor(public data: GeminiUsageData, private readonly failSettlement = false, private readonly accountingNow = () => new Date()) {}
+  private accountingTime(reservation: GeminiUsageReservation): string {
+    return new Date(Math.max(this.accountingNow().getTime(), new Date(reservation.record.timestamp).getTime())).toISOString();
+  }
   async getUsageData() { return structuredClone(this.data); }
   async recordRequest(record: GeminiUsageRecord) { this.recordCalls++; this.data.records.push(structuredClone(record)); }
   async markUsageUnknown() { this.data.usageUnknown = true; }
-  async reserveRequest(record: GeminiUsageRecord & { model: ApprovedGeminiModel }): Promise<GeminiUsageReservation> {
-    if (this.data.usageUnknown) throw new Error("unknown");
+  async reserveRequest(record: GeminiUsageRecord & { model: ApprovedGeminiModel }, _admission: GeminiUsageAdmission): Promise<GeminiUsageReservation> {
+    if (this.data.usageUnknown || this.data.records.some((item) => ["reserved", "transport_ambiguous"].includes(item.accountingStatus ?? "legacy"))) throw new Error("unknown");
     const id = `memory:${this.data.records.length}`;
     this.recordCalls++;
-    this.data.records.push(structuredClone(record));
-    this.data.usageUnknown = true;
-    return { id, record: structuredClone(record) };
+    const reserved = { ...structuredClone(record), id: this.data.records.length + 1,
+      accountingStatus: "reserved" as const, accountingThrough: record.timestamp };
+    this.data.records.push(reserved);
+    return { id, record: structuredClone(reserved) };
   }
   async settleRequest(reservation: GeminiUsageReservation, usage: GeminiUsageSettlement) {
     if (this.failSettlement) throw new Error("settlement failed");
     const index = Number(reservation.id.split(":")[1]);
-    assert.equal(this.data.usageUnknown, true);
     assert.deepEqual(this.data.records[index], reservation.record);
-    this.data.records[index] = { ...this.data.records[index]!, ...usage };
-    this.data.usageUnknown = false;
+    const settledAt = this.accountingTime(reservation);
+    this.data.records[index] = { ...this.data.records[index]!, ...usage, accountingStatus: "exact", settledAt, accountingThrough: settledAt };
     this.settlementCalls++;
+  }
+  async confirmZeroRequest(reservation: GeminiUsageReservation) {
+    const index = Number(reservation.id.split(":")[1]);
+    assert.deepEqual(this.data.records[index], reservation.record);
+    const settledAt = this.accountingTime(reservation);
+    this.data.records[index] = { ...this.data.records[index]!, accountingStatus: "confirmed_zero", settledAt, accountingThrough: settledAt };
+    this.settlementCalls++;
+  }
+  async markRequestAmbiguous(reservation: GeminiUsageReservation, reason: GeminiAmbiguityReason) {
+    const index = Number(reservation.id.split(":")[1]);
+    const record = this.data.records[index];
+    if (!record || record.accountingStatus !== "reserved") throw new Error("not owned");
+    this.data.records[index] = { ...record, accountingStatus: "transport_ambiguous", ambiguityReason: reason,
+      accountingThrough: this.accountingTime(reservation) };
+  }
+  async reconcileAbandonedReservation(expectation: GeminiReservedReconciliationExpectation) {
+    const index = this.data.records.findIndex((record) => record.id === expectation.id);
+    const record = this.data.records[index];
+    if (!record || record.accountingStatus !== "reserved") throw new Error("not reserved");
+    this.data.records[index] = { ...record, accountingStatus: "transport_ambiguous", ambiguityReason: "abandoned_reservation",
+      accountingThrough: this.accountingNow().toISOString() };
+    return "reconciled" as const;
+  }
+  async retireAmbiguousRequest(expectation: GeminiAmbiguityRetirementExpectation) {
+    const index = this.data.records.findIndex((record) => record.id === expectation.id);
+    const record = this.data.records[index];
+    if (!record || record.accountingStatus !== "transport_ambiguous") throw new Error("not ambiguous");
+    this.data.records[index] = { ...record, accountingStatus: "retired_outside_accounting_windows", retiredAt: new Date().toISOString() };
+    return "retired" as const;
   }
 }
 
@@ -125,6 +157,7 @@ test("3.8 succeeds first, records exact model and never calls later models", asy
   assert.deepEqual(models, ["gemini-3.8-flash"]);
   assert.equal(tracker.data.records[0]?.model, "gemini-3.8-flash");
   assert.equal(tracker.data.usageUnknown, false);
+  assert.equal(tracker.data.records[0]?.accountingStatus, "exact");
 });
 
 test("3.8 exhausts its P0 503 retries before falling forward to 3.6", async () => {
@@ -137,6 +170,7 @@ test("3.8 exhausts its P0 503 retries before falling forward to 3.6", async () =
   assert.equal(result.outputText, "GEMINI_OK");
   assert.equal(result.usedFallback, true);
   assert.deepEqual(models, ["gemini-3.8-flash", "gemini-3.8-flash", "gemini-3.8-flash", "gemini-3.8-flash", "gemini-3.6-flash"]);
+  assert.deepEqual(tracker.data.records.map((record) => record.accountingStatus), ["confirmed_zero", "confirmed_zero", "confirmed_zero", "confirmed_zero", "exact"]);
   assert.equal(context.fallbacks, 1);
   assert.equal(context.analysesUsingFallbackModel, 0);
 });
@@ -243,8 +277,106 @@ test("authentication, permission, invalid request, and policy failures never fal
       let calls = 0;
       await assert.rejects(generateWithGemini("test", { usageTracker: tracker, environment: highLimitEnv, fetchImplementation: (async () => { calls++; return jsonResponse({ error: { status: item.provider, message: item.provider } }, item.status, "Rejected"); }) as typeof fetch }), new RegExp(`HTTP ${item.status}`));
       assert.equal(calls, 1);
+      assert.equal(tracker.data.records[0]?.accountingStatus, "transport_ambiguous");
+      assert.equal(tracker.data.records[0]?.ambiguityReason, "response_usage_unavailable");
     });
   }
+});
+
+test("a reservation that crosses an accounting boundary is abandoned before provider dispatch", async () => {
+  const tracker = new MemoryTracker({ records: [], usageUnknown: false });
+  const instants = [
+    new Date("2026-10-31T23:59:59.999Z"),
+    new Date("2026-10-31T23:59:59.999Z"),
+    new Date("2026-11-01T00:00:00.000Z"),
+  ];
+  let fetchCalls = 0;
+  await assert.rejects(generateWithGemini("test", {
+    usageTracker: tracker,
+    now: () => instants.shift() ?? new Date("2026-11-01T00:00:00.000Z"),
+    fetchImplementation: (async () => {
+      fetchCalls++;
+      return jsonResponse(successfulBody);
+    }) as typeof fetch,
+  }), /accounting window changed/);
+  assert.equal(fetchCalls, 0);
+  assert.equal(tracker.data.records[0]?.accountingStatus, "transport_ambiguous");
+  assert.equal(tracker.data.records[0]?.ambiguityReason, "abandoned_reservation");
+});
+
+test("durable accounting intervals cover day, week, and month crossings at the final dispatch handoff", async (t) => {
+  for (const boundary of [
+    { name: "day", before: "2026-10-08T23:59:59.999Z", after: "2026-10-09T00:00:00.000Z", count: "dailyRequests" as const },
+    { name: "week", before: "2026-10-11T23:59:59.999Z", after: "2026-10-12T00:00:00.000Z", count: "weeklyRequests" as const },
+    { name: "month", before: "2026-10-31T23:59:59.999Z", after: "2026-11-01T00:00:00.000Z", count: "monthlyRequests" as const },
+  ]) {
+    await t.test(boundary.name, async () => {
+      let clock = new Date(boundary.before);
+      const tracker = new MemoryTracker({ records: [], usageUnknown: false }, false, () => clock);
+      let fetchCalls = 0;
+      await generateWithGemini("test", {
+        usageTracker: tracker,
+        environment: highLimitEnv,
+        now: () => new Date(clock),
+        beforeDispatch: () => { clock = new Date(boundary.after); },
+        fetchImplementation: (async () => { fetchCalls++; return jsonResponse(successfulBody); }) as typeof fetch,
+      });
+      assert.equal(fetchCalls, 1);
+      const record = tracker.data.records[0]!;
+      assert.equal(record.timestamp, boundary.before);
+      assert.equal(record.accountingThrough, boundary.after);
+      assert.equal(record.accountingStatus, "exact");
+      assert.equal(getGeminiUsageCounts(tracker.data.records, clock)[boundary.count], 1);
+    });
+  }
+});
+
+test("a normal request inside unchanged windows dispatches once with a bounded accounting interval", async () => {
+  const clock = new Date("2026-10-08T12:00:00.000Z");
+  const tracker = new MemoryTracker({ records: [], usageUnknown: false }, false, () => clock);
+  let fetchCalls = 0;
+  await generateWithGemini("test", {
+    usageTracker: tracker,
+    now: () => new Date(clock),
+    fetchImplementation: (async () => { fetchCalls++; return jsonResponse(successfulBody); }) as typeof fetch,
+  });
+  assert.equal(fetchCalls, 1);
+  assert.equal(tracker.data.records[0]?.accountingThrough, clock.toISOString());
+});
+
+test("503 retry crossing at final handoff is charged in the new UTC day", async () => {
+  let clock = new Date("2026-10-08T23:59:59.999Z");
+  const tracker = new MemoryTracker({ records: [], usageUnknown: false }, false, () => clock);
+  let dispatch = 0;
+  await generateWithGemini("test", {
+    usageTracker: tracker,
+    environment: highLimitEnv,
+    retryDelayMs: 0,
+    now: () => new Date(clock),
+    beforeDispatch: () => { dispatch++; if (dispatch === 2) clock = new Date("2026-10-09T00:00:00.000Z"); },
+    fetchImplementation: (async () => dispatch === 1 ? unavailable() : jsonResponse(successfulBody)) as typeof fetch,
+  });
+  assert.equal(dispatch, 2);
+  assert.equal(getGeminiUsageCounts(tracker.data.records, clock).dailyRequests, 1);
+  assert.equal(tracker.data.records[1]?.accountingThrough, clock.toISOString());
+});
+
+test("model fallback crossing at final handoff is charged in the new UTC day", async () => {
+  let clock = new Date("2026-10-08T23:59:59.999Z");
+  const tracker = new MemoryTracker({ records: [], usageUnknown: false }, false, () => clock);
+  let dispatch = 0;
+  await generateWithGemini("test", {
+    usageTracker: tracker,
+    environment: highLimitEnv,
+    now: () => new Date(clock),
+    beforeDispatch: () => { dispatch++; if (dispatch === 2) clock = new Date("2026-10-09T00:00:00.000Z"); },
+    fetchImplementation: (async (_url, init) => requestedModel(init) === "gemini-3.8-flash"
+      ? modelQuota([quotaFailure(quotaViolation("gemini-3.8-flash"))]) : jsonResponse(successfulBody)) as typeof fetch,
+  });
+  assert.equal(dispatch, 2);
+  assert.equal(getGeminiUsageCounts(tracker.data.records, clock).dailyRequests, 1);
+  assert.equal(tracker.data.records[1]?.model, "gemini-3.6-flash");
+  assert.equal(tracker.data.records[1]?.accountingThrough, clock.toISOString());
 });
 
 test("a successful malformed output is returned once without model hopping", async () => {
@@ -253,6 +385,23 @@ test("a successful malformed output is returned once without model hopping", asy
   const result = await generateWithGemini("test", { usageTracker: tracker, fetchImplementation: (async () => { calls++; return jsonResponse({ output_text: "not-json", usage: { total_input_tokens: 1, total_output_tokens: 1, total_tokens: 2 } }); }) as typeof fetch });
   assert.equal(result.outputText, "not-json");
   assert.equal(calls, 1);
+  assert.equal(tracker.data.records[0]?.accountingStatus, "exact");
+  assert.equal(tracker.data.records[0]?.totalTokens, 2);
+});
+
+test("an unreadable non-2xx body remains ambiguous and does not retry", async () => {
+  const tracker = new MemoryTracker({ records: [], usageUnknown: false });
+  let calls = 0;
+  const response = new Response(null, { status: 503, statusText: "Service Unavailable" });
+  Object.defineProperty(response, "text", { value: async () => { throw new Error("body stream failed"); } });
+  await assert.rejects(generateWithGemini("test", {
+    usageTracker: tracker,
+    retryDelayMs: 0,
+    fetchImplementation: (async () => { calls++; return response; }) as typeof fetch,
+  }), /could not be read safely/);
+  assert.equal(calls, 1);
+  assert.equal(tracker.data.records[0]?.accountingStatus, "transport_ambiguous");
+  assert.equal(tracker.data.records[0]?.ambiguityReason, "response_usage_unavailable");
 });
 
 test("all approved models unavailable fail once at the absolute 12-attempt bound", async () => {
@@ -277,7 +426,16 @@ test("transport ambiguity preserves exact-model reservation and blocks later req
   await assert.rejects(generateWithGemini("test", { usageTracker: tracker, fetchImplementation: (async () => { throw new Error("network unavailable"); }) as typeof fetch }), /network unavailable/);
   assert.equal(tracker.recordCalls, 1);
   assert.equal(tracker.data.records[0]?.model, "gemini-3.8-flash");
-  assert.equal(tracker.data.usageUnknown, true);
+  assert.equal(tracker.data.usageUnknown, false);
+  assert.equal(tracker.data.records[0]?.accountingStatus, "transport_ambiguous");
+  assert.equal(tracker.data.records[0]?.ambiguityReason, "network_error");
+  assert.equal(tracker.data.records[0]?.totalTokens, 0);
+  let laterFetchCalls = 0;
+  await assert.rejects(generateWithGemini("later", { usageTracker: tracker, fetchImplementation: (async () => {
+    laterFetchCalls++;
+    return jsonResponse(successfulBody);
+  }) as typeof fetch }), /blocked by usage guard/);
+  assert.equal(laterFetchCalls, 0);
 });
 
 test("timeout ambiguity preserves the reservation and does not fallback", async () => {
@@ -290,8 +448,10 @@ test("timeout ambiguity preserves the reservation and does not fallback", async 
     throw new Error("unreachable");
   }) as typeof fetch }), /timed out after 30 seconds/);
   assert.equal(calls, 1);
-  assert.equal(tracker.data.usageUnknown, true);
+  assert.equal(tracker.data.usageUnknown, false);
   assert.equal(tracker.data.records[0]?.model, "gemini-3.8-flash");
+  assert.equal(tracker.data.records[0]?.accountingStatus, "transport_ambiguous");
+  assert.equal(tracker.data.records[0]?.ambiguityReason, "timeout");
 });
 
 test("invalid successful JSON leaves accounting unknown and never model-hops", async () => {
@@ -302,7 +462,9 @@ test("invalid successful JSON leaves accounting unknown and never model-hops", a
     return new Response("not-json", { status: 200 });
   }) as typeof fetch }), /not valid JSON/);
   assert.equal(calls, 1);
-  assert.equal(tracker.data.usageUnknown, true);
+  assert.equal(tracker.data.usageUnknown, false);
+  assert.equal(tracker.data.records[0]?.accountingStatus, "transport_ambiguous");
+  assert.equal(tracker.data.records[0]?.ambiguityReason, "response_usage_unavailable");
 });
 
 test("settlement uncertainty fails safely without fallback", async () => {
@@ -310,7 +472,9 @@ test("settlement uncertainty fails safely without fallback", async () => {
   let calls = 0;
   await assert.rejects(generateWithGemini("test", { usageTracker: tracker, fetchImplementation: (async () => { calls++; return jsonResponse(successfulBody); }) as typeof fetch }), /usage could not be recorded safely/);
   assert.equal(calls, 1);
-  assert.equal(tracker.data.usageUnknown, true);
+  assert.equal(tracker.data.usageUnknown, false);
+  assert.equal(tracker.data.records[0]?.accountingStatus, "transport_ambiguous");
+  assert.equal(tracker.data.records[0]?.ambiguityReason, "settlement_uncertain");
 });
 
 test("historical usage without model remains valid and counts globally", async () => {
