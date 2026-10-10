@@ -45,6 +45,8 @@ export interface GeminiDependencies {
   environment?: RuntimeEnvironment;
   fetchImplementation?: typeof fetch;
   timeoutMs?: number;
+  /** Monotonic clock for the provider interaction deadline; tests may supply a deterministic clock. */
+  monotonicNow?: () => number;
   retryDelayMs?: number;
   cycleContext?: GeminiCycleContext;
   now?: () => Date;
@@ -196,7 +198,11 @@ export async function generateWithGemini(input: string, dependencies: GeminiDepe
       await dependencies.beforeDispatch?.(reservation);
 
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), dependencies.timeoutMs ?? GEMINI_TIMEOUT_MS);
+      const timeoutMs = dependencies.timeoutMs ?? GEMINI_TIMEOUT_MS;
+      const monotonicNow = dependencies.monotonicNow ?? (() => performance.now());
+      const deadlineStartedAt = monotonicNow();
+      const deadlineExpired = () => controller.signal.aborted || monotonicNow() - deadlineStartedAt >= timeoutMs;
+      const timeout = setTimeout(() => controller.abort(), timeoutMs);
       let response: Response | undefined;
       let errorBody: string | undefined;
       let parsedErrorBody: GeminiErrorBody | undefined;
@@ -210,22 +216,29 @@ export async function generateWithGemini(input: string, dependencies: GeminiDepe
         });
         if (response.ok) {
           const body = await response.text();
-          geminiResponse = JSON.parse(body) as GeminiResponse;
+          if (!deadlineExpired()) geminiResponse = JSON.parse(body) as GeminiResponse;
         } else {
           errorBody = (await response.text()).slice(0, 10_000);
-          parsedErrorBody = parseErrorBody(errorBody);
+          if (!deadlineExpired()) parsedErrorBody = parseErrorBody(errorBody);
         }
       } catch (error) {
-        const reason: GeminiAmbiguityReason = controller.signal.aborted
+        const timedOut = deadlineExpired();
+        const reason: GeminiAmbiguityReason = timedOut
           ? "timeout"
           : response === undefined ? "network_error" : "response_usage_unavailable";
         if (reason === "timeout") context.dispatchBlockedByTimeout = true;
         await preserveAmbiguity(tracker, reservation, reason);
-        if (controller.signal.aborted) throw new Error("Gemini request timed out after 90 seconds.");
+        if (timedOut) throw new Error("Gemini request timed out after 90 seconds.");
         if (response?.ok) throw new Error("Gemini response was not valid JSON.");
         if (response !== undefined) throw new Error("Gemini API error response could not be read safely.");
         throw new Error(`Gemini API request failed: ${safeMessage(error, apiKey)}`);
       } finally { clearTimeout(timeout); }
+
+      if (deadlineExpired()) {
+        context.dispatchBlockedByTimeout = true;
+        await preserveAmbiguity(tracker, reservation, "timeout");
+        throw new Error("Gemini request timed out after 90 seconds.");
+      }
 
       if (!response.ok) {
         const body = errorBody ?? "";

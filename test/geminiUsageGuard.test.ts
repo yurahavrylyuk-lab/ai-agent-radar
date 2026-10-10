@@ -497,6 +497,35 @@ test("the Gemini deadline covers response-body reading and stops later same-cycl
   assert.equal(tracker.data.records.length, 1);
 });
 
+test("a monotonic deadline rejects a response whose synchronous parsing outlives it", async () => {
+  const tracker = new MemoryTracker({ records: [], usageUnknown: false });
+  const context = createGeminiCycleContext();
+  const readings = [0, 0, 2];
+  let reading = 0;
+  let calls = 0;
+  await assert.rejects(generateWithGemini("test", {
+    usageTracker: tracker,
+    cycleContext: context,
+    timeoutMs: 1,
+    monotonicNow: () => readings[Math.min(reading++, readings.length - 1)]!,
+    fetchImplementation: (async () => {
+      calls += 1;
+      return jsonResponse(successfulBody);
+    }) as typeof fetch,
+  }), /timed out after 90 seconds/);
+  assert.equal(tracker.settlementCalls, 0);
+  assert.equal(tracker.data.records[0]?.accountingStatus, "transport_ambiguous");
+  assert.equal(tracker.data.records[0]?.ambiguityReason, "timeout");
+  assert.equal(context.providerAttempts, 1);
+  assert.equal(context.fallbacks, 0);
+  await assert.rejects(generateWithGemini("later", {
+    usageTracker: tracker,
+    cycleContext: context,
+    fetchImplementation: (async () => { calls += 1; return jsonResponse(successfulBody); }) as typeof fetch,
+  }), /stopped for this cycle/);
+  assert.equal(calls, 1);
+});
+
 test("invalid successful JSON leaves accounting unknown and never model-hops", async () => {
   const tracker = new MemoryTracker({ records: [], usageUnknown: false });
   let calls = 0;
