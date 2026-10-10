@@ -126,6 +126,31 @@ test("local Gemini JSON store reserves and settles exact-model usage atomically"
   });
 });
 
+test("local timeout admission blocks only its UTC day and preserves incomplete accounting", async () => {
+  await withTemporaryFile("gemini-timeout.json", async (filePath) => {
+    let clock = new Date("2026-10-10T08:00:00.000Z");
+    const store = new LocalJsonGeminiUsageStore(filePath, () => clock);
+    const reservation = await store.reserveRequest({ timestamp: clock.toISOString(), provider: "gemini", operation: "analysis", requestCount: 1,
+      inputTokens: 0, outputTokens: 0, totalTokens: 0, model: "gemini-3.8-flash" }, geminiAdmission);
+    clock = new Date("2026-10-10T08:01:30.000Z");
+    await store.markRequestAmbiguous(reservation, "timeout");
+    await assert.rejects(store.reserveRequest({ ...reservation.record, id: undefined, accountingStatus: undefined,
+      ambiguityReason: undefined, accountingThrough: undefined, timestamp: clock.toISOString(), model: "gemini-3.6-flash" }, geminiAdmission), /timeout in the current UTC day/);
+
+    clock = new Date("2026-10-11T00:00:00.000Z");
+    const restarted = new LocalJsonGeminiUsageStore(filePath, () => clock);
+    const availability = await inspectGeminiAvailability(restarted, geminiEnvironment, clock);
+    assert.equal(availability.allowed, true);
+    if (availability.allowed) assert.deepEqual(availability.timeoutIncompleteAccounting, {
+      dailyRequests: 0, weeklyRequests: 1, monthlyRequests: 1,
+    });
+    const next = await restarted.reserveRequest({ ...reservation.record, id: undefined, accountingStatus: undefined,
+      ambiguityReason: undefined, accountingThrough: undefined, timestamp: clock.toISOString(), model: "gemini-3.6-flash" }, geminiAdmission);
+    assert.equal(next.record.model, "gemini-3.6-flash");
+    assert.equal((await restarted.getUsageData()).records.length, 2);
+  });
+});
+
 test("stranded local reservation is operator-reconciled without dispatch and retires only after its anchored windows", async () => {
   await withTemporaryFile("gemini-stranded.json", async (filePath) => {
     let clock = new Date("2026-10-08T08:03:00.000Z");

@@ -10,7 +10,8 @@ import { D1XStore } from "../src/services/d1XStore.js";
 import { reconcileStrandedGeminiReservation } from "../src/services/geminiAmbiguityRecovery.js";
 import { checkBraveSearchUsage } from "../src/services/usageGuard.js";
 import { checkGeminiUsage, getGeminiUsageCounts } from "../src/services/geminiUsageGuard.js";
-import worker, { type RadarWorkerEnv } from "../src/worker.js";
+import { runMonitoringCycle } from "../src/services/monitor.js";
+import worker, { createWorkerMonitoringDependencies, type RadarWorkerEnv } from "../src/worker.js";
 import type { AgentAnalysis, XSourceProvenance } from "../src/types/index.js";
 import type { XInboxRecord } from "../src/services/xStore.js";
 
@@ -105,6 +106,7 @@ async function withDatabase(callback: (database: Database.Database, d1: D1Databa
     database.exec(await readFile(new URL("../migrations/0001_initial.sql", import.meta.url), "utf8"));
     database.exec(await readFile(new URL("../migrations/0003_gemini_usage_model.sql", import.meta.url), "utf8"));
     database.exec(await readFile(new URL("../migrations/0005_gemini_ambiguity_accounting.sql", import.meta.url), "utf8"));
+    database.exec(await readFile(new URL("../migrations/0006_gemini_timeout_admission.sql", import.meta.url), "utf8"));
     await callback(database, new SqliteD1Database(database) as unknown as D1Database);
   } finally {
     database.close();
@@ -443,6 +445,34 @@ test("migration 0005 preserves legacy rows and enforces one unresolved structure
   }
 });
 
+test("migration 0006 permits historical timeouts but preserves one protected unresolved owner", async () => {
+  const database = new Database(":memory:");
+  try {
+    for (const migration of ["0001_initial.sql", "0002_controlled_execution_lock.sql", "0003_gemini_usage_model.sql", "0005_gemini_ambiguity_accounting.sql", "0006_gemini_timeout_admission.sql"]) {
+      database.exec(await readFile(new URL(`../migrations/${migration}`, import.meta.url), "utf8"));
+    }
+    const insert = database.prepare("INSERT INTO gemini_usage (timestamp, provider, operation, request_count, input_tokens, output_tokens, total_tokens, model, accounting_status, ambiguity_reason, accounting_through) VALUES (?, 'gemini', 'analysis', 1, 0, 0, 0, ?, 'transport_ambiguous', ?, ?)");
+    insert.run("2026-10-08T08:00:00.000Z", "gemini-3.8-flash", "timeout", "2026-10-08T08:01:30.000Z");
+    insert.run("2026-10-09T08:00:00.000Z", "gemini-3.6-flash", "timeout", "2026-10-09T08:01:30.000Z");
+    insert.run("2026-10-10T08:00:00.000Z", "gemini-3.5-flash-lite", "network_error", "2026-10-10T08:00:01.000Z");
+    assert.throws(() => database.prepare("INSERT INTO gemini_usage (timestamp, provider, operation, request_count, input_tokens, output_tokens, total_tokens, model, accounting_status, accounting_through) VALUES (?, 'gemini', 'analysis', 1, 0, 0, 0, ?, 'reserved', ?)")
+      .run("2026-10-11T08:00:00.000Z", "gemini-3.8-flash", "2026-10-11T08:00:00.000Z"), /UNIQUE constraint failed/);
+    assert.equal((database.prepare("SELECT COUNT(*) AS count FROM gemini_usage").get() as { count: number }).count, 3);
+  } finally { database.close(); }
+});
+
+test("migration 0006 applies after the complete fresh migration sequence", async () => {
+  const database = new Database(":memory:");
+  try {
+    for (const migration of ["0001_initial.sql", "0002_controlled_execution_lock.sql", "0003_gemini_usage_model.sql", "0004_x_discovery.sql", "0005_gemini_ambiguity_accounting.sql", "0006_gemini_timeout_admission.sql"]) {
+      database.exec(await readFile(new URL(`../migrations/${migration}`, import.meta.url), "utf8"));
+    }
+    const index = database.prepare("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'gemini_usage_one_unresolved_request'").get() as { sql: string };
+    assert.match(index.sql, /ambiguity_reason <> 'timeout'/);
+    assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'x_inbox'").get());
+  } finally { database.close(); }
+});
+
 test("D1 atomic admission admits only one concurrent owner and stale ownership cannot settle it", async () => {
   await withDatabase(async (_database, d1) => {
     const store = new D1GeminiUsageStore(d1);
@@ -466,6 +496,23 @@ test("D1 atomic admission admits only one concurrent owner and stale ownership c
     assert.equal((await store.getUsageData()).records.find((record) => record.id === winner.record.id)?.accountingStatus, "reserved");
     await store.markRequestAmbiguous(winner, "abandoned_reservation");
     assert.equal((await store.getUsageData()).records.find((record) => record.id === winner.record.id)?.accountingStatus, "transport_ambiguous");
+  });
+});
+
+test("D1 timeout admission blocks the same UTC day and permits the next day while retaining history", async () => {
+  await withDatabase(async (database, d1) => {
+    const store = new D1GeminiUsageStore(d1);
+    const admission = { cycleRequestsRemaining: 5, limits: { dailyRequests: 5, weeklyRequests: 20, monthlyRequests: 50, dailyTokens: 10_000, weeklyTokens: 30_000, monthlyTokens: 100_000 } };
+    const insertTimeout = database.prepare("INSERT INTO gemini_usage (timestamp, provider, operation, request_count, input_tokens, output_tokens, total_tokens, model, accounting_status, ambiguity_reason, accounting_through) VALUES (?, 'gemini', 'analysis', 1, 0, 0, 0, ?, 'transport_ambiguous', 'timeout', ?)");
+    const today = database.prepare("SELECT strftime('%Y-%m-%dT01:00:00.000Z', 'now') AS value").get() as { value: string };
+    insertTimeout.run(today.value, "gemini-3.8-flash", today.value);
+    await assert.rejects(store.reserveRequest({ timestamp: new Date().toISOString(), provider: "gemini", operation: "analysis", requestCount: 1, inputTokens: 0, outputTokens: 0, totalTokens: 0, model: "gemini-3.6-flash" }, admission), /could not be admitted safely/);
+    database.prepare("DELETE FROM gemini_usage WHERE id = 1").run();
+    const yesterday = database.prepare("SELECT strftime('%Y-%m-%dT01:00:00.000Z', 'now', '-1 day') AS timestamp, strftime('%Y-%m-%dT01:01:30.000Z', 'now', '-1 day') AS accounting_through").get() as { timestamp: string; accounting_through: string };
+    insertTimeout.run(yesterday.timestamp, "gemini-3.8-flash", yesterday.accounting_through);
+    const reservation = await store.reserveRequest({ timestamp: new Date().toISOString(), provider: "gemini", operation: "analysis", requestCount: 1, inputTokens: 0, outputTokens: 0, totalTokens: 0, model: "gemini-3.6-flash" }, admission);
+    assert.equal(reservation.record.accountingStatus, "reserved");
+    assert.equal((await store.getUsageData()).records.length, 2);
   });
 });
 
@@ -574,7 +621,7 @@ test("D1 adapter fails closed if the unresolved uniqueness invariant is corrupte
     for (const [index, status] of ["reserved", "transport_ambiguous"].entries()) {
       database.prepare("INSERT INTO gemini_usage (timestamp, provider, operation, request_count, input_tokens, output_tokens, total_tokens, model, accounting_status, ambiguity_reason, accounting_through) VALUES (?, 'gemini', 'analysis', 1, 0, 0, 0, ?, ?, ?, ?)")
         .run(`2025-01-0${index + 1}T00:00:00.000Z`, "gemini-3.8-flash", status,
-          status === "transport_ambiguous" ? "timeout" : null, `2025-01-0${index + 1}T00:00:00.000Z`);
+          status === "transport_ambiguous" ? "network_error" : null, `2025-01-0${index + 1}T00:00:00.000Z`);
     }
     await assert.rejects(new D1GeminiUsageStore(d1).getUsageData(), /conflicting unresolved/);
   });
@@ -586,4 +633,44 @@ test("Worker health fetch is harmless and does not invoke monitoring", async () 
   } as RadarWorkerEnv);
   assert.equal(response.status, 200);
   assert.equal(await response.text(), "AI Agent Radar worker ready");
+});
+
+test("disabled-X Worker cycle remains safe without migration 0004 tables", async () => {
+  await withDatabase(async (_database, d1) => {
+    const env: RadarWorkerEnv = {
+      DB: d1,
+      BRAVE_SEARCH_API_KEY: "offline-brave",
+      BRAVE_DAILY_SEARCH_LIMIT: "10",
+      BRAVE_WEEKLY_SEARCH_LIMIT: "100",
+      BRAVE_MONTHLY_SEARCH_LIMIT: "350",
+      GEMINI_API_KEY: "offline-gemini",
+      GEMINI_DAILY_REQUEST_LIMIT: "5",
+      GEMINI_WEEKLY_REQUEST_LIMIT: "20",
+      GEMINI_MONTHLY_REQUEST_LIMIT: "50",
+      GEMINI_DAILY_TOKEN_LIMIT: "10000",
+      GEMINI_WEEKLY_TOKEN_LIMIT: "30000",
+      GEMINI_MONTHLY_TOKEN_LIMIT: "100000",
+      RESEND_API_KEY: "offline-resend",
+      NOTIFICATION_EMAIL: "offline@example.test",
+      X_DISCOVERY_ENABLED: "false",
+    };
+    const stored = { ...analysis("https://untrusted.example.test/known"), relevanceScore: 1 };
+    await new D1DiscoveryHistory(d1).recordDiscovery(stored, new Date("2026-10-10T07:00:00.000Z"));
+    let searches = 0;
+    const dependencies = createWorkerMonitoringDependencies(env, {
+      searchWeb: (async () => {
+        searches += 1;
+        return [
+          { title: stored.sourceTitle, url: stored.sourceUrl, snippet: "Known ordinary article." },
+          { title: "Observed X post", url: "https://x.com/OpenAI/status/9007199254740993999", snippet: "Observed status." },
+        ];
+      }) as typeof import("../src/tools/webSearch.js").searchWeb,
+    });
+    const outcome = await runMonitoringCycle(undefined, { ...dependencies, now: () => new Date("2026-10-10T08:00:00.000Z") });
+    assert.equal(searches, 10);
+    assert.equal(outcome.analysesAttempted, 0);
+    assert.equal(outcome.duplicates, 10);
+    assert.equal(outcome.xBlockedReason, "disabled");
+    assert.equal(outcome.notificationsSent, 0);
+  });
 });

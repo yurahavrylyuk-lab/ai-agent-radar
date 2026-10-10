@@ -67,13 +67,19 @@ function hasExactGeminiUsageFields(value: unknown, minimum: number): boolean {
 
 function safeGeminiAvailability(value: unknown): GeminiAvailability {
   if (!value || typeof value !== "object") return { allowed: false, reason: "usage_state_unavailable" };
-  const availability = value as { allowed?: unknown; reason?: unknown; counts?: unknown; limits?: unknown };
+  const availability = value as { allowed?: unknown; reason?: unknown; counts?: unknown; limits?: unknown; timeoutIncompleteAccounting?: unknown };
   if (availability.allowed === false && geminiBlockedReasons.has(availability.reason as GeminiBlockedReason)) {
     return { allowed: false, reason: availability.reason as GeminiBlockedReason };
   }
   const validCounts = hasExactGeminiUsageFields(availability.counts, 0);
   const validLimits = hasExactGeminiUsageFields(availability.limits, 1);
-  if (availability.allowed === true && validCounts && validLimits) return availability as GeminiAvailability;
+  const diagnostic = availability.timeoutIncompleteAccounting;
+  const validDiagnostic = diagnostic === undefined || (!!diagnostic && typeof diagnostic === "object" &&
+    Object.keys(diagnostic).length === 3 && ["dailyRequests", "weeklyRequests", "monthlyRequests"].every((name) => {
+      const entry = (diagnostic as Record<string, unknown>)[name];
+      return typeof entry === "number" && Number.isSafeInteger(entry) && entry >= 0;
+    }));
+  if (availability.allowed === true && validCounts && validLimits && validDiagnostic) return availability as GeminiAvailability;
   return { allowed: false, reason: "usage_state_unavailable" };
 }
 
@@ -192,6 +198,9 @@ export async function runMonitoringCycle(
     geminiAvailability = { allowed: false, reason: "usage_state_unavailable" };
   }
   if (!geminiAvailability.allowed) result.geminiBlockedReason = geminiAvailability.reason;
+  else if (geminiAvailability.timeoutIncompleteAccounting) {
+    result.geminiTimeoutIncompleteAccounting = { ...geminiAvailability.timeoutIncompleteAccounting };
+  }
 
   if (geminiAvailability.allowed) {
     for (const [queryIndex, descriptor] of queryDescriptors.entries()) {
@@ -367,6 +376,7 @@ export async function runMonitoringCycle(
       result.failures += 1;
       syncGeminiMetrics();
       result.outcomes.push({ sourceTitle: searchResult.title, sourceUrl: searchResult.url, error: errorMessage(error) });
+      if (geminiCycleContext.dispatchBlockedByTimeout) break;
       continue;
     }
 

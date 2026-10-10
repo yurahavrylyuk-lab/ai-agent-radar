@@ -1,6 +1,6 @@
 import { mkdir, open, readFile, rename, unlink, writeFile, type FileHandle } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
-import { getGeminiUsageCounts, reachedGeminiBlockedReason } from "./geminiUsageGuard.js";
+import { getGeminiUsageCounts, isGeminiTimeoutActiveForUtcDay, isProtectedGeminiUnresolvedRecord, reachedGeminiBlockedReason } from "./geminiUsageGuard.js";
 import { isGeminiAccountingIntervalInAnyActiveWindow } from "./geminiAccountingWindows.js";
 import {
   geminiAccountingStatusOf,
@@ -37,7 +37,7 @@ export class LocalJsonGeminiUsageStore implements GeminiUsageStore {
         throw new Error("Gemini usage file has an invalid format.");
       }
       const records = value.records.map(copyRecord);
-      if (records.filter((record) => ["reserved", "transport_ambiguous"].includes(geminiAccountingStatusOf(record))).length > 1) {
+      if (records.filter(isProtectedGeminiUnresolvedRecord).length > 1) {
         throw new Error("Gemini usage file contains conflicting unresolved reservations.");
       }
       return { records, usageUnknown: value.usageUnknown };
@@ -77,14 +77,18 @@ export class LocalJsonGeminiUsageStore implements GeminiUsageStore {
     await this.withExclusiveMutation(async () => {
       const data = await this.getUsageData();
       if (data.usageUnknown) throw new Error("Gemini usage state is unavailable for reservation.");
-      if (data.records.some((item) => ["reserved", "transport_ambiguous"].includes(geminiAccountingStatusOf(item)))) {
+      if (data.records.some(isProtectedGeminiUnresolvedRecord)) {
         throw new Error("Gemini usage reservation conflicts with an unresolved request.");
       }
+      const admissionNow = this.now();
+      if (data.records.some((item) => isGeminiTimeoutActiveForUtcDay(item, admissionNow))) {
+        throw new Error("Gemini usage reservation conflicts with a timeout in the current UTC day.");
+      }
       if (data.records.some((item) => geminiAccountingStatusOf(item) === "retired_outside_accounting_windows" &&
-        isGeminiAccountingIntervalInAnyActiveWindow(item.timestamp, item.accountingThrough, new Date(record.timestamp)))) {
+        isGeminiAccountingIntervalInAnyActiveWindow(item.timestamp, item.accountingThrough, admissionNow))) {
         throw new Error("Gemini retired ambiguity is active after a clock rollback.");
       }
-      const counts = getGeminiUsageCounts(data.records, new Date(record.timestamp));
+      const counts = getGeminiUsageCounts(data.records, admissionNow);
       if (reachedGeminiBlockedReason(counts, admission.limits)) {
         throw new Error("Gemini usage reservation was blocked by an atomic limit check.");
       }
@@ -147,8 +151,7 @@ export class LocalJsonGeminiUsageStore implements GeminiUsageStore {
     await this.withExclusiveMutation(async () => {
       const data = await this.getUsageData();
       if (data.usageUnknown) throw new Error("Gemini legacy usage state blocks structured reconciliation.");
-      const unresolved = data.records.filter((record) =>
-        ["reserved", "transport_ambiguous"].includes(geminiAccountingStatusOf(record)));
+      const unresolved = data.records.filter(isProtectedGeminiUnresolvedRecord);
       if (unresolved.length !== 1) throw new Error("Gemini reserved reconciliation requires exactly one unresolved record.");
       const index = data.records.findIndex((record) => record.id === expectation.id);
       const record = data.records[index];

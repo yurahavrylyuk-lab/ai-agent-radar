@@ -63,6 +63,7 @@ export interface ScheduledCycleSummary {
   geminiFallbacks: number;
   analysesUsingFallbackModel: number;
   geminiRequestsByModel: MonitoringCycleResult["geminiRequestsByModel"];
+  geminiTimeoutIncompleteAccounting?: NonNullable<MonitoringCycleResult["geminiTimeoutIncompleteAccounting"]>;
   replayCandidatesConsidered: number;
   replayCandidatesEligible: number;
   freshStoriesSent: number;
@@ -156,6 +157,9 @@ export function createScheduledCycleSummary(
     geminiFallbacks: result.geminiFallbacks,
     analysesUsingFallbackModel: result.analysesUsingFallbackModel,
     geminiRequestsByModel: { ...result.geminiRequestsByModel },
+    ...(result.geminiTimeoutIncompleteAccounting === undefined ? {} : {
+      geminiTimeoutIncompleteAccounting: { ...result.geminiTimeoutIncompleteAccounting },
+    }),
     replayCandidatesConsidered: result.replayCandidatesConsidered,
     replayCandidatesEligible: result.replayCandidatesEligible,
     freshStoriesSent: result.freshStoriesSent,

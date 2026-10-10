@@ -4,6 +4,11 @@ import { geminiAccountingStatusOf, isGeminiUsageRecord, type GeminiUsageData, ty
 
 export interface GeminiUsageLimits { dailyRequests: number; weeklyRequests: number; monthlyRequests: number; dailyTokens: number; weeklyTokens: number; monthlyTokens: number; }
 export interface GeminiUsageCounts extends GeminiUsageLimits {}
+export interface GeminiTimeoutAccountingDiagnostic {
+  dailyRequests: number;
+  weeklyRequests: number;
+  monthlyRequests: number;
+}
 export type GeminiBlockedReason =
   | "usage_unknown"
   | "daily_request_limit"
@@ -15,7 +20,7 @@ export type GeminiBlockedReason =
   | "usage_state_unavailable"
   | "invalid_configuration";
 export type GeminiAvailability =
-  | { allowed: true; counts: GeminiUsageCounts; limits: GeminiUsageLimits }
+  | { allowed: true; counts: GeminiUsageCounts; limits: GeminiUsageLimits; timeoutIncompleteAccounting?: GeminiTimeoutAccountingDiagnostic }
   | { allowed: false; reason: GeminiBlockedReason };
 /** @deprecated Use GeminiAvailability for new integrations. */
 export type GeminiUsageCheck = GeminiAvailability;
@@ -93,11 +98,37 @@ function isGeminiUsageData(value: unknown): value is GeminiUsageData {
   return typeof data.usageUnknown === "boolean" && Array.isArray(data.records) && data.records.every(isGeminiUsageRecord);
 }
 
+export function isProtectedGeminiUnresolvedRecord(record: GeminiUsageRecord): boolean {
+  const status = geminiAccountingStatusOf(record);
+  return status === "reserved" || (status === "transport_ambiguous" && record.ambiguityReason !== "timeout");
+}
+
+export function isGeminiTimeoutActiveForUtcDay(record: GeminiUsageRecord, now: Date): boolean {
+  if (geminiAccountingStatusOf(record) !== "transport_ambiguous" || record.ambiguityReason !== "timeout" || !record.accountingThrough) return false;
+  const windows = getGeminiUtcAccountingWindows(now);
+  const accountingThrough = parseGeminiUsageTimestamp(record.accountingThrough);
+  return accountingThrough >= windows.dayStart && accountingThrough < windows.nextDayStart;
+}
+
+export function getGeminiTimeoutAccountingDiagnostic(
+  records: GeminiUsageRecord[],
+  now: Date,
+): GeminiTimeoutAccountingDiagnostic {
+  const windows = getGeminiUtcAccountingWindows(now);
+  const timeoutRecords = records.filter((record) =>
+    geminiAccountingStatusOf(record) === "transport_ambiguous" && record.ambiguityReason === "timeout");
+  return {
+    dailyRequests: timeoutRecords.filter((record) => isGeminiAccountingIntervalInWindow(
+      record.timestamp, record.accountingThrough, windows.dayStart, windows.nextDayStart)).length,
+    weeklyRequests: timeoutRecords.filter((record) => isGeminiAccountingIntervalInWindow(
+      record.timestamp, record.accountingThrough, windows.weekStart, windows.nextWeekStart)).length,
+    monthlyRequests: timeoutRecords.filter((record) => isGeminiAccountingIntervalInWindow(
+      record.timestamp, record.accountingThrough, windows.monthStart, windows.nextMonthStart)).length,
+  };
+}
+
 function structuredAccountingBlock(data: GeminiUsageData, now: Date): "usage_unknown" | undefined {
-  const unresolved = data.records.filter((record) => {
-    const status = geminiAccountingStatusOf(record);
-    return status === "reserved" || status === "transport_ambiguous";
-  });
+  const unresolved = data.records.filter(isProtectedGeminiUnresolvedRecord);
   if (unresolved.length > 1) throw new Error("Gemini usage contains conflicting unresolved reservations.");
   if (unresolved.length === 1) return "usage_unknown";
 
@@ -124,6 +155,7 @@ function structuredAccountingBlock(data: GeminiUsageData, now: Date): "usage_unk
       isGeminiAccountingIntervalInAnyActiveWindow(record.timestamp, record.accountingThrough, now)) {
       return "usage_unknown";
     }
+    if (isGeminiTimeoutActiveForUtcDay(record, now)) return "usage_unknown";
   }
 }
 
@@ -152,7 +184,11 @@ export async function inspectGeminiAvailability(
 
   if (data.usageUnknown) return { allowed: false, reason: "usage_unknown" };
   const reason = reachedGeminiBlockedReason(counts, limits);
-  return reason === undefined ? { allowed: true, counts, limits } : { allowed: false, reason };
+  if (reason !== undefined) return { allowed: false, reason };
+  const timeoutIncompleteAccounting = getGeminiTimeoutAccountingDiagnostic(data.records, now);
+  return Object.values(timeoutIncompleteAccounting).some((count) => count > 0)
+    ? { allowed: true, counts, limits, timeoutIncompleteAccounting }
+    : { allowed: true, counts, limits };
 }
 
 /** Logs only bounded, secret-free guard status immediately before each Gemini dispatch. */
@@ -172,5 +208,9 @@ export async function checkGeminiUsage(
   }
   console.info(`[INFO] Gemini usage today: ${availability.counts.dailyRequests}/${availability.limits.dailyRequests} requests`);
   console.info(`[INFO] Gemini tokens today: ${availability.counts.dailyTokens}/${availability.limits.dailyTokens}`);
+  if (availability.timeoutIncompleteAccounting && Object.values(availability.timeoutIncompleteAccounting).some((count) => count > 0)) {
+    const diagnostic = availability.timeoutIncompleteAccounting;
+    console.warn(`[WARN] Gemini timeout token accounting is incomplete: day=${diagnostic.dailyRequests}, week=${diagnostic.weeklyRequests}, month=${diagnostic.monthlyRequests}.`);
+  }
   return availability;
 }

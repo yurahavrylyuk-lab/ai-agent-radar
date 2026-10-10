@@ -6,11 +6,13 @@ This runbook documents operator actions; it is not deployment or recovery author
 
 - `exact` contains provider-reported usage. `total_tokens` remains authoritative and may include thinking tokens.
 - `confirmed_zero` is used only for reviewed non-2xx responses whose existing retry/fallback contract establishes zero usage.
-- `reserved` and `transport_ambiguous` are unresolved. Their numeric `0/0/0` values are placeholders, not evidence of zero usage. `accounting_through` conservatively closes the interval in which dispatch may have occurred.
+- `reserved` and `transport_ambiguous` retain unknown-token evidence. Their numeric `0/0/0` values are placeholders, not evidence of zero usage. `accounting_through` conservatively closes the interval in which dispatch may have occurred.
 - `retired_outside_accounting_windows` preserves the unknown placeholders forever. Retirement means only that the entire request-to-`accounting_through` interval is outside the current UTC day, Monday-start UTC week, and calendar month.
 - No recovery invents, estimates, or derives a token count.
 
 ## Future structured ambiguity
+
+A valid `transport_ambiguous / timeout` row blocks new dispatches through the end of its `accounting_through` UTC day. Beginning the next UTC day it remains durable and continues counting as one request in applicable windows, but it does not by itself block admission. Multiple historical timeout rows may remain. Never retire, rewrite, delete, or estimate them merely to restore admission. The bounded timeout-accounting diagnostic reports their request counts in active windows without treating their token placeholders as measured zero usage.
 
 A stranded `reserved` record must first use `reconcileStrandedGeminiReservation()` from a trusted, human-operated adapter context. Supply the exact ID, timestamp, model, operation, trusted current time, and affirmative proof that the original invocation terminated and cannot dispatch. The store repeats provider `gemini`, request count `1`, zero placeholders, singleton unresolved ownership, legacy latch `0`, and exact identity in an atomic CAS. The only transition is `reserved -> transport_ambiguous` with reason `abandoned_reservation`; a lost mutation response is resolved by authoritative reread. It never calls a provider and never retires directly.
 

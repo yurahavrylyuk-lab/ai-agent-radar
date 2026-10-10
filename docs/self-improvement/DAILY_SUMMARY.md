@@ -1,5 +1,14 @@
 # Daily Self-Improvement Summary
 
+## 2026-10-10 — Gemini timeout admission correction
+
+- Status: REVIEW; branch `codex/gemini-timeout-admission`, exact source baseline `02e3f6c491cc91db08902db7d47740a07085fab7`.
+- Extended the Gemini deadline to 90 seconds across dispatch and response-body reading/parsing. A timeout remains durable `transport_ambiguous / timeout`, receives no retry/fallback, and stops later Gemini dispatches in the same cycle.
+- Added shared UTC-day timeout admission semantics across preflight, D1 atomic reservation, and local JSON: same-day timeout rows block, previous-day timeout rows remain immutable evidence and may coexist with one new reservation subject to every normal guard. Request accounting remains conservative and unknown tokens are reported as incomplete, never zero.
+- Added pending migration `0006_gemini_timeout_admission.sql`, migration rehearsals for production-shaped `0001/0002/0003/0005 -> 0006` and fresh `0001 -> 0002 -> 0003 -> 0004 -> 0005 -> 0006`, exact row-19/cross-midnight regressions, same-cycle stop coverage, and disabled-X operation without migration 0004.
+- Validation passed: `npm ci`, `npm run build`, `npm test` (333/333), `npm run worker:typecheck`, `git diff --check`, `npm ls --depth=0`, Wrangler dry-run, and Worker bundle audit. No provider, deployment, production migration, D1 mutation, X activation, or production action occurred.
+- The previously modified Architect plan was copied to `.git/local-backups/` with SHA-256 `70e8ed4696798115debaa2b75503f0fc936e5cc893d80c1b444a9fc19699d5e0` before synchronization. It remains recoverable, outside Git, and was not reapplied or committed.
+
 ## 2026-10-09 — Gemini hotfix/P6 source convergence
 
 - Status: INTEGRATION REVIEW; branch `codex/integrate-gemini-hotfix`, base `313a21319f0252e29651a477d3e9584512696692`, merged hotfix head `366d7ea6370e6297818ec7ae9489a78b99edd3e8` without rewriting either lineage.

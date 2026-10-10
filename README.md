@@ -44,6 +44,13 @@ remain fail-closed and normally stop the theoretical 12-attempt chain early.
 `GEMINI_MODEL` is deprecated and ignored; it cannot alter the reviewed pool.
 The pool uses only the approved included Free Tier capacity; paid fallback is not enabled.
 
+The Gemini provider deadline is 90 seconds across dispatch, headers, and body
+reading/parsing. A timed-out attempt remains durable, unknown-token accounting,
+stops further Gemini work in that cycle, and blocks new admission only through
+the end of its `accounting_through` UTC day. It remains counted as one request
+in every applicable accounting window; its zero token placeholders are not
+treated as proof of zero use.
+
 ### P6 selected-account X discovery
 
 P6 adds a disabled-by-default, source-controlled selected-account timeline adapter. Its fixed v1 registry contains the immutable decimal-string user IDs approved for OpenAI, Anthropic, Google DeepMind, GitHub, and Microsoft, in that order. Handles are display metadata only; the runtime performs no user lookup, account discovery, search, pagination, redirect resolution, or retry.
