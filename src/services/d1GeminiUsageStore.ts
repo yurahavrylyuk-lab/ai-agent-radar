@@ -14,6 +14,7 @@ import {
   type GeminiUsageStore,
 } from "./geminiUsageTracker.js";
 import type { ApprovedGeminiModel } from "../config/geminiModels.js";
+import { isProtectedGeminiUnresolvedRecord } from "./geminiUsageGuard.js";
 
 interface GeminiUsageRow {
   id: number;
@@ -83,7 +84,7 @@ export class D1GeminiUsageStore implements GeminiUsageStore {
       throw new Error("D1 Gemini usage state has an invalid format.");
     }
     const parsed = (records.results ?? []).map(recordFromRow);
-    const unresolved = parsed.filter((record) => ["reserved", "transport_ambiguous"].includes(geminiAccountingStatusOf(record)));
+    const unresolved = parsed.filter(isProtectedGeminiUnresolvedRecord);
     if (unresolved.length > 1) throw new Error("D1 Gemini usage contains conflicting unresolved reservations.");
     return { records: parsed.map((record) => ({ ...record })), usageUnknown: state.usage_unknown === 1 };
   }
@@ -129,8 +130,12 @@ export class D1GeminiUsageStore implements GeminiUsageStore {
       `SELECT ${databaseNow}, ?1, ?2, 1, 0, 0, 0, ?3, 'reserved', ${databaseNow} ` +
       "WHERE ?4 > 0 " +
       "AND EXISTS (SELECT 1 FROM gemini_usage_state WHERE id = 1 AND usage_unknown = 0) " +
-      "AND NOT EXISTS (SELECT 1 FROM gemini_usage WHERE accounting_status IN ('reserved', 'transport_ambiguous')) " +
+      "AND NOT EXISTS (SELECT 1 FROM gemini_usage WHERE accounting_status = 'reserved' " +
+        "OR (accounting_status = 'transport_ambiguous' AND (ambiguity_reason IS NULL OR ambiguity_reason <> 'timeout'))) " +
+      "AND NOT EXISTS (SELECT 1 FROM gemini_usage WHERE accounting_status = 'transport_ambiguous' " +
+        `AND ambiguity_reason = 'timeout' AND accounting_through >= ${dayStart} AND accounting_through < ${nextDay}) ` +
       "AND NOT EXISTS (SELECT 1 FROM gemini_usage WHERE strftime('%s', timestamp) IS NULL " +
+        "OR accounting_through IS NULL OR strftime('%s', accounting_through) IS NULL OR accounting_through < timestamp " +
         "OR (settled_at IS NOT NULL AND (strftime('%s', settled_at) IS NULL OR settled_at < timestamp)) " +
         "OR (retired_at IS NOT NULL AND (strftime('%s', retired_at) IS NULL OR retired_at < timestamp))) " +
       `AND NOT EXISTS (SELECT 1 FROM gemini_usage WHERE timestamp > ${databaseNow}) ` +
@@ -152,7 +157,7 @@ export class D1GeminiUsageStore implements GeminiUsageStore {
     try {
       inserted = await statement.first<{ id: number; timestamp: string }>();
     } catch (error) {
-      const unresolved = await this.findUnresolved().catch(() => null);
+      const unresolved = await this.findProtectedUnresolved().catch(() => null);
       if (unresolved && unresolved.model === record.model && unresolved.operation === record.operation) {
         throw new Error("Gemini usage reservation outcome is uncertain; the durable reservation was retained and must not be dispatched.");
       }
@@ -237,7 +242,8 @@ export class D1GeminiUsageStore implements GeminiUsageStore {
       "AND accounting_status = 'reserved' AND input_tokens = 0 AND output_tokens = 0 AND total_tokens = 0 " +
       "AND EXISTS (SELECT 1 FROM gemini_usage_state WHERE id = 1 AND usage_unknown = 0) " +
       "AND NOT EXISTS (SELECT 1 FROM gemini_usage other WHERE other.id <> gemini_usage.id " +
-        "AND other.accounting_status IN ('reserved', 'transport_ambiguous')) RETURNING id",
+        "AND (other.accounting_status = 'reserved' OR (other.accounting_status = 'transport_ambiguous' " +
+        "AND (other.ambiguity_reason IS NULL OR other.ambiguity_reason <> 'timeout')))) RETURNING id",
     ).bind(expectation.id, expectation.timestamp, expectation.operation, expectation.model)
       .first<{ id: number }>().catch(() => null);
     if (row?.id === expectation.id) return "reconciled";
@@ -249,8 +255,7 @@ export class D1GeminiUsageStore implements GeminiUsageStore {
       authoritative.ambiguityReason === "abandoned_reservation" && authoritative.inputTokens === 0 &&
       authoritative.outputTokens === 0 && authoritative.totalTokens === 0) {
       const data = await this.getUsageData();
-      const unresolved = data.records.filter((record) =>
-        ["reserved", "transport_ambiguous"].includes(geminiAccountingStatusOf(record)));
+      const unresolved = data.records.filter(isProtectedGeminiUnresolvedRecord);
       if (!data.usageUnknown && unresolved.length === 1 && unresolved[0]?.id === expectation.id) return "already_reconciled";
     }
     throw new Error("Gemini reserved reconciliation preconditions were not satisfied.");
@@ -283,9 +288,10 @@ export class D1GeminiUsageStore implements GeminiUsageStore {
     return row ? recordFromRow(row) : null;
   }
 
-  private async findUnresolved(): Promise<GeminiUsageRecord | null> {
+  private async findProtectedUnresolved(): Promise<GeminiUsageRecord | null> {
     const rows = await this.database.prepare(
-      `SELECT ${SELECT_COLUMNS} FROM gemini_usage WHERE accounting_status IN ('reserved', 'transport_ambiguous') ORDER BY id ASC LIMIT 2`,
+      `SELECT ${SELECT_COLUMNS} FROM gemini_usage WHERE accounting_status = 'reserved' OR ` +
+      `(accounting_status = 'transport_ambiguous' AND (ambiguity_reason IS NULL OR ambiguity_reason <> 'timeout')) ORDER BY id ASC LIMIT 2`,
     ).all<GeminiUsageRow>();
     if ((rows.results?.length ?? 0) > 1) throw new Error("D1 Gemini usage contains conflicting unresolved reservations.");
     const row = rows.results?.[0];

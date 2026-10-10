@@ -345,6 +345,25 @@ test("the four-analysis cap applies across the full default query batch", async 
   assert.equal(outcome.stoppedByAnalysisCap, true);
 });
 
+test("a Gemini timeout stops later selected analyses in the same monitoring cycle", async () => {
+  const context = createGeminiCycleContext();
+  let processCalls = 0;
+  const outcome = await runMonitoringCycle("test", {
+    geminiCycleContext: context,
+    search: async () => Array.from({ length: 4 }, (_, index) => searchResult(`timeout-${index}`)),
+    hasDiscovery: async () => false,
+    process: async () => {
+      processCalls += 1;
+      context.dispatchBlockedByTimeout = true;
+      throw new Error("Gemini request timed out after 90 seconds.");
+    },
+    notify: batchNotify("not_eligible"),
+  });
+  assert.equal(processCalls, 1);
+  assert.equal(outcome.analysesAttempted, 1);
+  assert.equal(outcome.failures, 1);
+});
+
 test("cycle observability reports provider attempts separately from logical analyses", async () => {
   const context = createGeminiCycleContext();
   const item = searchResult("provider-metrics");

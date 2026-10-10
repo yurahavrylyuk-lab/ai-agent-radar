@@ -97,12 +97,81 @@ test("structured unresolved state blocks preflight while retired history outside
     id: 18, timestamp: "2026-10-08T08:03:00.000Z", provider: "gemini" as const, operation: "analysis", requestCount: 1 as const,
     inputTokens: 0, outputTokens: 0, totalTokens: 0, model: "gemini-3.8-flash", accountingThrough: "2026-10-08T08:03:01.000Z",
   };
-  const blocked = await inspectGeminiAvailability({ getUsageData: async () => ({ usageUnknown: false, records: [{ ...base, accountingStatus: "transport_ambiguous", ambiguityReason: "timeout" }] }) }, environment, new Date("2026-10-09T00:00:00.000Z"));
+  const blocked = await inspectGeminiAvailability({ getUsageData: async () => ({ usageUnknown: false, records: [{ ...base, accountingStatus: "transport_ambiguous", ambiguityReason: "timeout" }] }) }, environment, new Date("2026-10-08T09:00:00.000Z"));
   assert.deepEqual(blocked, { allowed: false, reason: "usage_unknown" });
+  const nextDay = await inspectGeminiAvailability({ getUsageData: async () => ({ usageUnknown: false, records: [{ ...base, accountingStatus: "transport_ambiguous", ambiguityReason: "timeout" }] }) }, environment, new Date("2026-10-09T00:00:00.000Z"));
+  assert.equal(nextDay.allowed, true);
+  if (nextDay.allowed) assert.deepEqual(nextDay.timeoutIncompleteAccounting, { dailyRequests: 0, weeklyRequests: 1, monthlyRequests: 1 });
   const retired = await inspectGeminiAvailability({ getUsageData: async () => ({ usageUnknown: false, records: [{ ...base, accountingStatus: "retired_outside_accounting_windows", ambiguityReason: "timeout", retiredAt: "2026-11-01T00:00:00.000Z" }] }) }, environment, new Date("2026-11-01T00:00:00.000Z"));
   assert.equal(retired.allowed, true);
   const rollback = await inspectGeminiAvailability({ getUsageData: async () => ({ usageUnknown: false, records: [{ ...base, accountingStatus: "retired_outside_accounting_windows", ambiguityReason: "timeout", retiredAt: "2026-11-01T00:00:00.000Z" }] }) }, environment, new Date("2026-10-31T23:59:59.999Z"));
   assert.deepEqual(rollback, { allowed: false, reason: "usage_state_unavailable" });
+});
+
+test("multiple historical timeout rows are retained while non-timeout ambiguity remains fail-closed", async () => {
+  const timeout = (id: number, timestamp: string) => ({
+    id, timestamp, provider: "gemini" as const, operation: "analysis", requestCount: 1 as const,
+    inputTokens: 0, outputTokens: 0, totalTokens: 0, model: "gemini-3.8-flash",
+    accountingStatus: "transport_ambiguous" as const, ambiguityReason: "timeout" as const,
+    accountingThrough: timestamp,
+  });
+  const records = [timeout(18, "2026-10-08T08:00:00.000Z"), timeout(19, "2026-10-09T08:00:00.000Z")];
+  const allowed = await inspectGeminiAvailability({ getUsageData: async () => ({ usageUnknown: false, records }) }, environment,
+    new Date("2026-10-10T00:00:00.000Z"));
+  assert.equal(allowed.allowed, true);
+  if (allowed.allowed) {
+    assert.equal(allowed.counts.dailyRequests, 0);
+    assert.equal(allowed.counts.weeklyRequests, 2);
+    assert.deepEqual(allowed.timeoutIncompleteAccounting, { dailyRequests: 0, weeklyRequests: 2, monthlyRequests: 2 });
+  }
+  const blocked = await inspectGeminiAvailability({ getUsageData: async () => ({ usageUnknown: false, records: [
+    ...records,
+    { ...timeout(20, "2026-10-09T09:00:00.000Z"), ambiguityReason: "network_error" as const },
+  ] }) }, environment, new Date("2026-10-10T00:00:00.000Z"));
+  assert.deepEqual(blocked, { allowed: false, reason: "usage_unknown" });
+});
+
+test("timeout admission fails closed on usage latch and malformed accounting timestamps", async () => {
+  const record = {
+    id: 19, timestamp: "2026-10-09T08:00:00.000Z", provider: "gemini" as const, operation: "analysis", requestCount: 1 as const,
+    inputTokens: 0, outputTokens: 0, totalTokens: 0, model: "gemini-3.8-flash",
+    accountingStatus: "transport_ambiguous" as const, ambiguityReason: "timeout" as const,
+    accountingThrough: "2026-10-09T08:01:30.000Z",
+  };
+  assert.deepEqual(await inspectGeminiAvailability({ getUsageData: async () => ({ usageUnknown: true, records: [record] }) }, environment,
+    new Date("2026-10-10T00:00:00.000Z")), { allowed: false, reason: "usage_unknown" });
+  assert.deepEqual(await inspectGeminiAvailability({ getUsageData: async () => ({ usageUnknown: false, records: [{ ...record, accountingThrough: "invalid" }] }) }, environment,
+    new Date("2026-10-10T00:00:00.000Z")), { allowed: false, reason: "usage_state_unavailable" });
+});
+
+test("row 19 remains unchanged and accountingThrough controls the cross-midnight release", async () => {
+  const row19 = {
+    id: 19,
+    timestamp: "2026-10-10T08:01:01.241Z",
+    provider: "gemini" as const,
+    operation: "analysis",
+    requestCount: 1 as const,
+    inputTokens: 0,
+    outputTokens: 0,
+    totalTokens: 0,
+    model: "gemini-3.8-flash",
+    accountingStatus: "transport_ambiguous" as const,
+    ambiguityReason: "timeout" as const,
+    settledAt: null,
+    retiredAt: null,
+    accountingThrough: "2026-10-10T08:01:31.409Z",
+  };
+  const before = structuredClone(row19);
+  assert.deepEqual(await inspectGeminiAvailability({ getUsageData: async () => ({ usageUnknown: false, records: [row19] }) }, environment,
+    new Date("2026-10-10T23:59:59.999Z")), { allowed: false, reason: "usage_unknown" });
+  const released = await inspectGeminiAvailability({ getUsageData: async () => ({ usageUnknown: false, records: [row19] }) }, environment,
+    new Date("2026-10-11T00:00:00.000Z"));
+  assert.equal(released.allowed, true);
+  assert.deepEqual(row19, before);
+
+  const crossMidnight = { ...row19, timestamp: "2026-10-10T23:59:50.000Z", accountingThrough: "2026-10-11T00:00:05.000Z" };
+  assert.deepEqual(await inspectGeminiAvailability({ getUsageData: async () => ({ usageUnknown: false, records: [crossMidnight] }) }, environment,
+    new Date("2026-10-11T00:00:06.000Z")), { allowed: false, reason: "usage_unknown" });
 });
 
 test("operator retirement refuses active windows and recognizes a safe exact transition", async () => {

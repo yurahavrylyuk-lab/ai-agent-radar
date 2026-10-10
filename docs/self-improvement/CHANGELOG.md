@@ -1,5 +1,12 @@
 # Self-improvement changelog
 
+## 2026-10-10 — Gemini timeout admission ready for review
+
+- Raised the end-to-end Gemini provider deadline to 90 seconds and made a timeout stop further Gemini dispatches in its monitoring cycle without retry, fallback, or invented token accounting.
+- Added one shared UTC-day admission policy for timeout ambiguity across preflight, D1, and local JSON. Historical timeout rows remain durable and count as requests; protected non-timeout unresolved states remain fail-closed.
+- Added pending migration `0006`, bounded incomplete-timeout accounting diagnostics, exact row-19 and cross-midnight coverage, and disabled-X/no-0004 runtime coverage.
+- No deployment, production migration, D1 mutation, provider call, X activation, or production merge occurred.
+
 ## 2026-10-09 — Gemini hardening integrated with P6 source
 
 - Converged the accepted P6 source lineage with the already deployed Gemini ambiguity-accounting hotfix while retaining both `0004_x_discovery.sql` and `0005_gemini_ambiguity_accounting.sql`.

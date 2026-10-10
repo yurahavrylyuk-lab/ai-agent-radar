@@ -3,7 +3,7 @@ import test from "node:test";
 import { APPROVED_GEMINI_MODELS, type ApprovedGeminiModel } from "../src/config/geminiModels.js";
 import { checkGeminiUsage, getGeminiUsageCounts, inspectGeminiAvailability, reachedGeminiLimit, type GeminiBlockedReason, type GeminiUsageLimits } from "../src/services/geminiUsageGuard.js";
 import type { GeminiAmbiguityReason, GeminiAmbiguityRetirementExpectation, GeminiReservedReconciliationExpectation, GeminiUsageAdmission, GeminiUsageData, GeminiUsageRecord, GeminiUsageReservation, GeminiUsageSettlement, GeminiUsageTracker } from "../src/services/geminiUsageTracker.js";
-import { createGeminiCycleContext, generateWithGemini, MAX_GEMINI_ATTEMPTS_PER_ANALYSIS } from "../src/tools/llm/gemini.js";
+import { createGeminiCycleContext, GEMINI_TIMEOUT_MS, generateWithGemini, MAX_GEMINI_ATTEMPTS_PER_ANALYSIS } from "../src/tools/llm/gemini.js";
 
 const limits: GeminiUsageLimits = { dailyRequests: 5, weeklyRequests: 20, monthlyRequests: 50, dailyTokens: 10_000, weeklyTokens: 30_000, monthlyTokens: 100_000 };
 const env = { GEMINI_API_KEY: "test-key", GEMINI_MODEL: "ignored-model", GEMINI_DAILY_REQUEST_LIMIT: "5", GEMINI_WEEKLY_REQUEST_LIMIT: "20", GEMINI_MONTHLY_REQUEST_LIMIT: "50", GEMINI_DAILY_TOKEN_LIMIT: "10000", GEMINI_WEEKLY_TOKEN_LIMIT: "30000", GEMINI_MONTHLY_TOKEN_LIMIT: "100000" };
@@ -446,12 +446,84 @@ test("timeout ambiguity preserves the reservation and does not fallback", async 
     const signal = init?.signal as AbortSignal;
     await new Promise<void>((_resolve, reject) => signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true }));
     throw new Error("unreachable");
-  }) as typeof fetch }), /timed out after 30 seconds/);
+  }) as typeof fetch }), /timed out after 90 seconds/);
   assert.equal(calls, 1);
   assert.equal(tracker.data.usageUnknown, false);
   assert.equal(tracker.data.records[0]?.model, "gemini-3.8-flash");
   assert.equal(tracker.data.records[0]?.accountingStatus, "transport_ambiguous");
   assert.equal(tracker.data.records[0]?.ambiguityReason, "timeout");
+});
+
+test("Gemini default deadline is 90 seconds and a response after the old boundary remains admissible", async () => {
+  assert.equal(GEMINI_TIMEOUT_MS, 90_000);
+  const tracker = new MemoryTracker({ records: [], usageUnknown: false });
+  const result = await generateWithGemini("test", {
+    usageTracker: tracker,
+    timeoutMs: 50,
+    fetchImplementation: (async () => {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      return jsonResponse(successfulBody);
+    }) as typeof fetch,
+  });
+  assert.equal(result.outputText, "GEMINI_OK");
+  assert.equal(tracker.data.records[0]?.accountingStatus, "exact");
+});
+
+test("the Gemini deadline covers response-body reading and stops later same-cycle dispatches", async () => {
+  const tracker = new MemoryTracker({ records: [], usageUnknown: false });
+  const context = createGeminiCycleContext();
+  let calls = 0;
+  await assert.rejects(generateWithGemini("test", {
+    usageTracker: tracker,
+    cycleContext: context,
+    timeoutMs: 2,
+    fetchImplementation: (async (_url, init) => {
+      calls += 1;
+      const signal = init?.signal as AbortSignal;
+      return {
+        ok: true,
+        text: () => new Promise<string>((_resolve, reject) => signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true })),
+      } as Response;
+    }) as typeof fetch,
+  }), /timed out after 90 seconds/);
+  assert.equal(context.dispatchBlockedByTimeout, true);
+  assert.equal(tracker.data.records[0]?.ambiguityReason, "timeout");
+  await assert.rejects(generateWithGemini("later", {
+    usageTracker: tracker,
+    cycleContext: context,
+    fetchImplementation: (async () => { calls += 1; return jsonResponse(successfulBody); }) as typeof fetch,
+  }), /stopped for this cycle/);
+  assert.equal(calls, 1);
+  assert.equal(tracker.data.records.length, 1);
+});
+
+test("a monotonic deadline rejects a response whose synchronous parsing outlives it", async () => {
+  const tracker = new MemoryTracker({ records: [], usageUnknown: false });
+  const context = createGeminiCycleContext();
+  const readings = [0, 0, 2];
+  let reading = 0;
+  let calls = 0;
+  await assert.rejects(generateWithGemini("test", {
+    usageTracker: tracker,
+    cycleContext: context,
+    timeoutMs: 1,
+    monotonicNow: () => readings[Math.min(reading++, readings.length - 1)]!,
+    fetchImplementation: (async () => {
+      calls += 1;
+      return jsonResponse(successfulBody);
+    }) as typeof fetch,
+  }), /timed out after 90 seconds/);
+  assert.equal(tracker.settlementCalls, 0);
+  assert.equal(tracker.data.records[0]?.accountingStatus, "transport_ambiguous");
+  assert.equal(tracker.data.records[0]?.ambiguityReason, "timeout");
+  assert.equal(context.providerAttempts, 1);
+  assert.equal(context.fallbacks, 0);
+  await assert.rejects(generateWithGemini("later", {
+    usageTracker: tracker,
+    cycleContext: context,
+    fetchImplementation: (async () => { calls += 1; return jsonResponse(successfulBody); }) as typeof fetch,
+  }), /stopped for this cycle/);
+  assert.equal(calls, 1);
 });
 
 test("invalid successful JSON leaves accounting unknown and never model-hops", async () => {

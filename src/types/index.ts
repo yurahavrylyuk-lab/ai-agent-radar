@@ -1,4 +1,4 @@
-import type { GeminiBlockedReason } from "../services/geminiUsageGuard.js";
+import type { GeminiBlockedReason, GeminiTimeoutAccountingDiagnostic } from "../services/geminiUsageGuard.js";
 
 export interface SearchResult {
   title: string;
@@ -165,5 +165,7 @@ export interface MonitoringCycleResult {
   xBlockedReason?: XBlockedReason;
   /** Present only when pre-discovery Gemini admission blocked new discovery for this cycle. */
   geminiBlockedReason?: GeminiBlockedReason;
+  /** Counts timeout records whose token usage remains unknown in active accounting windows. */
+  geminiTimeoutIncompleteAccounting?: GeminiTimeoutAccountingDiagnostic;
   outcomes: MonitoringCycleOutcome[];
 }

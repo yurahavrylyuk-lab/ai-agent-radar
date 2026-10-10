@@ -225,6 +225,14 @@ test("scheduled summary exposes only the exact bounded Gemini blocked reason", a
   assert.ok(!("geminiBlockedReason" in createScheduledCycleSummary(monitoringResult(), environment())));
 });
 
+test("scheduled summary reports bounded timeout accounting without claiming zero tokens", () => {
+  const summary = createScheduledCycleSummary(monitoringResult({
+    geminiTimeoutIncompleteAccounting: { dailyRequests: 0, weeklyRequests: 2, monthlyRequests: 2 },
+  }), environment());
+  assert.deepEqual(summary.geminiTimeoutIncompleteAccounting, { dailyRequests: 0, weeklyRequests: 2, monthlyRequests: 2 });
+  assert.equal(JSON.stringify(summary).includes("tokensUsed"), false);
+});
+
 test("scheduled handler registers and awaits the single monitoring promise", async () => {
   const summaries: ScheduledCycleSummary[] = [];
   const promises: Promise<unknown>[] = [];

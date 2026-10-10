@@ -6,7 +6,7 @@ import type { RuntimeEnvironment } from "../../services/radarRuntimeConfiguratio
 import type { LlmResult } from "./types.js";
 
 const GEMINI_INTERACTIONS_URL = "https://generativelanguage.googleapis.com/v1beta/interactions";
-const GEMINI_TIMEOUT_MS = 30_000;
+export const GEMINI_TIMEOUT_MS = 90_000;
 const GEMINI_503_MAX_RETRIES = 3;
 const GEMINI_503_DELAY_MS = 5_000;
 export const MAX_GEMINI_ATTEMPTS_PER_ANALYSIS = APPROVED_GEMINI_MODELS.length * (GEMINI_503_MAX_RETRIES + 1);
@@ -23,6 +23,7 @@ interface GeminiErrorBody {
 
 export interface GeminiCycleContext {
   remainingRequests?: number;
+  dispatchBlockedByTimeout: boolean;
   providerAttempts: number;
   fallbacks: number;
   analysesUsingFallbackModel: number;
@@ -31,6 +32,7 @@ export interface GeminiCycleContext {
 
 export function createGeminiCycleContext(): GeminiCycleContext {
   return {
+    dispatchBlockedByTimeout: false,
     providerAttempts: 0,
     fallbacks: 0,
     analysesUsingFallbackModel: 0,
@@ -43,6 +45,8 @@ export interface GeminiDependencies {
   environment?: RuntimeEnvironment;
   fetchImplementation?: typeof fetch;
   timeoutMs?: number;
+  /** Monotonic clock for the provider interaction deadline; tests may supply a deterministic clock. */
+  monotonicNow?: () => number;
   retryDelayMs?: number;
   cycleContext?: GeminiCycleContext;
   now?: () => Date;
@@ -163,6 +167,10 @@ export async function generateWithGemini(input: string, dependencies: GeminiDepe
   const now = dependencies.now ?? (() => new Date());
   const maxAttemptsPerModel = GEMINI_503_MAX_RETRIES + 1;
 
+  if (context.dispatchBlockedByTimeout) {
+    throw new Error("Gemini requests stopped for this cycle after a timeout.");
+  }
+
   for (const [modelIndex, model] of APPROVED_GEMINI_MODELS.entries()) {
     for (let attempt = 1; attempt <= maxAttemptsPerModel; attempt++) {
       const usageCheck = await checkGeminiUsage(tracker, environment, now());
@@ -190,8 +198,15 @@ export async function generateWithGemini(input: string, dependencies: GeminiDepe
       await dependencies.beforeDispatch?.(reservation);
 
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), dependencies.timeoutMs ?? GEMINI_TIMEOUT_MS);
-      let response: Response;
+      const timeoutMs = dependencies.timeoutMs ?? GEMINI_TIMEOUT_MS;
+      const monotonicNow = dependencies.monotonicNow ?? (() => performance.now());
+      const deadlineStartedAt = monotonicNow();
+      const deadlineExpired = () => controller.signal.aborted || monotonicNow() - deadlineStartedAt >= timeoutMs;
+      const timeout = setTimeout(() => controller.abort(), timeoutMs);
+      let response: Response | undefined;
+      let errorBody: string | undefined;
+      let parsedErrorBody: GeminiErrorBody | undefined;
+      let geminiResponse: GeminiResponse | undefined;
       try {
         response = await fetchImplementation(GEMINI_INTERACTIONS_URL, {
           method: "POST",
@@ -199,20 +214,35 @@ export async function generateWithGemini(input: string, dependencies: GeminiDepe
           body: JSON.stringify({ model, input }),
           signal: controller.signal,
         });
+        if (response.ok) {
+          const body = await response.text();
+          if (!deadlineExpired()) geminiResponse = JSON.parse(body) as GeminiResponse;
+        } else {
+          errorBody = (await response.text()).slice(0, 10_000);
+          if (!deadlineExpired()) parsedErrorBody = parseErrorBody(errorBody);
+        }
       } catch (error) {
-        await preserveAmbiguity(tracker, reservation, controller.signal.aborted ? "timeout" : "network_error");
-        if (controller.signal.aborted) throw new Error("Gemini request timed out after 30 seconds.");
+        const timedOut = deadlineExpired();
+        const reason: GeminiAmbiguityReason = timedOut
+          ? "timeout"
+          : response === undefined ? "network_error" : "response_usage_unavailable";
+        if (reason === "timeout") context.dispatchBlockedByTimeout = true;
+        await preserveAmbiguity(tracker, reservation, reason);
+        if (timedOut) throw new Error("Gemini request timed out after 90 seconds.");
+        if (response?.ok) throw new Error("Gemini response was not valid JSON.");
+        if (response !== undefined) throw new Error("Gemini API error response could not be read safely.");
         throw new Error(`Gemini API request failed: ${safeMessage(error, apiKey)}`);
       } finally { clearTimeout(timeout); }
 
+      if (deadlineExpired()) {
+        context.dispatchBlockedByTimeout = true;
+        await preserveAmbiguity(tracker, reservation, "timeout");
+        throw new Error("Gemini request timed out after 90 seconds.");
+      }
+
       if (!response.ok) {
-        let body: string;
-        try { body = (await response.text()).slice(0, 10_000); }
-        catch {
-          await preserveAmbiguity(tracker, reservation, "response_usage_unavailable");
-          throw new Error("Gemini API error response could not be read safely.");
-        }
-        const parsed = parseErrorBody(body);
+        const body = errorBody ?? "";
+        const parsed = parsedErrorBody;
         const message = errorMessage(body, parsed, apiKey);
         const zeroUsageIsConfirmed = isUnavailable(response.status, parsed) ||
           (response.status === 429 && isModelSpecificQuotaFailure(parsed, model));
@@ -234,9 +264,7 @@ export async function generateWithGemini(input: string, dependencies: GeminiDepe
         throw new Error(`Gemini API request failed: HTTP ${response.status} ${response.statusText}: ${message}`);
       }
 
-      let geminiResponse: GeminiResponse;
-      try { geminiResponse = await response.json() as GeminiResponse; }
-      catch {
+      if (!geminiResponse) {
         await preserveAmbiguity(tracker, reservation, "response_usage_unavailable");
         throw new Error("Gemini response was not valid JSON.");
       }
