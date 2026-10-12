@@ -28,6 +28,17 @@ export interface BatchCandidate {
   provenance: Array<{ queryOrdinal: number; resultOrdinal: number }>;
 }
 
+export type BatchTruncationStage = "initial" | "snippet384" | "snippet192" | "snippet96" | "snippet0" | "title128" | "tail";
+
+export interface PreparedBatch {
+  prompt: string;
+  /** Only submitted candidates, retaining their original source records and IDs. */
+  candidates: readonly BatchCandidate[];
+  promptBytes: number;
+  sizeExcluded: number;
+  truncationStage: BatchTruncationStage;
+}
+
 export interface CandidatePool {
   candidates: BatchCandidate[];
   observedAliases: ReadonlyMap<string, readonly string[]>;
