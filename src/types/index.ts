@@ -8,6 +8,32 @@ export interface SearchResult {
   source?: string;
 }
 
+export interface BraveSearchPage {
+  rawCount: number;
+  positions: Array<{ resultOrdinal: number; result: SearchResult | null }>;
+}
+
+export interface BatchObservation {
+  queryOrdinal: number;
+  resultOrdinal: number;
+  result: SearchResult | null;
+}
+
+export interface BatchCandidate {
+  candidateId: string;
+  source: SearchResult;
+  normalizedUrl: string;
+  aliasKey: string;
+  aliases: string[];
+  provenance: Array<{ queryOrdinal: number; resultOrdinal: number }>;
+}
+
+export interface CandidatePool {
+  candidates: BatchCandidate[];
+  observedAliases: ReadonlyMap<string, readonly string[]>;
+  counts: { acceptedObservations: number; invalid: number; homepages: number; duplicates: number; known: number };
+}
+
 export const agentAnalysisCategories = [
   "new_agent",
   "new_product",
