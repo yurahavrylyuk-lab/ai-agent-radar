@@ -73,6 +73,16 @@ export interface AgentAnalysis {
   sourceUrl: string;
 }
 
+export interface BatchSelection {
+  candidate: BatchCandidate;
+  analysis: AgentAnalysis;
+}
+
+export interface BatchAnalysisResult {
+  returnedCount: number;
+  selections: BatchSelection[];
+}
+
 /** Application-owned X attribution. This is never accepted from model output. */
 export interface XSourceProvenance {
   kind: "x";
