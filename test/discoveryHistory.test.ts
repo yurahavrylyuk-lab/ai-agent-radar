@@ -61,6 +61,20 @@ test("exact duplicate recording preserves the original discovery and timestamp",
   });
 });
 
+test("JSON insertion outcome distinguishes creation from an identical same-timestamp existing row", async () => {
+  await withHistory(async (history, filePath) => {
+    assert.equal(typeof history.recordDiscoveryWithOutcome, "function");
+    const inserted = await history.recordDiscoveryWithOutcome(analysis(), firstSeen);
+    assert.equal(inserted.created, true);
+    const originalJson = await readFile(filePath, "utf8");
+    const existing = await history.recordDiscoveryWithOutcome(analysis(), firstSeen);
+    assert.equal(existing.created, false);
+    assert.deepEqual(existing.discovery, inserted.discovery);
+    assert.equal(await readFile(filePath, "utf8"), originalJson);
+    assert.deepEqual(await history.recordDiscovery(analysis(), lastSeen), inserted.discovery);
+  });
+});
+
 test("trailing slashes and surrounding whitespace identify the same discovery", async () => {
   await withHistory(async (history) => {
     await history.recordDiscovery(analysis("https://EXAMPLE.com/discovery/"), firstSeen);

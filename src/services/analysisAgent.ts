@@ -1,6 +1,7 @@
 import { generateWithGemini } from "../tools/llm/gemini.js";
 import type { LlmResult } from "../tools/llm/types.js";
-import { agentAnalysisCategories, type AgentAnalysis, type AgentAnalysisCategory, type SearchResult } from "../types/index.js";
+import { agentAnalysisCategories, type AgentAnalysis, type AgentAnalysisCategory, type BatchAnalysisResult, type PreparedBatch, type SearchResult } from "../types/index.js";
+import { utf8Length } from "./batchPrompt.js";
 
 const categories: readonly AgentAnalysisCategory[] = agentAnalysisCategories;
 
@@ -96,4 +97,105 @@ export async function analyzeSearchResult(result: SearchResult, dependencies: An
   const analysis = parsedAnalysis(response.outputText, result);
   dependencies.onValidatedAnalysis?.(response);
   return analysis;
+}
+
+/** A bounded contract failure that never includes untrusted model or source content. */
+export class BatchAnalysisError extends Error {
+  constructor() {
+    super("Batch analysis returned invalid data.");
+    this.name = "BatchAnalysisError";
+  }
+}
+
+const batchStoryKeys = [
+  "candidateId", "relevanceScore", "category", "name", "summary", "whyItMatters",
+  "educationalValue", "technologies", "projectOpportunities",
+] as const;
+
+type ValidatedBatchStory = Omit<AgentAnalysis, "sourceTitle" | "sourceUrl"> & { candidateId: string };
+
+function exactBatchObject(value: unknown, keys: readonly string[]): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)
+      || Object.keys(value).length !== keys.length
+      || !keys.every((key) => Object.hasOwn(value, key))) {
+    throw new BatchAnalysisError();
+  }
+  return value as Record<string, unknown>;
+}
+
+function batchText(value: unknown, maximumBytes: number): string {
+  if (!isNonEmptyString(value) || utf8Length(value) > maximumBytes) throw new BatchAnalysisError();
+  return value;
+}
+
+function batchTexts(value: unknown, maximumItems: number, maximumBytes: number): string[] {
+  if (!Array.isArray(value) || value.length > maximumItems) throw new BatchAnalysisError();
+  return value.map((item: unknown) => batchText(item, maximumBytes));
+}
+
+function validatedBatchStory(input: unknown, index: number): ValidatedBatchStory {
+  const value = exactBatchObject(input, batchStoryKeys);
+  if (typeof value.candidateId !== "string" || !/^c(?:00[1-9]|0[1-4][0-9]|050)$/.test(value.candidateId)
+      || typeof value.relevanceScore !== "number" || !Number.isInteger(value.relevanceScore)
+      || value.relevanceScore < 1 || value.relevanceScore > 10
+      || typeof value.category !== "string" || !categories.includes(value.category as AgentAnalysisCategory)) {
+    throw new BatchAnalysisError();
+  }
+  const lead = index === 0;
+  return {
+    candidateId: value.candidateId,
+    relevanceScore: value.relevanceScore,
+    category: value.category as AgentAnalysisCategory,
+    name: batchText(value.name, 240),
+    summary: batchText(value.summary, lead ? 1600 : 480),
+    whyItMatters: batchText(value.whyItMatters, lead ? 800 : 320),
+    educationalValue: batchText(value.educationalValue, lead ? 800 : 320),
+    technologies: batchTexts(value.technologies, 8, 80),
+    projectOpportunities: batchTexts(value.projectOpportunities, lead ? 3 : 2, lead ? 240 : 160),
+  };
+}
+
+/** Validate the complete response before selecting any qualifying story. */
+export function parseBatchAnalysis(outputText: string, batch: PreparedBatch): BatchAnalysisResult {
+  if (typeof outputText !== "string" || utf8Length(outputText) > 24576) throw new BatchAnalysisError();
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(outputText);
+  } catch {
+    throw new BatchAnalysisError();
+  }
+  const envelope = exactBatchObject(parsed, ["schemaVersion", "stories"]);
+  if (envelope.schemaVersion !== 1 || !Array.isArray(envelope.stories) || envelope.stories.length > 4) {
+    throw new BatchAnalysisError();
+  }
+
+  const submitted = new Map(batch.candidates.map((candidate) => [candidate.candidateId, candidate]));
+  const seen = new Set<string>();
+  let precedingScore = 10;
+  const validated = envelope.stories.map((input: unknown, index: number) => {
+    const story = validatedBatchStory(input, index);
+    const candidate = submitted.get(story.candidateId);
+    if (!candidate || seen.has(story.candidateId) || story.relevanceScore > precedingScore) {
+      throw new BatchAnalysisError();
+    }
+    seen.add(story.candidateId);
+    precedingScore = story.relevanceScore;
+    return { story, candidate };
+  });
+
+  return {
+    returnedCount: validated.length,
+    selections: validated.filter(({ story }) => story.relevanceScore >= 7).map(({ story, candidate }) => {
+      const { candidateId: _candidateId, ...analysis } = story;
+      return { candidate, analysis: { ...analysis, sourceTitle: candidate.source.title, sourceUrl: candidate.source.url } };
+    }),
+  };
+}
+
+export async function analyzeBatch(
+  batch: PreparedBatch,
+  dependencies: { generate: (input: string) => Promise<Pick<LlmResult, "outputText">> },
+): Promise<BatchAnalysisResult> {
+  const response = await dependencies.generate(batch.prompt);
+  return parseBatchAnalysis(response.outputText, batch);
 }

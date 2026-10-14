@@ -3,16 +3,13 @@ import { D1DiscoveryHistory } from "./services/d1DiscoveryHistory.js";
 import { D1GeminiUsageStore } from "./services/d1GeminiUsageStore.js";
 import { D1NotificationHistory } from "./services/d1NotificationHistory.js";
 import { inspectGeminiAvailability } from "./services/geminiUsageGuard.js";
-import { analyzeSearchResult } from "./services/analysisAgent.js";
-import { processSearchResult } from "./services/discoveryProcessor.js";
+import { analyzeBatch } from "./services/analysisAgent.js";
 import { createMonitoringRuntimeConfiguration } from "./services/radarRuntimeConfiguration.js";
-import { createGeminiCycleContext, generateWithGemini } from "./tools/llm/gemini.js";
+import { createGeminiBatchCycleContext, generateBatchWithGemini } from "./tools/llm/gemini.js";
 import { sendWithResend } from "./tools/email/resend.js";
-import { searchWeb } from "./tools/webSearch.js";
-import { runMonitoringCycle, type MonitoringCycleDependencies } from "./services/monitor.js";
-import { D1XStore } from "./services/d1XStore.js";
-import { collectXDiscoveries } from "./services/xDiscovery.js";
-import type { MonitoringCycleResult } from "./types/index.js";
+import { searchWebPage } from "./tools/webSearch.js";
+import { runBatchMonitoringCycle, type BatchMonitoringDependencies } from "./services/monitor.js";
+import type { BatchCycleMetrics, MonitoringCycleResult } from "./types/index.js";
 
 export const MAX_SCHEDULED_OUTCOMES_LOGGED = 10;
 export const MAX_SCHEDULED_SEARCH_FAILURES_LOGGED = 10;
@@ -42,6 +39,7 @@ export interface RadarWorkerEnv {
 }
 
 export interface ScheduledCycleSummary {
+  batch?: BatchCycleMetrics;
   event: "scheduled_monitoring_cycle_completed";
   searchResultsReceived: number;
   searchFailuresTotal: number;
@@ -94,7 +92,7 @@ export interface ScheduledMonitoringDependencies {
   logInfo?: (summary: ScheduledCycleSummary) => void;
 }
 
-function redactScheduledError(error: string, env: RadarWorkerEnv): string {
+function redactScheduledError(error: string, env: RadarWorkerEnv, maximumLength = MAX_SCHEDULED_ERROR_LENGTH): string {
   const sensitiveValues = [
     env.BRAVE_SEARCH_API_KEY,
     env.GEMINI_API_KEY,
@@ -107,14 +105,58 @@ function redactScheduledError(error: string, env: RadarWorkerEnv): string {
     .sort((left, right) => right.length - left.length);
 
   let safeError = error
-    .replace(/[\r\n\t]+/g, " ")
+    .replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ")
     .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, "[redacted-email]")
     .replace(/\bBearer\s+\S+/gi, "Bearer [redacted]")
     .replace(/\bhttps?:\/\/[^\s<>"']+/gi, "[redacted-url]");
   for (const sensitiveValue of sensitiveValues) {
     safeError = safeError.split(sensitiveValue).join("[redacted]");
   }
-  return safeError.slice(0, MAX_SCHEDULED_ERROR_LENGTH);
+  return safeError.slice(0, maximumLength);
+}
+
+function boundedCount(value: unknown, maximum = Number.MAX_SAFE_INTEGER): number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? Math.min(value, maximum) : 0;
+}
+
+function allowedString<T extends string>(value: unknown, allowed: readonly T[]): T | undefined {
+  return typeof value === "string" && allowed.includes(value as T) ? value as T : undefined;
+}
+
+/** Copies only bounded application evidence; never serialize the candidate map or model/source text. */
+function summarizeBatch(batch: BatchCycleMetrics, env: RadarWorkerEnv): BatchCycleMetrics {
+  const selected: BatchCycleMetrics["selected"] = [];
+  let remainingProvenance = 50;
+  for (const entry of (Array.isArray(batch.selected) ? batch.selected : []).slice(0, 4)) {
+    if (!entry || typeof entry.candidateId !== "string" || !/^c(?:00[1-9]|0[1-4][0-9]|050)$/.test(entry.candidateId)
+      || !Number.isInteger(entry.score) || entry.score < 7 || entry.score > 10) continue;
+    const hostname = typeof entry.hostname === "string"
+      && entry.hostname.length <= 253 && /^[A-Za-z0-9.:[\]-]+$/.test(entry.hostname)
+      && redactScheduledError(entry.hostname, env, 253) === entry.hostname ? entry.hostname : "[redacted]";
+    const provenance: BatchCycleMetrics["selected"][number]["provenance"] = [];
+    const seen = new Set<string>();
+    for (const pair of (Array.isArray(entry.provenance) ? entry.provenance : []).slice(0, 50)) {
+      if (remainingProvenance === 0) break;
+      if (!pair || !Number.isInteger(pair.queryOrdinal) || pair.queryOrdinal < 1 || pair.queryOrdinal > 10
+        || !Number.isInteger(pair.resultOrdinal) || pair.resultOrdinal < 1 || pair.resultOrdinal > 5) continue;
+      const key = `${pair.queryOrdinal}:${pair.resultOrdinal}`;
+      if (seen.has(key)) continue;
+      seen.add(key); remainingProvenance--;
+      provenance.push({ queryOrdinal: pair.queryOrdinal, resultOrdinal: pair.resultOrdinal });
+    }
+    selected.push({ candidateId: entry.candidateId, hostname, score: entry.score, provenance });
+  }
+  return {
+    searchAttempts: boundedCount(batch.searchAttempts, 10), searchSuccesses: boundedCount(batch.searchSuccesses, 10), searchFailures: boundedCount(batch.searchFailures, 10),
+    rawObservations: boundedCount(batch.rawObservations), acceptedObservations: boundedCount(batch.acceptedObservations, 50),
+    invalid: boundedCount(batch.invalid, 50), homepages: boundedCount(batch.homepages, 50), duplicates: boundedCount(batch.duplicates, 50), known: boundedCount(batch.known, 50),
+    sizeExcluded: boundedCount(batch.sizeExcluded, 50), submittedCandidates: boundedCount(batch.submittedCandidates, 50), promptBytes: boundedCount(batch.promptBytes, 32768),
+    truncationStage: allowedString(batch.truncationStage, ["initial", "snippet384", "snippet192", "snippet96", "snippet0", "title128", "tail"] as const) ?? null,
+    status: allowedString(batch.status, ["empty", "blocked", "preparation_failed", "provider_failed", "timeout", "invalid_output", "validated"]) ?? "preparation_failed",
+    reservationAttempts: boundedCount(batch.reservationAttempts, 1), reservations: boundedCount(batch.reservations, 1), providerDispatches: boundedCount(batch.providerDispatches, 1),
+    returnedStories: boundedCount(batch.returnedStories, 4), acceptedStories: boundedCount(batch.acceptedStories, 4), selected,
+    freshDelivered: boundedCount(batch.freshDelivered, 4), replayDelivered: boundedCount(batch.replayDelivered, 4), emailCount: boundedCount(batch.emailCount, 1),
+  };
 }
 
 /** Builds the bounded, secret-free payload emitted after a successful scheduled cycle. */
@@ -125,55 +167,67 @@ export function createScheduledCycleSummary(
   const searchFailures = result.searchFailures
     .slice(0, MAX_SCHEDULED_SEARCH_FAILURES_LOGGED)
     .map((failure) => ({
-      queryOrdinal: failure.queryOrdinal,
+      queryOrdinal: boundedCount(failure.queryOrdinal, 10),
       error: redactScheduledError(failure.error, env),
     }));
   const outcomes = result.outcomes
     .slice(0, MAX_SCHEDULED_OUTCOMES_LOGGED)
     .map((outcome, index) => ({
       ordinal: index + 1,
-      discoveryStatus: outcome.discoveryStatus,
-      notificationStatus: outcome.notificationStatus,
+      discoveryStatus: allowedString(outcome.discoveryStatus, ["new", "duplicate"]),
+      notificationStatus: allowedString(outcome.notificationStatus, ["not_eligible", "already_sent", "sent"]),
       failed: outcome.error !== undefined,
       ...(outcome.error === undefined ? {} : { error: redactScheduledError(outcome.error, env) }),
     }));
 
   return {
     event: "scheduled_monitoring_cycle_completed",
-    searchResultsReceived: result.searchResultsReceived,
+    ...(result.batch === undefined ? {} : { batch: summarizeBatch(result.batch, env) }),
+    searchResultsReceived: boundedCount(result.searchResultsReceived),
     searchFailuresTotal: result.searchFailures.length,
     searchFailuresOmitted: Math.max(0, result.searchFailures.length - searchFailures.length),
     searchFailures,
-    resultsProcessed: result.resultsProcessed,
-    newDiscoveries: result.newDiscoveries,
-    duplicates: result.duplicates,
-    analysesAttempted: result.analysesAttempted,
-    notificationsSent: result.notificationsSent,
-    notificationsAlreadySent: result.notificationsAlreadySent,
-    notificationsNotEligible: result.notificationsNotEligible,
-    failures: result.failures,
-    stoppedByAnalysisCap: result.stoppedByAnalysisCap,
-    geminiProviderAttempts: result.geminiProviderAttempts,
-    geminiFallbacks: result.geminiFallbacks,
-    analysesUsingFallbackModel: result.analysesUsingFallbackModel,
-    geminiRequestsByModel: { ...result.geminiRequestsByModel },
+    resultsProcessed: boundedCount(result.resultsProcessed),
+    newDiscoveries: boundedCount(result.newDiscoveries),
+    duplicates: boundedCount(result.duplicates),
+    analysesAttempted: boundedCount(result.analysesAttempted),
+    notificationsSent: boundedCount(result.notificationsSent),
+    notificationsAlreadySent: boundedCount(result.notificationsAlreadySent),
+    notificationsNotEligible: boundedCount(result.notificationsNotEligible),
+    failures: boundedCount(result.failures),
+    stoppedByAnalysisCap: result.stoppedByAnalysisCap === true,
+    geminiProviderAttempts: boundedCount(result.geminiProviderAttempts),
+    geminiFallbacks: boundedCount(result.geminiFallbacks),
+    analysesUsingFallbackModel: boundedCount(result.analysesUsingFallbackModel),
+    geminiRequestsByModel: {
+      "gemini-3.8-flash": boundedCount(result.geminiRequestsByModel["gemini-3.8-flash"]),
+      "gemini-3.6-flash": boundedCount(result.geminiRequestsByModel["gemini-3.6-flash"]),
+      "gemini-3.5-flash-lite": boundedCount(result.geminiRequestsByModel["gemini-3.5-flash-lite"]),
+    },
     ...(result.geminiTimeoutIncompleteAccounting === undefined ? {} : {
-      geminiTimeoutIncompleteAccounting: { ...result.geminiTimeoutIncompleteAccounting },
+      geminiTimeoutIncompleteAccounting: {
+        dailyRequests: boundedCount(result.geminiTimeoutIncompleteAccounting.dailyRequests),
+        weeklyRequests: boundedCount(result.geminiTimeoutIncompleteAccounting.weeklyRequests),
+        monthlyRequests: boundedCount(result.geminiTimeoutIncompleteAccounting.monthlyRequests),
+      },
     }),
-    replayCandidatesConsidered: result.replayCandidatesConsidered,
-    replayCandidatesEligible: result.replayCandidatesEligible,
-    freshStoriesSent: result.freshStoriesSent,
-    replayStoriesSent: result.replayStoriesSent,
-    replayLookupTruncated: result.replayLookupTruncated,
-    xRequestsAttempted: result.xRequestsAttempted,
-    xPostsReceived: result.xPostsReceived,
-    xCandidatesAdmitted: result.xCandidatesAdmitted,
-    xDuplicates: result.xDuplicates,
-    xAccountsFailed: result.xAccountsFailed,
-    xTruncated: result.xTruncated,
-    xFailures: result.xFailures.slice(0, 5).map((failure) => ({ ...failure })),
-    ...(result.xBlockedReason === undefined ? {} : { xBlockedReason: result.xBlockedReason }),
-    ...(result.geminiBlockedReason === undefined ? {} : { geminiBlockedReason: result.geminiBlockedReason }),
+    replayCandidatesConsidered: boundedCount(result.replayCandidatesConsidered),
+    replayCandidatesEligible: boundedCount(result.replayCandidatesEligible),
+    freshStoriesSent: boundedCount(result.freshStoriesSent),
+    replayStoriesSent: boundedCount(result.replayStoriesSent),
+    replayLookupTruncated: result.replayLookupTruncated === true,
+    xRequestsAttempted: boundedCount(result.xRequestsAttempted),
+    xPostsReceived: boundedCount(result.xPostsReceived),
+    xCandidatesAdmitted: boundedCount(result.xCandidatesAdmitted),
+    xDuplicates: boundedCount(result.xDuplicates),
+    xAccountsFailed: boundedCount(result.xAccountsFailed),
+    xTruncated: result.xTruncated === true,
+    xFailures: result.xFailures.slice(0, 5).flatMap(failure => {
+      const reason = allowedString(failure.reason, ["auth", "rate_limit", "account_unavailable", "timeout", "provider_error", "malformed_response", "state_unavailable", "contract_drift"]);
+      return reason && Number.isInteger(failure.accountOrdinal) && failure.accountOrdinal >= 1 && failure.accountOrdinal <= 5 ? [{ accountOrdinal: failure.accountOrdinal, reason }] : [];
+    }),
+    ...(allowedString(result.xBlockedReason, ["disabled", "config", "auth", "rate_limit", "budget", "state_unavailable", "price_expired", "contract_drift"]) === undefined ? {} : { xBlockedReason: result.xBlockedReason }),
+    ...(allowedString(result.geminiBlockedReason, ["usage_unknown", "daily_request_limit", "weekly_request_limit", "monthly_request_limit", "daily_token_limit", "weekly_token_limit", "monthly_token_limit", "usage_state_unavailable", "invalid_configuration"]) === undefined ? {} : { geminiBlockedReason: result.geminiBlockedReason }),
     outcomesTotal: result.outcomes.length,
     outcomesOmitted: Math.max(0, result.outcomes.length - outcomes.length),
     outcomes,
@@ -187,48 +241,37 @@ export function createWorkerPersistence(env: RadarWorkerEnv) {
     notificationHistory: new D1NotificationHistory(env.DB),
     braveUsageStore: new D1BraveUsageStore(env.DB),
     geminiUsageStore: new D1GeminiUsageStore(env.DB),
-    xStore: new D1XStore(env.DB),
   };
 }
 
 /** Creates cloud-ready cycle dependencies without invoking a monitoring cycle. */
 export interface WorkerMonitoringDependencyOverrides {
-  readonly searchWeb?: typeof searchWeb;
+  readonly searchPage?: typeof searchWebPage;
 }
 
 export function createWorkerMonitoringDependencies(
   env: RadarWorkerEnv,
   overrides: WorkerMonitoringDependencyOverrides = {},
-): MonitoringCycleDependencies {
+): BatchMonitoringDependencies {
   const configuration = createMonitoringRuntimeConfiguration(env as unknown as Record<string, string | undefined>);
   const persistence = createWorkerPersistence(env);
-  const geminiCycleContext = createGeminiCycleContext();
-  const workerSearchWeb = overrides.searchWeb ?? searchWeb;
+  const geminiCycleContext = createGeminiBatchCycleContext();
+  const workerSearchPage = overrides.searchPage ?? searchWebPage;
 
   return {
     history: persistence.discoveryHistory,
     geminiCycleContext,
     geminiPreflight: (now) => inspectGeminiAvailability(persistence.geminiUsageStore, configuration.environment, now),
-    search: (query, options) => workerSearchWeb(query, {
+    searchPage: (query, options) => workerSearchPage(query, {
       usageTracker: persistence.braveUsageStore,
       environment: configuration.environment,
       freshness: options?.freshness,
     }),
-    collectX: (now) => collectXDiscoveries({ store: persistence.xStore, environment: configuration.environment, now }),
-    resolveXPost: (postId) => persistence.xStore.getStoryByPostId(postId),
-    markXStoryProcessed: (storyUrl) => persistence.xStore.markStoryProcessed(storyUrl),
-    process: (result, sourceProvenance) => processSearchResult(result, {
-      history: persistence.discoveryHistory,
-      sourceProvenance,
-      analyze: (searchResult) => analyzeSearchResult(searchResult, {
-        generate: (input) => generateWithGemini(input, {
-          usageTracker: persistence.geminiUsageStore,
-          environment: configuration.environment,
-          cycleContext: geminiCycleContext,
-        }),
-        onValidatedAnalysis: (response) => {
-          if (response.usedFallback) geminiCycleContext.analysesUsingFallbackModel += 1;
-        },
+    analyze: batch => analyzeBatch(batch, {
+      generate: input => generateBatchWithGemini(input, {
+        usageTracker: persistence.geminiUsageStore,
+        environment: configuration.environment,
+        cycleContext: geminiCycleContext,
       }),
     }),
     notification: {
@@ -246,7 +289,7 @@ export async function runScheduledMonitoring(
   dependencies: ScheduledMonitoringDependencies = {},
 ): Promise<MonitoringCycleResult> {
   const runCycle = dependencies.runCycle
-    ?? (() => runMonitoringCycle(undefined, createWorkerMonitoringDependencies(env)));
+    ?? (() => runBatchMonitoringCycle(createWorkerMonitoringDependencies(env)));
   const result = await runCycle();
   (dependencies.logInfo ?? ((summary) => console.info(summary)))(createScheduledCycleSummary(result, env));
   return result;

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import * as formatter from "../src/services/discoveryEmailFormatter.js";
 import { formatDiscoveryEmail, formatDigestEmail } from "../src/services/discoveryEmailFormatter.js";
 import type { StoredDiscovery } from "../src/types/index.js";
 
@@ -125,6 +126,58 @@ function digestStory(id: string, relevanceScore = 8): StoredDiscovery {
     },
   };
 }
+
+for (const count of [1, 2, 4]) {
+  test(`batch digest with ${count} stories has exact title, detailed lead and concise secondary stories`, () => {
+    const stories = ["lead", "two", "three", "four"].slice(0, count).map((id, index) => digestStory(id, 10 - index));
+    const original = structuredClone(stories);
+    const email = formatter.formatBatchDigestEmail(stories);
+    assert.equal(email.subject, "AI Agent Radar — Daily Digest");
+    for (const body of [email.text, email.html]) {
+      assert.ok(body.includes("AI Agent Radar — Daily Digest"));
+      assert.ok(body.includes("MOST RELEVANT"));
+      for (const value of ["Relevance: 10/10", "TypeScript", "Summary of lead.", "Why lead matters.", "Learn from lead.", "Build with lead", "Extend lead"]) {
+        assert.ok(body.includes(value), value);
+      }
+      assert.ok(!body.includes("It could be relevant"));
+      for (const [index, id] of ["two", "three", "four"].slice(0, count - 1).entries()) {
+        assert.ok(body.includes(`Summary of ${id}.`));
+        assert.ok(body.includes(`Relevance: ${9 - index}/10`));
+        assert.ok(body.includes(`Why ${id} matters.`));
+        assert.ok(!body.includes(`Learn from ${id}.`));
+        assert.ok(!body.includes(`Build with ${id}`));
+      }
+    }
+    assert.equal((email.html.match(/<h2\b/g) ?? []).length, 1);
+    assert.deepEqual(stories, original);
+  });
+}
+
+test("batch formatter escapes model and source fields and links only stored safe source URLs", () => {
+  const lead = digestStory("lead");
+  lead.analysis.name = "<script>bad()</script>";
+  lead.analysis.summary = '<img src=x onerror="bad()">';
+  lead.analysis.whyItMatters = "<b>why</b>";
+  lead.analysis.educationalValue = "<script>learn()</script>";
+  lead.analysis.projectOpportunities = ["<script>build()</script>"];
+  lead.analysis.technologies = ["<script>technology()</script>"];
+  lead.analysis.sourceTitle = "<em>source</em>";
+  lead.analysis.sourceUrl = 'https://example.com/stored?x="quoted"&y=<tag>';
+  const secondary = digestStory("secondary");
+  secondary.analysis.summary = "<script>second()</script>";
+  secondary.analysis.whyItMatters = "<script>secondaryWhy()</script>";
+  secondary.analysis.sourceUrl = "javascript:bad()";
+  const email = formatter.formatBatchDigestEmail([lead, secondary]);
+  assert.doesNotMatch(email.html, /<script>|<img |<b>|<em>|href="javascript:/);
+  assert.match(email.html, /&lt;script&gt;learn\(\)&lt;\/script&gt;/);
+  assert.match(email.html, /&lt;script&gt;second\(\)&lt;\/script&gt;/);
+  assert.match(email.html, /&lt;script&gt;technology\(\)&lt;\/script&gt;/);
+  assert.match(email.html, /&lt;script&gt;secondaryWhy\(\)&lt;\/script&gt;/);
+  assert.ok(email.text.includes("<script>technology()</script>"));
+  assert.ok(email.text.includes("<script>secondaryWhy()</script>"));
+  assert.match(email.html, /href="https:\/\/example.com\/stored\?x=&quot;quoted&quot;&amp;y=&lt;tag&gt;"/);
+  assert.match(email.html, /href="#"/);
+});
 
 test("digest lead story renders an h2 with the story name, summary, why-it-matters, and key-points list", () => {
   const content = formatDigestEmail([digestStory("lead"), digestStory("two")]);

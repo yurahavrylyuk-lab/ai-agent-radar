@@ -4,15 +4,16 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { D1BraveUsageStore } from "../src/services/d1BraveUsageStore.js";
 import { D1DiscoveryHistory } from "../src/services/d1DiscoveryHistory.js";
+import * as discoveryProcessor from "../src/services/discoveryProcessor.js";
 import { D1GeminiUsageStore } from "../src/services/d1GeminiUsageStore.js";
 import { D1NotificationHistory } from "../src/services/d1NotificationHistory.js";
 import { D1XStore } from "../src/services/d1XStore.js";
 import { reconcileStrandedGeminiReservation } from "../src/services/geminiAmbiguityRecovery.js";
 import { checkBraveSearchUsage } from "../src/services/usageGuard.js";
 import { checkGeminiUsage, getGeminiUsageCounts } from "../src/services/geminiUsageGuard.js";
-import { runMonitoringCycle } from "../src/services/monitor.js";
+import { runBatchMonitoringCycle } from "../src/services/monitor.js";
 import worker, { createWorkerMonitoringDependencies, type RadarWorkerEnv } from "../src/worker.js";
-import type { AgentAnalysis, XSourceProvenance } from "../src/types/index.js";
+import type { AgentAnalysis, BatchSelection, XSourceProvenance } from "../src/types/index.js";
 import type { XInboxRecord } from "../src/services/xStore.js";
 
 class SqliteD1Statement {
@@ -181,6 +182,87 @@ test("D1 discovery history round-trips strict application-owned X provenance", a
     const recorded = await history.recordDiscovery(analysis("https://example.com/x"), new Date("2026-10-08T08:00:00.000Z"), provenance);
     assert.deepEqual(recorded.sourceProvenance, provenance);
     assert.deepEqual((await history.touchDiscovery(recorded.normalizedUrl, new Date("2026-10-08T09:00:00.000Z")))?.sourceProvenance, provenance);
+  });
+});
+
+function selectionFor(analysis: AgentAnalysis): BatchSelection {
+  return { candidate: { candidateId: "c001", source: { title: analysis.sourceTitle, url: analysis.sourceUrl },
+    normalizedUrl: analysis.sourceUrl, aliasKey: analysis.sourceUrl, aliases: [analysis.sourceUrl],
+    provenance: [{ queryOrdinal: 1, resultOrdinal: 1 }] }, analysis };
+}
+
+test("D1 batch persistence round-trips rich existing fields and excludes the batch envelope", async () => {
+  await withDatabase(async (database, d1) => {
+    const history = new D1DiscoveryHistory(d1);
+    const rich: AgentAnalysis = { ...analysis("https://example.test/news/release"),
+      summary: "Detailed lead summary. ".repeat(30), whyItMatters: "Practical impact. ".repeat(20),
+      educationalValue: "Learning opportunity. ".repeat(20),
+      projectOpportunities: ["Prototype a release monitor", "Build a dashboard", "Explore tooling"],
+      technologies: ["TypeScript", "D1", "Workers"] };
+    const selection = { ...selectionFor(rich), prompt: "must not persist", candidatePool: ["must not persist"] };
+    const result = await discoveryProcessor.recordBatchSelection(selection, { history, seenAt: new Date("2026-10-12T08:00:00.000Z") });
+    assert.equal(result.status, "new");
+    assert.deepEqual((await new D1DiscoveryHistory(d1).getDiscovery(rich.sourceUrl))?.analysis, rich);
+    const row = database.prepare("SELECT analysis_json FROM discoveries").get() as { analysis_json: string };
+    assert.deepEqual(JSON.parse(row.analysis_json), rich);
+    assert.equal((database.prepare("SELECT COUNT(*) AS count FROM discoveries").get() as { count: number }).count, 1);
+  });
+});
+
+for (const race of [
+  { name: "earlier stored row", firstSeenAt: "2026-10-01T08:00:00.000Z", sameAnalysis: false },
+  { name: "same-timestamp winner with different content", firstSeenAt: "2026-10-12T08:00:00.000Z", sameAnalysis: false },
+  { name: "same-timestamp winner with identical content", firstSeenAt: "2026-10-12T08:00:00.000Z", sameAnalysis: true },
+])
+test(`D1 insert race returns ${race.name} as duplicate without overwriting it`, async () => {
+  await withDatabase(async (database) => {
+    const originalFirstSeenAt = race.firstSeenAt;
+    const incomingAnalysis = analysis("https://example.test/news/race");
+    const originalAnalysis = race.sameAnalysis ? incomingAnalysis
+      : { ...incomingAnalysis, summary: "Earlier durable interpretation", relevanceScore: 4 };
+    let raced = false;
+    class RacingStatement extends SqliteD1Statement {
+      override bind(...values: unknown[]): RacingStatement { return new RacingStatement(this.database, this.query, values); }
+      override async run(): Promise<D1Result> {
+        if (!raced && this.query.startsWith("INSERT OR IGNORE INTO discoveries")) {
+          raced = true;
+          this.database.prepare("INSERT INTO discoveries (normalized_url, first_seen_at, last_seen_at, analysis_json) VALUES (?, ?, ?, ?)")
+            .run(originalAnalysis.sourceUrl, originalFirstSeenAt, originalFirstSeenAt, JSON.stringify(originalAnalysis));
+        }
+        return super.run();
+      }
+    }
+    class RacingDatabase extends SqliteD1Database {
+      override prepare(query: string): RacingStatement { return new RacingStatement(this.database, query); }
+    }
+    const history = new D1DiscoveryHistory(new RacingDatabase(database) as unknown as D1Database);
+    const result = await discoveryProcessor.recordBatchSelection(selectionFor(incomingAnalysis),
+      { history, seenAt: new Date("2026-10-12T08:00:00.000Z") });
+    assert.equal(raced, true);
+    assert.equal(result.status, "duplicate");
+    assert.equal(result.discovery.firstSeenAt, originalFirstSeenAt);
+    assert.equal(result.discovery.lastSeenAt, originalFirstSeenAt);
+    assert.deepEqual(result.discovery.analysis, originalAnalysis);
+    assert.deepEqual(await history.getDiscovery(originalAnalysis.sourceUrl), result.discovery);
+    assert.equal((database.prepare("SELECT COUNT(*) AS count FROM discoveries").get() as { count: number }).count, 1);
+  });
+});
+
+test("D1 batch persistence rejects an unverified insert outcome instead of offering a fresh result", async () => {
+  await withDatabase(async (database) => {
+    class UnverifiedStatement extends SqliteD1Statement {
+      override bind(...values: unknown[]): UnverifiedStatement { return new UnverifiedStatement(this.database, this.query, values); }
+      override async run(): Promise<D1Result> {
+        const result = await super.run();
+        return { ...result, meta: {} as D1Meta };
+      }
+    }
+    class UnverifiedDatabase extends SqliteD1Database {
+      override prepare(query: string): UnverifiedStatement { return new UnverifiedStatement(this.database, query); }
+    }
+    const history = new D1DiscoveryHistory(new UnverifiedDatabase(database) as unknown as D1Database);
+    await assert.rejects(discoveryProcessor.recordBatchSelection(selectionFor(analysis("https://example.test/news/unverified")),
+      { history, seenAt: new Date("2026-10-12T08:00:00.000Z") }), /insert outcome/i);
   });
 });
 
@@ -658,15 +740,12 @@ test("disabled-X Worker cycle remains safe without migration 0004 tables", async
     await new D1DiscoveryHistory(d1).recordDiscovery(stored, new Date("2026-10-10T07:00:00.000Z"));
     let searches = 0;
     const dependencies = createWorkerMonitoringDependencies(env, {
-      searchWeb: (async () => {
+      searchPage: (async () => {
         searches += 1;
-        return [
-          { title: stored.sourceTitle, url: stored.sourceUrl, snippet: "Known ordinary article." },
-          { title: "Observed X post", url: "https://x.com/OpenAI/status/9007199254740993999", snippet: "Observed status." },
-        ];
-      }) as typeof import("../src/tools/webSearch.js").searchWeb,
+        return { rawCount: 1, positions: [{ resultOrdinal: 1, result: { title: stored.sourceTitle, url: stored.sourceUrl, snippet: "Known ordinary article." } }] };
+      }) as typeof import("../src/tools/webSearch.js").searchWebPage,
     });
-    const outcome = await runMonitoringCycle(undefined, { ...dependencies, now: () => new Date("2026-10-10T08:00:00.000Z") });
+    const outcome = await runBatchMonitoringCycle({ ...dependencies, now: () => new Date("2026-10-10T08:00:00.000Z") });
     assert.equal(searches, 10);
     assert.equal(outcome.analysesAttempted, 0);
     assert.equal(outcome.duplicates, 10);

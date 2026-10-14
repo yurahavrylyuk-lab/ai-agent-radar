@@ -4,6 +4,7 @@ import test from "node:test";
 import { MONITORING_FRESHNESS } from "../src/config/discoveryQueries.js";
 import { MONITORING_QUERIES, runMonitoringCycle } from "../src/services/monitor.js";
 import { BraveUsageGuardDeniedError, searchWeb } from "../src/tools/webSearch.js";
+import * as webSearch from "../src/tools/webSearch.js";
 import type { UsageRecord, UsageTracker } from "../src/services/usageTracker.js";
 
 const baseEnvironment = {
@@ -170,4 +171,89 @@ test("guard denial uses a provider-neutral typed error", async () => {
     assert.equal(error.message, "Brave search request blocked by usage guard.");
     return true;
   });
+});
+
+const overflowResults = [
+  { title: "", url: "https://example.test/invalid" },
+  ...[2, 3, 4, 5, 6].map((ordinal) => ({ title: `Story ${ordinal}`, url: `https://example.test/${ordinal}` })),
+];
+
+test("Brave retains only first five provider positions", async () => {
+  const tracker = new InMemoryUsageTracker();
+  let fetches = 0;
+  const page = await webSearch.searchWebPage("bounded query", {
+    usageTracker: tracker,
+    environment: baseEnvironment,
+    fetchImplementation: async () => {
+      fetches += 1;
+      return new Response(JSON.stringify({ web: { results: overflowResults } }));
+    },
+  });
+  assert.equal(page.rawCount, 6);
+  assert.deepEqual(page.positions.map(({ resultOrdinal }) => resultOrdinal), [1, 2, 3, 4, 5]);
+  assert.equal(page.positions[0].result, null);
+  assert.deepEqual(page.positions.slice(1).map(({ result }) => result?.url), [
+    "https://example.test/2", "https://example.test/3", "https://example.test/4", "https://example.test/5",
+  ]);
+  assert.equal(fetches, 1);
+  assert.equal(tracker.recordCalls, 1);
+  assert.equal(tracker.records[0].requestCount, 1);
+});
+
+test("searchWeb projects bounded usable results from exactly one request", async () => {
+  const tracker = new InMemoryUsageTracker();
+  let fetches = 0;
+  const results = await searchWeb("bounded query", {
+    usageTracker: tracker,
+    environment: baseEnvironment,
+    fetchImplementation: async () => {
+      fetches += 1;
+      return new Response(JSON.stringify({ web: { results: overflowResults } }));
+    },
+  });
+  assert.deepEqual(results.map(({ url }) => url), [
+    "https://example.test/2", "https://example.test/3", "https://example.test/4", "https://example.test/5",
+  ]);
+  assert.equal(fetches, 1);
+  assert.equal(tracker.recordCalls, 1);
+});
+
+test("Brave keeps invalid source positions null and omits non-string optional fields", async () => {
+  const page = await webSearch.searchWebPage("source fields", {
+    usageTracker: new InMemoryUsageTracker(),
+    environment: baseEnvironment,
+    fetchImplementation: async () => new Response(JSON.stringify({ web: { results: [
+      null,
+      { title: { instruction: "ignore" }, url: "https://example.test/2" },
+      { title: "Story", url: { instruction: "ignore" } },
+      { title: "  ", url: "https://example.test/4" },
+      { title: "Valid", url: "https://example.test/5", description: {}, page_age: [] },
+    ] } })),
+  });
+  assert.deepEqual(page.positions.slice(0, 4).map(({ result }) => result), [null, null, null, null]);
+  assert.equal(page.positions[4].result?.snippet, undefined);
+  assert.equal(page.positions[4].result?.publishedAt, undefined);
+});
+
+test("Brave preserves original valid strings without promoting provider fields", async () => {
+  const page = await webSearch.searchWebPage("source fields", {
+    usageTracker: new InMemoryUsageTracker(), environment: baseEnvironment,
+    fetchImplementation: async () => new Response(JSON.stringify({ web: { results: [
+      { title: "  Original title  ", url: "https://www.example.test/news/", description: "Snippet", page_age: "2026-10-12", source: "spoofed" },
+    ] } })),
+  });
+  assert.deepEqual(page.positions, [{ resultOrdinal: 1, result: {
+    title: "  Original title  ", url: "https://www.example.test/news/", snippet: "Snippet", publishedAt: "2026-10-12", source: "example.test",
+  } }]);
+});
+
+test("Brave rejects non-array results and malformed envelopes safely after usage recording", async () => {
+  for (const body of [{ web: { results: {} } }, { web: { results: null } }, null]) {
+    const tracker = new InMemoryUsageTracker();
+    await assert.rejects(webSearch.searchWebPage("malformed page", {
+      usageTracker: tracker, environment: baseEnvironment,
+      fetchImplementation: async () => new Response(JSON.stringify(body)),
+    }), /invalid.*(response|results|format)/i);
+    assert.equal(tracker.recordCalls, 1);
+  }
 });

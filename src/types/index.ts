@@ -8,6 +8,43 @@ export interface SearchResult {
   source?: string;
 }
 
+export interface BraveSearchPage {
+  rawCount: number;
+  positions: Array<{ resultOrdinal: number; result: SearchResult | null }>;
+}
+
+export interface BatchObservation {
+  queryOrdinal: number;
+  resultOrdinal: number;
+  result: SearchResult | null;
+}
+
+export interface BatchCandidate {
+  candidateId: string;
+  source: SearchResult;
+  normalizedUrl: string;
+  aliasKey: string;
+  aliases: string[];
+  provenance: Array<{ queryOrdinal: number; resultOrdinal: number }>;
+}
+
+export type BatchTruncationStage = "initial" | "snippet384" | "snippet192" | "snippet96" | "snippet0" | "title128" | "tail";
+
+export interface PreparedBatch {
+  prompt: string;
+  /** Only submitted candidates, retaining their original source records and IDs. */
+  candidates: readonly BatchCandidate[];
+  promptBytes: number;
+  sizeExcluded: number;
+  truncationStage: BatchTruncationStage;
+}
+
+export interface CandidatePool {
+  candidates: BatchCandidate[];
+  observedAliases: ReadonlyMap<string, readonly string[]>;
+  counts: { acceptedObservations: number; invalid: number; homepages: number; duplicates: number; known: number };
+}
+
 export const agentAnalysisCategories = [
   "new_agent",
   "new_product",
@@ -34,6 +71,16 @@ export interface AgentAnalysis {
   technologies: string[];
   sourceTitle: string;
   sourceUrl: string;
+}
+
+export interface BatchSelection {
+  candidate: BatchCandidate;
+  analysis: AgentAnalysis;
+}
+
+export interface BatchAnalysisResult {
+  returnedCount: number;
+  selections: BatchSelection[];
 }
 
 /** Application-owned X attribution. This is never accepted from model output. */
@@ -64,6 +111,11 @@ export type DeliveryCandidateOrigin = "fresh" | "replay";
 export interface DeliveryCandidate {
   discovery: StoredDiscovery;
   origin: DeliveryCandidateOrigin;
+}
+
+/** Observed cycle-local aliases retain their existing durable notification keys. */
+export interface BatchDeliveryCandidate extends DeliveryCandidate {
+  aliases: readonly string[];
 }
 
 /** Provider-neutral content ready for a future email transport. */
@@ -133,7 +185,24 @@ export interface XAccountFailure {
   reason: XAccountFailureReason;
 }
 
+export interface BatchCycleMetrics {
+  searchAttempts: number; searchSuccesses: number; searchFailures: number;
+  rawObservations: number; acceptedObservations: number;
+  invalid: number; homepages: number; duplicates: number; known: number;
+  sizeExcluded: number; submittedCandidates: number; promptBytes: number;
+  truncationStage: BatchTruncationStage | null;
+  status: "empty" | "blocked" | "preparation_failed" | "provider_failed" | "timeout" | "invalid_output" | "validated";
+  reservationAttempts: number; reservations: number; providerDispatches: number;
+  returnedStories: number; acceptedStories: number;
+  selected: Array<{
+    candidateId: string; hostname: string; score: number;
+    provenance: Array<{ queryOrdinal: number; resultOrdinal: number }>;
+  }>;
+  freshDelivered: number; replayDelivered: number; emailCount: number;
+}
+
 export interface MonitoringCycleResult {
+  batch?: BatchCycleMetrics;
   query: string;
   searchResultsReceived: number;
   searchFailures: MonitoringSearchFailure[];

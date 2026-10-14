@@ -1,10 +1,12 @@
-import { formatDiscoveryEmail, formatDigestEmail, type DigestEmailOptions } from "./discoveryEmailFormatter.js";
+import { formatDiscoveryEmail, formatDigestEmail, formatBatchDigestEmail, type DigestEmailOptions } from "./discoveryEmailFormatter.js";
+import { batchAliasKey, isBatchNewsUrl } from "./batchCandidates.js";
+import { normalizeDiscoveryUrl } from "./discoveryHistoryCore.js";
 import { compareDiscoveryPriority } from "./discoveryPriority.js";
 import { isNotificationEligible } from "./notificationEligibility.js";
 import { isTrustedFallbackSource } from "./sourceTrust.js";
 import { NotificationHistoryError, type NotificationHistory } from "./notificationHistoryCore.js";
 import { sendWithResend } from "../tools/email/resend.js";
-import type { DeliveryCandidate, DiscoveryEmailContent, DiscoveryProcessingResult, EmailSendResult, NotificationRecord, NotificationResult, StoredDiscovery } from "../types/index.js";
+import type { BatchDeliveryCandidate, DeliveryCandidate, DiscoveryEmailContent, DiscoveryProcessingResult, EmailSendResult, NotificationRecord, NotificationResult, StoredDiscovery } from "../types/index.js";
 
 type EligibilityCheck = (result: DiscoveryProcessingResult) => boolean;
 type DiscoveryEmailFormatter = (discovery: StoredDiscovery) => DiscoveryEmailContent;
@@ -143,6 +145,21 @@ export async function notifyDeliveryDigest(
     { mode: fallback ? "fallback" : "normal" },
   ));
 
+  const sentCandidates = await recordDigestDelivery(digest, history, emailResult, notificationMap);
+  return {
+    notifications: notificationMap,
+    eligibleCandidates: [...eligibleCandidates],
+    sentCandidates,
+    mode: fallback ? "fallback" : "normal",
+  };
+}
+
+async function recordDigestDelivery(
+  digest: readonly DeliveryCandidate[],
+  history: NotificationHistory,
+  emailResult: EmailSendResult,
+  notificationMap: Map<string, NotificationResult>,
+): Promise<DeliveryCandidate[]> {
   // Record a notification entry for every story in the digest.
   // Attempt all recordings before throwing so a single write failure does not
   // leave subsequent stories permanently unrecorded.
@@ -164,12 +181,91 @@ export async function notifyDeliveryDigest(
     );
   }
 
-  return {
-    notifications: notificationMap,
-    eligibleCandidates: [...eligibleCandidates],
-    sentCandidates,
-    mode: fallback ? "fallback" : "normal",
+  return sentCandidates;
+}
+
+/** Threshold-only delivery of an already-bounded, persisted fresh/replay pool. */
+export async function notifyBatchDeliveryDigest(
+  candidates: readonly BatchDeliveryCandidate[],
+  dependencies: NotificationOrchestratorDependencies & {
+    /** Reports the exact externally accepted digest before notification-record writes. */
+    onAccepted?: (candidates: readonly BatchDeliveryCandidate[]) => void;
+  },
+): Promise<DigestDeliveryResult> {
+  const history = dependencies.history;
+  if (!history) throw new Error("Notification history is required.");
+  const notifications = new Map<string, NotificationResult>();
+  type Group = { candidate: BatchDeliveryCandidate; index: number; aliases: Set<string>; urls: Set<string> };
+  const groups = new Map<string, Group>();
+  for (const [index, candidate] of candidates.entries()) {
+    const url = candidate.discovery.analysis.sourceUrl;
+    notifications.set(url, { status: "not_eligible" });
+    if (!isBatchNewsUrl(url)) continue;
+    const key = batchAliasKey(candidate.discovery.normalizedUrl);
+    let group = groups.get(key);
+    if (!group) {
+      group = { candidate, index, aliases: new Set(), urls: new Set() };
+      groups.set(key, group);
+    } else if (group.candidate.origin === "replay" && candidate.origin === "fresh") {
+      group.candidate = candidate;
+      group.index = index;
+    }
+    // Collect all evidence before choosing a representative, including aliases
+    // contributed by duplicate or below-threshold candidates.
+    group.urls.add(url);
+    for (const alias of [url, candidate.discovery.normalizedUrl, ...candidate.aliases]) {
+      group.aliases.add(normalizeDiscoveryUrl(alias));
+    }
+  }
+
+  const excludeNotified = async (pool: Group[]): Promise<Group[]> => {
+    const unsent: Group[] = [];
+    for (const group of pool) {
+      let notification: NotificationRecord | undefined;
+      try {
+        for (const alias of group.aliases) {
+          if (await history.hasNotificationBeenSent(alias, "email")) {
+            const record = await history.getNotificationRecord(alias, "email");
+            if (!record) throw new NotificationHistoryError("Known notification could not be retrieved safely.");
+            notification ??= record;
+          }
+        }
+      } catch (error) {
+        if (error instanceof NotificationHistoryError) throw error;
+        throw new NotificationHistoryError(`Notification history could not be read safely: ${messageOf(error)}`);
+      }
+      if (notification) {
+        for (const url of group.urls) notifications.set(url, { status: "already_sent", record: notification });
+      } else {
+        unsent.push(group);
+      }
+    }
+    return unsent;
   };
+
+  const initiallyUnsent = await excludeNotified([...groups.values()]);
+  const ranked = initiallyUnsent.filter(({ candidate }) => candidate.discovery.analysis.relevanceScore >= 7)
+    .sort((left, right) => {
+      const a = left.candidate;
+      const b = right.candidate;
+      if (a.origin !== b.origin) return a.origin === "fresh" ? -1 : 1;
+      if (a.origin === "fresh") return left.index - right.index;
+      return b.discovery.analysis.relevanceScore - a.discovery.analysis.relevanceScore
+        || Date.parse(b.discovery.firstSeenAt) - Date.parse(a.discovery.firstSeenAt)
+        || (a.discovery.normalizedUrl < b.discovery.normalizedUrl ? -1 : a.discovery.normalizedUrl > b.discovery.normalizedUrl ? 1 : 0);
+    });
+  // Recheck the full bounded eligible pool before the final cap so a newly
+  // notified lead is replaced without scanning more history or re-analyzing.
+  const eligibleCandidates = (await excludeNotified(ranked)).map(group => ({
+    ...group.candidate, aliases: [...group.aliases],
+  }));
+  const digest = eligibleCandidates.slice(0, 4);
+  if (digest.length === 0) return { notifications, eligibleCandidates, sentCandidates: [] };
+  const sendEmail = dependencies.sendEmail ?? sendWithResend;
+  const emailResult = await sendEmail(formatBatchDigestEmail(digest.map(candidate => candidate.discovery)));
+  dependencies.onAccepted?.(digest);
+  const sentCandidates = await recordDigestDelivery(digest, history, emailResult, notifications);
+  return { notifications, eligibleCandidates, sentCandidates, mode: "normal" };
 }
 
 export async function notifyDigest(

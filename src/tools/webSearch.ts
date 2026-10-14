@@ -1,22 +1,9 @@
-import type { SearchResult } from "../types/index.js";
+import type { BraveSearchPage, SearchResult } from "../types/index.js";
 import { checkBraveSearchUsage } from "../services/usageGuard.js";
 import type { BraveUsageStore } from "../services/usageTracker.js";
 import type { RuntimeEnvironment } from "../services/radarRuntimeConfiguration.js";
 
 const BRAVE_WEB_SEARCH_URL = "https://api.search.brave.com/res/v1/web/search";
-
-interface BraveSearchResponse {
-  web?: {
-    results?: BraveWebResult[];
-  };
-}
-
-interface BraveWebResult {
-  title?: string;
-  url?: string;
-  description?: string;
-  page_age?: string;
-}
 
 export interface SearchWebDependencies {
   usageTracker?: BraveUsageStore;
@@ -42,25 +29,28 @@ function getSourceName(url: string): string | undefined {
   }
 }
 
-function toSearchResult(result: BraveWebResult): SearchResult | undefined {
-  if (!result.title || !result.url) {
-    return undefined;
+function toSearchResult(value: unknown): SearchResult | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const result = value as Record<string, unknown>;
+  if (typeof result.title !== "string" || !result.title.trim()
+      || typeof result.url !== "string" || !result.url.trim()) {
+    return null;
   }
 
   return {
     title: result.title,
     url: result.url,
-    snippet: result.description,
-    publishedAt: result.page_age,
+    ...(typeof result.description === "string" ? { snippet: result.description } : {}),
+    ...(typeof result.page_age === "string" ? { publishedAt: result.page_age } : {}),
     source: getSourceName(result.url)
   };
 }
 
-/** Retrieves normalized web results without interpreting their contents. */
-export async function searchWeb(
+/** Retains the first five provider positions, including unusable source fields. */
+export async function searchWebPage(
   query: string,
   dependencies: SearchWebDependencies = {}
-): Promise<SearchResult[]> {
+): Promise<BraveSearchPage> {
   const environment = dependencies.environment ?? process.env;
   const apiKey = environment.BRAVE_SEARCH_API_KEY?.trim();
 
@@ -122,14 +112,36 @@ export async function searchWeb(
     throw new Error("Brave search succeeded, but its usage could not be recorded safely.");
   }
 
-  let data: BraveSearchResponse;
+  let data: unknown;
   try {
-    data = (await response.json()) as BraveSearchResponse;
+    data = await response.json();
   } catch {
     throw new Error("Brave Search API returned invalid JSON.");
   }
 
-  return (data.web?.results ?? [])
-    .map(toSearchResult)
-    .filter((result): result is SearchResult => result !== undefined);
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    throw new Error("Brave Search API returned an invalid response format.");
+  }
+  const web = (data as Record<string, unknown>).web;
+  if (web !== undefined && (!web || typeof web !== "object" || Array.isArray(web))) {
+    throw new Error("Brave Search API returned an invalid response format.");
+  }
+  const rawResults = web === undefined ? undefined : (web as Record<string, unknown>).results;
+  if (rawResults !== undefined && !Array.isArray(rawResults)) {
+    throw new Error("Brave Search API returned invalid results format.");
+  }
+  const results = rawResults ?? [];
+  return {
+    rawCount: results.length,
+    positions: results.slice(0, 5).map((result, index) => ({ resultOrdinal: index + 1, result: toSearchResult(result) })),
+  };
+}
+
+/** Projects usable source records from the same single bounded page request. */
+export async function searchWeb(
+  query: string,
+  dependencies: SearchWebDependencies = {},
+): Promise<SearchResult[]> {
+  const page = await searchWebPage(query, dependencies);
+  return page.positions.flatMap(({ result }) => result === null ? [] : [result]);
 }
