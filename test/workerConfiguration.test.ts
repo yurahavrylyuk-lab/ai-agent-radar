@@ -4,7 +4,6 @@ import { D1BraveUsageStore } from "../src/services/d1BraveUsageStore.js";
 import { D1DiscoveryHistory } from "../src/services/d1DiscoveryHistory.js";
 import { D1GeminiUsageStore } from "../src/services/d1GeminiUsageStore.js";
 import { D1NotificationHistory } from "../src/services/d1NotificationHistory.js";
-import { D1XStore } from "../src/services/d1XStore.js";
 import { MONITORING_FRESHNESS } from "../src/config/discoveryQueries.js";
 import { createMonitoringRuntimeConfiguration, createRadarRuntimeConfiguration } from "../src/services/radarRuntimeConfiguration.js";
 import type { MonitoringCycleResult } from "../src/types/index.js";
@@ -110,11 +109,13 @@ test("Worker composition uses D1 stores and exposes a scheduled handler without 
   assert.ok(persistence.notificationHistory instanceof D1NotificationHistory);
   assert.ok(persistence.braveUsageStore instanceof D1BraveUsageStore);
   assert.ok(persistence.geminiUsageStore instanceof D1GeminiUsageStore);
-  assert.ok(persistence.xStore instanceof D1XStore);
   assert.ok(dependencies.history instanceof D1DiscoveryHistory, "replay discovery history must use D1");
-  assert.equal(typeof dependencies.search, "function");
-  assert.equal(typeof dependencies.process, "function");
-  assert.equal(typeof dependencies.resolveXPost, "function");
+  assert.equal(typeof dependencies.searchPage, "function");
+  assert.equal(typeof dependencies.analyze, "function");
+  assert.equal("process" in dependencies, false);
+  assert.equal("collectX" in dependencies, false);
+  assert.equal("resolveXPost" in dependencies, false);
+  assert.equal(dependencies.geminiCycleContext.batchStarted, false);
   assert.ok(dependencies.notification?.history instanceof D1NotificationHistory, "notification history must be a D1NotificationHistory");
   assert.equal(typeof worker.scheduled, "function");
   const response = await worker.fetch(new Request("https://worker.example"), environment());
@@ -124,13 +125,51 @@ test("Worker composition uses D1 stores and exposes a scheduled handler without 
 test("Worker search composition forwards the monitoring freshness option without a provider request", async () => {
   const calls: Array<{ query: string; freshness: string | undefined }> = [];
   const dependencies = createWorkerMonitoringDependencies(environment(), {
-    searchWeb: async (query, options) => {
+    searchPage: async (query, options) => {
       calls.push({ query, freshness: options.freshness });
-      return [];
+      return { rawCount: 0, positions: [] };
     },
   });
-  await dependencies.search?.("official query", { freshness: MONITORING_FRESHNESS });
+  await dependencies.searchPage("official query", { freshness: MONITORING_FRESHNESS });
   assert.deepEqual(calls, [{ query: "official query", freshness: "pw" }]);
+});
+
+test("default scheduled Worker uses batch entry with no X tables and HTTP methods/paths remain health-only", async () => {
+  const env = environment();
+  let databaseReads = 0;
+  env.DB = { prepare(sql: string) {
+    assert.doesNotMatch(sql, /\bx_(?:poll|pending|usage|inbox|request)/i);
+    databaseReads++;
+    return { bind() { return this; }, async all() { return { success: true, results: [] }; }, async first() { return { usage_unknown: 0 }; }, async run() { return { success: true, meta: { changes: 1 } }; } };
+  } } as unknown as D1Database;
+  const originalFetch = globalThis.fetch;
+  const originalInfo = console.info;
+  const providerUrls: string[] = [];
+  const summaries: unknown[] = [];
+  try {
+    globalThis.fetch = async input => {
+      providerUrls.push(String(input));
+      assert.equal(new URL(String(input)).hostname, "api.search.brave.com");
+      return new Response(JSON.stringify({ web: { results: [] } }));
+    };
+    console.info = value => { if (value?.event === "scheduled_monitoring_cycle_completed") summaries.push(value); };
+    const result = await runScheduledMonitoring(env);
+    assert.equal(result.batch?.status, "empty");
+    assert.equal(result.analysesAttempted, 0);
+    assert.equal(providerUrls.length, 10);
+    assert.equal(summaries.length, 1);
+    assert.equal(result.xRequestsAttempted, 0);
+    assert.equal(result.xBlockedReason, "disabled");
+    providerUrls.length = 0;
+    databaseReads = 0;
+    for (const method of ["GET", "POST"]) {
+      for (const path of ["/", "/monitor", "/private/execute"]) {
+        assert.equal(await worker.fetch(new Request(`https://worker.example${path}`, { method }), env).text(), "AI Agent Radar worker ready");
+      }
+    }
+    assert.equal(providerUrls.length, 0);
+    assert.equal(databaseReads, 0);
+  } finally { globalThis.fetch = originalFetch; console.info = originalInfo; }
 });
 
 test("scheduled monitoring runs one cycle and emits one structured summary with exact counts", async () => {

@@ -185,7 +185,24 @@ export interface XAccountFailure {
   reason: XAccountFailureReason;
 }
 
+export interface BatchCycleMetrics {
+  searchAttempts: number; searchSuccesses: number; searchFailures: number;
+  rawObservations: number; acceptedObservations: number;
+  invalid: number; homepages: number; duplicates: number; known: number;
+  sizeExcluded: number; submittedCandidates: number; promptBytes: number;
+  truncationStage: BatchTruncationStage | null;
+  status: "empty" | "blocked" | "preparation_failed" | "provider_failed" | "timeout" | "invalid_output" | "validated";
+  reservationAttempts: number; reservations: number; providerDispatches: number;
+  returnedStories: number; acceptedStories: number;
+  selected: Array<{
+    candidateId: string; hostname: string; score: number;
+    provenance: Array<{ queryOrdinal: number; resultOrdinal: number }>;
+  }>;
+  freshDelivered: number; replayDelivered: number; emailCount: number;
+}
+
 export interface MonitoringCycleResult {
+  batch?: BatchCycleMetrics;
   query: string;
   searchResultsReceived: number;
   searchFailures: MonitoringSearchFailure[];

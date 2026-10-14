@@ -3,15 +3,12 @@ import { D1DiscoveryHistory } from "./services/d1DiscoveryHistory.js";
 import { D1GeminiUsageStore } from "./services/d1GeminiUsageStore.js";
 import { D1NotificationHistory } from "./services/d1NotificationHistory.js";
 import { inspectGeminiAvailability } from "./services/geminiUsageGuard.js";
-import { analyzeSearchResult } from "./services/analysisAgent.js";
-import { processSearchResult } from "./services/discoveryProcessor.js";
+import { analyzeBatch } from "./services/analysisAgent.js";
 import { createMonitoringRuntimeConfiguration } from "./services/radarRuntimeConfiguration.js";
-import { createGeminiCycleContext, generateWithGemini } from "./tools/llm/gemini.js";
+import { createGeminiBatchCycleContext, generateBatchWithGemini } from "./tools/llm/gemini.js";
 import { sendWithResend } from "./tools/email/resend.js";
-import { searchWeb } from "./tools/webSearch.js";
-import { runMonitoringCycle, type MonitoringCycleDependencies } from "./services/monitor.js";
-import { D1XStore } from "./services/d1XStore.js";
-import { collectXDiscoveries } from "./services/xDiscovery.js";
+import { searchWebPage } from "./tools/webSearch.js";
+import { runBatchMonitoringCycle, type BatchMonitoringDependencies } from "./services/monitor.js";
 import type { MonitoringCycleResult } from "./types/index.js";
 
 export const MAX_SCHEDULED_OUTCOMES_LOGGED = 10;
@@ -187,48 +184,37 @@ export function createWorkerPersistence(env: RadarWorkerEnv) {
     notificationHistory: new D1NotificationHistory(env.DB),
     braveUsageStore: new D1BraveUsageStore(env.DB),
     geminiUsageStore: new D1GeminiUsageStore(env.DB),
-    xStore: new D1XStore(env.DB),
   };
 }
 
 /** Creates cloud-ready cycle dependencies without invoking a monitoring cycle. */
 export interface WorkerMonitoringDependencyOverrides {
-  readonly searchWeb?: typeof searchWeb;
+  readonly searchPage?: typeof searchWebPage;
 }
 
 export function createWorkerMonitoringDependencies(
   env: RadarWorkerEnv,
   overrides: WorkerMonitoringDependencyOverrides = {},
-): MonitoringCycleDependencies {
+): BatchMonitoringDependencies {
   const configuration = createMonitoringRuntimeConfiguration(env as unknown as Record<string, string | undefined>);
   const persistence = createWorkerPersistence(env);
-  const geminiCycleContext = createGeminiCycleContext();
-  const workerSearchWeb = overrides.searchWeb ?? searchWeb;
+  const geminiCycleContext = createGeminiBatchCycleContext();
+  const workerSearchPage = overrides.searchPage ?? searchWebPage;
 
   return {
     history: persistence.discoveryHistory,
     geminiCycleContext,
     geminiPreflight: (now) => inspectGeminiAvailability(persistence.geminiUsageStore, configuration.environment, now),
-    search: (query, options) => workerSearchWeb(query, {
+    searchPage: (query, options) => workerSearchPage(query, {
       usageTracker: persistence.braveUsageStore,
       environment: configuration.environment,
       freshness: options?.freshness,
     }),
-    collectX: (now) => collectXDiscoveries({ store: persistence.xStore, environment: configuration.environment, now }),
-    resolveXPost: (postId) => persistence.xStore.getStoryByPostId(postId),
-    markXStoryProcessed: (storyUrl) => persistence.xStore.markStoryProcessed(storyUrl),
-    process: (result, sourceProvenance) => processSearchResult(result, {
-      history: persistence.discoveryHistory,
-      sourceProvenance,
-      analyze: (searchResult) => analyzeSearchResult(searchResult, {
-        generate: (input) => generateWithGemini(input, {
-          usageTracker: persistence.geminiUsageStore,
-          environment: configuration.environment,
-          cycleContext: geminiCycleContext,
-        }),
-        onValidatedAnalysis: (response) => {
-          if (response.usedFallback) geminiCycleContext.analysesUsingFallbackModel += 1;
-        },
+    analyze: batch => analyzeBatch(batch, {
+      generate: input => generateBatchWithGemini(input, {
+        usageTracker: persistence.geminiUsageStore,
+        environment: configuration.environment,
+        cycleContext: geminiCycleContext,
       }),
     }),
     notification: {
@@ -246,7 +232,7 @@ export async function runScheduledMonitoring(
   dependencies: ScheduledMonitoringDependencies = {},
 ): Promise<MonitoringCycleResult> {
   const runCycle = dependencies.runCycle
-    ?? (() => runMonitoringCycle(undefined, createWorkerMonitoringDependencies(env)));
+    ?? (() => runBatchMonitoringCycle(createWorkerMonitoringDependencies(env)));
   const result = await runCycle();
   (dependencies.logInfo ?? ((summary) => console.info(summary)))(createScheduledCycleSummary(result, env));
   return result;

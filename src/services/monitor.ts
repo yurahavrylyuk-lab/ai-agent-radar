@@ -2,13 +2,17 @@ import { DiscoveryHistoryError, isValidXSourceProvenance, normalizeDiscoveryUrl,
 import { getNotificationReplayWindow } from "../config/notificationReplay.js";
 import { DISCOVERY_QUERY_DESCRIPTORS, MONITORING_FRESHNESS, MONITORING_QUERIES, type DiscoveryQueryDescriptor } from "../config/discoveryQueries.js";
 import { getPreAnalysisCandidatePriority, hasOfficialPreAnalysisPriority, selectPreAnalysisCandidates } from "./discoveryPriority.js";
-import { NotificationHistoryError } from "./notificationHistoryCore.js";
-import { notifyDeliveryDigest, type DigestDeliveryResult, type NotificationOrchestratorDependencies } from "./notificationOrchestrator.js";
+import { NotificationHistoryError, type NotificationHistory } from "./notificationHistoryCore.js";
+import { notifyBatchDeliveryDigest, notifyDeliveryDigest, type DigestDeliveryResult, type NotificationOrchestratorDependencies } from "./notificationOrchestrator.js";
+import { batchAliasKey, prepareBatchCandidates } from "./batchCandidates.js";
+import { prepareBatchPrompt } from "./batchPrompt.js";
+import { BatchAnalysisError } from "./analysisAgent.js";
+import { recordBatchSelection } from "./discoveryProcessor.js";
 import { type GeminiAvailability, type GeminiBlockedReason } from "./geminiUsageGuard.js";
-import { createGeminiCycleContext, type GeminiCycleContext } from "../tools/llm/gemini.js";
+import { createGeminiCycleContext, type GeminiBatchCycleContext, type GeminiCycleContext } from "../tools/llm/gemini.js";
 import { xPostIdFromUrl, type XDiscoveryResult } from "./xDiscovery.js";
 import { BraveUsageGuardDeniedError } from "../tools/webSearch.js";
-import type { DeliveryCandidate, DiscoveryProcessingResult, MonitoringCycleResult, MonitoringSearchFailure, NotificationResult, SearchResult, XSourceProvenance } from "../types/index.js";
+import type { BatchAnalysisResult, BatchCycleMetrics, BatchDeliveryCandidate, BatchObservation, BraveSearchPage, DeliveryCandidate, DiscoveryProcessingResult, MonitoringCycleResult, MonitoringSearchFailure, NotificationResult, PreparedBatch, SearchResult, StoredDiscovery, XSourceProvenance } from "../types/index.js";
 
 export const MONITORING_QUERY = "new AI agent developer tool framework release";
 export { MONITORING_QUERIES };
@@ -40,6 +44,16 @@ export interface MonitoringCycleDependencies {
   /** Bounded durable lookup for a Brave-observed X status URL. */
   resolveXPost?: (postId: string) => Promise<ResolvedXPost | undefined>;
   markXStoryProcessed?: (storyUrl: string) => Promise<void>;
+}
+
+export interface BatchMonitoringDependencies {
+  searchPage: (query: string, options?: MonitoringSearchOptions) => Promise<BraveSearchPage>;
+  history: DiscoveryHistory;
+  notification: NotificationOrchestratorDependencies & { history: NotificationHistory };
+  geminiPreflight: (now: Date) => Promise<GeminiAvailability>;
+  analyze: (batch: PreparedBatch) => Promise<BatchAnalysisResult>;
+  geminiCycleContext: GeminiBatchCycleContext;
+  now?: () => Date;
 }
 
 const geminiBlockedReasons = new Set<GeminiBlockedReason>([
@@ -139,6 +153,167 @@ function recordNotification(result: MonitoringCycleResult, notification: Notific
   if (notification.status === "sent") result.notificationsSent += 1;
   if (notification.status === "already_sent") result.notificationsAlreadySent += 1;
   if (notification.status === "not_eligible") result.notificationsNotEligible += 1;
+}
+
+/** The scheduled policy: collect the whole bounded pool, analyze once, then deliver persisted stories. */
+export async function runBatchMonitoringCycle(dependencies: BatchMonitoringDependencies): Promise<MonitoringCycleResult> {
+  const now = dependencies.now ?? (() => new Date());
+  const cycleStartedAt = now();
+  if (Number.isNaN(cycleStartedAt.getTime())) throw new Error("Monitoring cycle timestamp is invalid.");
+  const result = emptyResult(MONITORING_QUERIES.join(" | "), 0);
+  result.xBlockedReason = "disabled";
+  const batch: BatchCycleMetrics = {
+    searchAttempts: 0, searchSuccesses: 0, searchFailures: 0, rawObservations: 0, acceptedObservations: 0,
+    invalid: 0, homepages: 0, duplicates: 0, known: 0, sizeExcluded: 0, submittedCandidates: 0, promptBytes: 0,
+    truncationStage: null, status: "empty", reservationAttempts: 0, reservations: 0, providerDispatches: 0,
+    returnedStories: 0, acceptedStories: 0, selected: [], freshDelivered: 0, replayDelivered: 0, emailCount: 0,
+  };
+  result.batch = batch;
+  const { history, notification, geminiCycleContext } = dependencies;
+  const replayWindow = getNotificationReplayWindow(cycleStartedAt);
+  const replay = new Map<string, StoredDiscovery>();
+  const inReplayWindow = (discovery: StoredDiscovery) => replayWindow !== undefined
+    && discovery.firstSeenAt >= replayWindow.fromInclusive && discovery.firstSeenAt < replayWindow.beforeExclusive;
+  if (replayWindow) {
+    try {
+      const lookup = await history.listRecentDiscoveries(replayWindow);
+      // Keep the scan bound even if a dependency violates its adapter contract.
+      for (const discovery of lookup.discoveries.slice(0, replayWindow.limit)) {
+        if (inReplayWindow(discovery)) replay.set(discovery.normalizedUrl, discovery);
+      }
+      result.replayCandidatesConsidered = replay.size;
+      result.replayLookupTruncated = lookup.truncated || lookup.discoveries.length > replayWindow.limit;
+    } catch (error) {
+      throw new Error(`Monitoring cycle aborted: replay discovery history is unavailable: ${errorMessage(error)}`);
+    }
+  }
+
+  const observations: BatchObservation[] = [];
+  for (const [index, descriptor] of DISCOVERY_QUERY_DESCRIPTORS.entries()) {
+    batch.searchAttempts += 1;
+    try {
+      const page = await dependencies.searchPage(descriptor.query, { freshness: MONITORING_FRESHNESS });
+      batch.searchSuccesses += 1;
+      batch.rawObservations += page.rawCount;
+      observations.push(...page.positions.slice(0, 5).map(position => ({ queryOrdinal: index + 1, ...position })));
+    } catch (error) {
+      if (error instanceof BraveUsageGuardDeniedError) break;
+      batch.searchFailures += 1;
+      result.searchFailures.push({ queryOrdinal: index + 1, error: searchFailureMessage(error) });
+      result.failures += 1;
+    }
+  }
+  result.searchResultsReceived = batch.rawObservations;
+  // Any required history read/touch failure rejects before analysis or delivery.
+  const pool = await prepareBatchCandidates(observations, { history, notificationHistory: notification.history, seenAt: cycleStartedAt });
+  Object.assign(batch, pool.counts);
+  result.duplicates = pool.counts.duplicates + pool.counts.known;
+  const fresh: BatchDeliveryCandidate[] = [];
+  let prepared: PreparedBatch | undefined;
+  if (pool.candidates.length > 0) {
+    try {
+      prepared = prepareBatchPrompt(pool.candidates);
+      batch.sizeExcluded = prepared.sizeExcluded;
+      batch.submittedCandidates = prepared.candidates.length;
+      batch.promptBytes = prepared.promptBytes;
+      batch.truncationStage = prepared.truncationStage;
+    } catch (error) {
+      batch.status = "preparation_failed";
+      result.failures += 1;
+      result.outcomes.push({ sourceTitle: "", sourceUrl: "", error: errorMessage(error) });
+    }
+  }
+
+  if (prepared) {
+    let availability: GeminiAvailability;
+    try { availability = safeGeminiAvailability(await dependencies.geminiPreflight(now())); }
+    catch { availability = { allowed: false, reason: "usage_state_unavailable" }; }
+    if (!availability.allowed) {
+      batch.status = "blocked";
+      result.geminiBlockedReason = availability.reason;
+    } else {
+      if (availability.timeoutIncompleteAccounting) result.geminiTimeoutIncompleteAccounting = { ...availability.timeoutIncompleteAccounting };
+      result.analysesAttempted = 1;
+      let analyzed: BatchAnalysisResult | undefined;
+      try {
+        analyzed = await dependencies.analyze(prepared);
+        batch.status = "validated";
+        batch.returnedStories = analyzed.returnedCount;
+        batch.acceptedStories = analyzed.selections.length;
+        batch.selected = analyzed.selections.map(({ candidate, analysis }) => ({
+          candidateId: candidate.candidateId, hostname: new URL(candidate.source.url).hostname,
+          score: analysis.relevanceScore, provenance: candidate.provenance.map(pair => ({ ...pair })),
+        }));
+      } catch (error) {
+        batch.status = geminiCycleContext.dispatchBlockedByTimeout ? "timeout" : error instanceof BatchAnalysisError ? "invalid_output" : "provider_failed";
+        result.failures += 1;
+        result.outcomes.push({ sourceTitle: "", sourceUrl: "", error: errorMessage(error) });
+      }
+      if (analyzed) {
+        for (const selection of analyzed.selections) {
+          try {
+            const processed = await recordBatchSelection(selection, { history, seenAt: cycleStartedAt });
+            result.resultsProcessed += 1;
+            result.outcomes.push({ sourceTitle: selection.candidate.source.title, sourceUrl: selection.candidate.source.url, discoveryStatus: processed.status });
+            if (processed.status === "new") {
+              result.newDiscoveries += 1;
+              fresh.push({ discovery: processed.discovery, origin: "fresh", aliases: selection.candidate.aliases });
+            } else {
+              result.duplicates += 1;
+              if (inReplayWindow(processed.discovery) && replayWindow && (replay.has(processed.discovery.normalizedUrl) || replay.size < replayWindow.limit)) {
+                replay.set(processed.discovery.normalizedUrl, processed.discovery);
+              }
+            }
+          } catch (error) {
+            result.failures += 1;
+            result.outcomes.push({ sourceTitle: selection.candidate.source.title, sourceUrl: selection.candidate.source.url, error: errorMessage(error) });
+          }
+        }
+      }
+    }
+  }
+
+  batch.reservationAttempts = geminiCycleContext.reservationAttempts;
+  batch.reservations = geminiCycleContext.reservations;
+  batch.providerDispatches = geminiCycleContext.providerDispatches;
+  result.geminiProviderAttempts = geminiCycleContext.providerDispatches;
+  result.geminiRequestsByModel["gemini-3.8-flash"] = geminiCycleContext.providerDispatches;
+  const candidates: BatchDeliveryCandidate[] = [
+    ...fresh,
+    ...[...replay.values()].map(discovery => ({ discovery, origin: "replay" as const, aliases: [] as readonly string[] })),
+  ].map(candidate => ({
+    ...candidate,
+    aliases: [...new Set([...candidate.aliases, ...(pool.observedAliases.get(batchAliasKey(candidate.discovery.normalizedUrl)) ?? [])])],
+  }));
+  if (candidates.length > 0) {
+    const sendEmail = notification.sendEmail;
+    try {
+      const delivery = await notifyBatchDeliveryDigest(candidates, {
+        ...notification,
+        ...(sendEmail ? { sendEmail: async content => {
+          const accepted = await sendEmail(content);
+          result.notificationsSent = batch.emailCount = 1;
+          return accepted;
+        } } : {}),
+      });
+      result.replayCandidatesEligible = delivery.eligibleCandidates.filter(candidate => candidate.origin === "replay").length;
+      result.freshStoriesSent = batch.freshDelivered = delivery.sentCandidates.filter(candidate => candidate.origin === "fresh").length;
+      result.replayStoriesSent = batch.replayDelivered = delivery.sentCandidates.filter(candidate => candidate.origin === "replay").length;
+      if (delivery.sentCandidates.length > 0) result.notificationsSent = batch.emailCount = 1;
+      for (const candidate of candidates) {
+        const status = delivery.notifications.get(candidate.discovery.analysis.sourceUrl)?.status ?? "not_eligible";
+        if (status === "already_sent") result.notificationsAlreadySent += 1;
+        if (status === "not_eligible") result.notificationsNotEligible += 1;
+        const outcome = result.outcomes.find(entry => entry.sourceUrl === candidate.discovery.analysis.sourceUrl && entry.error === undefined);
+        if (outcome) outcome.notificationStatus = status;
+      }
+    } catch (error) {
+      if (error instanceof NotificationHistoryError) throw error;
+      result.failures += 1;
+      result.outcomes.push({ sourceTitle: "", sourceUrl: "", error: errorMessage(error) });
+    }
+  }
+  return result;
 }
 
 /** Runs one sequential discovery, analysis, and digest-notification cycle. */

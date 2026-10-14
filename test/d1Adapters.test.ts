@@ -11,7 +11,7 @@ import { D1XStore } from "../src/services/d1XStore.js";
 import { reconcileStrandedGeminiReservation } from "../src/services/geminiAmbiguityRecovery.js";
 import { checkBraveSearchUsage } from "../src/services/usageGuard.js";
 import { checkGeminiUsage, getGeminiUsageCounts } from "../src/services/geminiUsageGuard.js";
-import { runMonitoringCycle } from "../src/services/monitor.js";
+import { runBatchMonitoringCycle } from "../src/services/monitor.js";
 import worker, { createWorkerMonitoringDependencies, type RadarWorkerEnv } from "../src/worker.js";
 import type { AgentAnalysis, BatchSelection, XSourceProvenance } from "../src/types/index.js";
 import type { XInboxRecord } from "../src/services/xStore.js";
@@ -740,15 +740,12 @@ test("disabled-X Worker cycle remains safe without migration 0004 tables", async
     await new D1DiscoveryHistory(d1).recordDiscovery(stored, new Date("2026-10-10T07:00:00.000Z"));
     let searches = 0;
     const dependencies = createWorkerMonitoringDependencies(env, {
-      searchWeb: (async () => {
+      searchPage: (async () => {
         searches += 1;
-        return [
-          { title: stored.sourceTitle, url: stored.sourceUrl, snippet: "Known ordinary article." },
-          { title: "Observed X post", url: "https://x.com/OpenAI/status/9007199254740993999", snippet: "Observed status." },
-        ];
-      }) as typeof import("../src/tools/webSearch.js").searchWeb,
+        return { rawCount: 1, positions: [{ resultOrdinal: 1, result: { title: stored.sourceTitle, url: stored.sourceUrl, snippet: "Known ordinary article." } }] };
+      }) as typeof import("../src/tools/webSearch.js").searchWebPage,
     });
-    const outcome = await runMonitoringCycle(undefined, { ...dependencies, now: () => new Date("2026-10-10T08:00:00.000Z") });
+    const outcome = await runBatchMonitoringCycle({ ...dependencies, now: () => new Date("2026-10-10T08:00:00.000Z") });
     assert.equal(searches, 10);
     assert.equal(outcome.analysesAttempted, 0);
     assert.equal(outcome.duplicates, 10);
