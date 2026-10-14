@@ -247,7 +247,12 @@ export async function runBatchMonitoringCycle(dependencies: BatchMonitoringDepen
       } catch (error) {
         batch.status = geminiCycleContext.dispatchBlockedByTimeout ? "timeout" : error instanceof BatchAnalysisError ? "invalid_output" : "provider_failed";
         result.failures += 1;
-        result.outcomes.push({ sourceTitle: "", sourceUrl: "", error: errorMessage(error) });
+        const message = batch.status === "timeout"
+          ? "Gemini batch timeout"
+          : batch.status === "invalid_output"
+            ? "Gemini batch invalid output"
+            : "Gemini batch provider failure";
+        result.outcomes.push({ sourceTitle: "", sourceUrl: "", error: message });
       }
       if (analyzed) {
         for (const selection of analyzed.selections) {

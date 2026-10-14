@@ -7,7 +7,7 @@ import { analyzeBatch, BatchAnalysisError } from "../src/services/analysisAgent.
 import { normalizeDiscoveryUrl, DiscoveryHistoryError, type DiscoveryHistory } from "../src/services/discoveryHistoryCore.js";
 import { NotificationHistoryError, type NotificationHistory } from "../src/services/notificationHistoryCore.js";
 import { D1GeminiUsageStore } from "../src/services/d1GeminiUsageStore.js";
-import { createWorkerMonitoringDependencies, type RadarWorkerEnv } from "../src/worker.js";
+import { createScheduledCycleSummary, createWorkerMonitoringDependencies, type RadarWorkerEnv } from "../src/worker.js";
 import { BraveUsageGuardDeniedError } from "../src/tools/webSearch.js";
 import { createGeminiBatchCycleContext, generateBatchWithGemini } from "../src/tools/llm/gemini.js";
 import type { AgentAnalysis, BatchAnalysisResult, BraveSearchPage, DiscoveryEmailContent, NotificationRecord, PreparedBatch, StoredDiscovery } from "../src/types/index.js";
@@ -249,6 +249,51 @@ test("provider failures and invalid content are terminal for fresh analysis but 
   }
   const f = fixture(); f.dependencies.analyze = async () => { f.dependencies.geminiCycleContext.dispatchBlockedByTimeout = true; throw new Error("opaque"); };
   assert.equal((await run(f.dependencies)).batch?.status, "timeout");
+});
+
+test("Gemini provider response text cannot enter the scheduled cycle summary", async () => {
+  const privateTitle = "UNIQUE_PRIVATE_TITLE_ABC123";
+  const privateSnippet = "UNIQUE_PRIVATE_SNIPPET_XYZ789";
+  const f = fixture();
+  let analysisCalls = 0;
+  f.dependencies.analyze = async () => {
+    analysisCalls += 1;
+    Object.assign(f.dependencies.geminiCycleContext, {
+      reservationAttempts: 1,
+      reservations: 1,
+      providerDispatches: 1,
+    });
+    throw new Error(`Gemini provider failed. Candidate title: ${privateTitle}. Snippet: ${privateSnippet}.`);
+  };
+
+  const result = await run(f.dependencies);
+  const summary = createScheduledCycleSummary(result, {
+    DB: {} as D1Database,
+    BRAVE_SEARCH_API_KEY: "offline-brave",
+    BRAVE_DAILY_SEARCH_LIMIT: "10",
+    BRAVE_WEEKLY_SEARCH_LIMIT: "100",
+    BRAVE_MONTHLY_SEARCH_LIMIT: "350",
+    GEMINI_API_KEY: "offline-gemini",
+    GEMINI_DAILY_REQUEST_LIMIT: "5",
+    GEMINI_WEEKLY_REQUEST_LIMIT: "20",
+    GEMINI_MONTHLY_REQUEST_LIMIT: "50",
+    GEMINI_DAILY_TOKEN_LIMIT: "10000",
+    GEMINI_WEEKLY_TOKEN_LIMIT: "30000",
+    GEMINI_MONTHLY_TOKEN_LIMIT: "100000",
+    RESEND_API_KEY: "offline-resend",
+    NOTIFICATION_EMAIL: "offline@example.test",
+  });
+  const serialized = JSON.stringify(summary);
+
+  assert.equal(analysisCalls, 1);
+  assert.equal(result.failures, 1);
+  assert.equal(result.batch?.status, "provider_failed");
+  assert.equal(result.batch?.providerDispatches, 1);
+  assert.equal(result.geminiProviderAttempts, 1);
+  assert.equal(summary.outcomes.length, 1);
+  assert.equal(summary.outcomes[0]?.failed, true);
+  assert.doesNotMatch(serialized, new RegExp(privateTitle));
+  assert.doesNotMatch(serialized, new RegExp(privateSnippet));
 });
 
 test("RF5 failed persistence and late-notified lead promote fresh stories and fill from replay", async () => {
