@@ -203,13 +203,13 @@ function leadBlockHtml(story: StoredDiscovery, batch = false): string {
   return `<tr>
               <td style="padding: 24px 30px 28px; border-bottom: 1px solid #26344d;">
                 ${sectionLabel(batch ? "MOST RELEVANT" : "Lead story")}
-                <h2 style="margin: 0 0 10px; color: ${PRIMARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 22px; font-weight: 700; line-height: 28px;">${escapeHtml(story.analysis.name)}</h2>
+                <h2 style="margin: 0 0 10px; color: ${PRIMARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 22px; font-weight: 700; line-height: 28px;">${escapeHtml(story.analysis.name)}</h2>${batch ? `<p style="margin: 0 0 10px; color: ${ACCENT}; font-family: Arial, Helvetica, sans-serif; font-size: 14px; line-height: 20px;">Relevance: ${story.analysis.relevanceScore}/10</p>` : ""}
                 <p style="margin: 0 0 20px; color: ${SECONDARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 15px; line-height: 22px;">${escapeHtml(story.analysis.summary)}</p>
                 ${sectionLabel("Why it matters")}
                 <p style="margin: 0 0 20px; color: ${PRIMARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 15px; line-height: 22px;">${escapeHtml(story.analysis.whyItMatters)}</p>
                 ${batch ? `${sectionLabel("What you can learn")}<p style="margin: 0 0 20px; color: ${PRIMARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 15px; line-height: 22px;">${escapeHtml(story.analysis.educationalValue)}</p>` : ""}
                 ${sectionLabel("Key points")}
-                <ul style="margin: 0 0 20px; padding: 0 0 0 18px;">${keyPointItems}</ul>
+                <ul style="margin: 0 0 20px; padding: 0 0 0 18px;">${keyPointItems}</ul>${batch ? `${sectionLabel("Technologies")}<div style="margin: 0 0 20px;">${technologyBadges(story.analysis.technologies)}</div>` : ""}
                 ${sectionLabel("Source")}
                 <a href="${escapeHtml(href)}" style="display: inline-block; padding: 9px 14px; border-radius: 8px; background-color: ${ACCENT}; color: #07111f; font-family: Arial, Helvetica, sans-serif; font-size: 14px; font-weight: 700; line-height: 18px; text-decoration: none;">${escapeHtml(story.analysis.sourceTitle)} &#8594;</a>
                 ${xAttributionHtml(story)}
@@ -217,13 +217,13 @@ function leadBlockHtml(story: StoredDiscovery, batch = false): string {
             </tr>`;
 }
 
-function conciseBlockHtml(story: StoredDiscovery, slot: number): string {
+function conciseBlockHtml(story: StoredDiscovery, slot: number, batch = false): string {
   const href = safeHref(story.analysis.sourceUrl);
   return `<tr>
               <td style="padding: 20px 30px; border-top: 1px solid #26344d;">
                 <p style="margin: 0 0 4px; color: ${ACCENT}; font-family: Arial, Helvetica, sans-serif; font-size: 11px; font-weight: 700; letter-spacing: 1.1px; line-height: 16px; text-transform: uppercase;">Story ${slot}</p>
-                <p style="margin: 0 0 8px; color: ${PRIMARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 15px; font-weight: 700; line-height: 20px;">${escapeHtml(story.analysis.name)}</p>
-                <p style="margin: 0 0 10px; color: ${SECONDARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 14px; line-height: 20px;">${escapeHtml(story.analysis.summary)}</p>
+                <p style="margin: 0 0 8px; color: ${PRIMARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 15px; font-weight: 700; line-height: 20px;">${escapeHtml(story.analysis.name)}</p>${batch ? `<p style="margin: 0 0 8px; color: ${ACCENT}; font-family: Arial, Helvetica, sans-serif; font-size: 14px; line-height: 20px;">Relevance: ${story.analysis.relevanceScore}/10</p>` : ""}
+                <p style="margin: 0 0 10px; color: ${SECONDARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 14px; line-height: 20px;">${escapeHtml(story.analysis.summary)}</p>${batch ? `<p style="margin: 0 0 10px; color: ${PRIMARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 14px; line-height: 20px;">${escapeHtml(story.analysis.whyItMatters)}</p>` : ""}
                 <a href="${escapeHtml(href)}" style="color: ${ACCENT}; font-family: Arial, Helvetica, sans-serif; font-size: 13px; font-weight: 700; line-height: 18px; text-decoration: none;">${escapeHtml(story.analysis.sourceTitle)} &#8594;</a>
                 ${xAttributionHtml(story)}
               </td>
@@ -260,14 +260,16 @@ function formatDigest(stories: StoredDiscovery[], options: DigestEmailOptions, b
     ...(isFallback ? ["It could be relevant"] : []),
     [
       `${batch ? "MOST RELEVANT" : "STORY 1 — LEAD"}\n${lead.analysis.name}`,
+      ...(batch ? [`Relevance: ${lead.analysis.relevanceScore}/10`] : []),
       `SUMMARY\n${lead.analysis.summary}`,
       `WHY IT MATTERS\n${lead.analysis.whyItMatters}`,
       ...(batch ? [`WHAT YOU CAN LEARN\n${lead.analysis.educationalValue}`] : []),
       `KEY POINTS\n${textList(lead.analysis.projectOpportunities)}`,
+      ...(batch ? [`TECHNOLOGIES\n${lead.analysis.technologies.join(", ") || "None"}`] : []),
       `SOURCE\n${lead.analysis.sourceTitle}\n${lead.analysis.sourceUrl}${xAttributionText(lead)}`,
     ].join("\n\n"),
     ...concise.map((story, i) =>
-      [`STORY ${i + 2}\n${story.analysis.name}`, story.analysis.summary, `SOURCE\n${story.analysis.sourceTitle}\n${story.analysis.sourceUrl}${xAttributionText(story)}`].join("\n\n"),
+      [`STORY ${i + 2}\n${story.analysis.name}`, ...(batch ? [`Relevance: ${story.analysis.relevanceScore}/10`] : []), story.analysis.summary, ...(batch ? [`WHY IT MATTERS\n${story.analysis.whyItMatters}`] : []), `SOURCE\n${story.analysis.sourceTitle}\n${story.analysis.sourceUrl}${xAttributionText(story)}`].join("\n\n"),
     ),
     "AI Agent Radar\nAutomated AI discovery monitor",
   ];
@@ -287,7 +289,7 @@ function formatDigest(stories: StoredDiscovery[], options: DigestEmailOptions, b
               </td>
             </tr>
             ${leadBlockHtml(lead, batch)}
-            ${concise.map((story, i) => conciseBlockHtml(story, i + 2)).join("\n            ")}
+            ${concise.map((story, i) => conciseBlockHtml(story, i + 2, batch)).join("\n            ")}
             <tr>
               <td style="padding: 18px 30px; border-top: 1px solid #26344d; background-color: #0d1422;">
                 <p style="margin: 0; color: ${SECONDARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 13px; line-height: 19px;">AI Agent Radar<br>Automated AI discovery monitor</p>
