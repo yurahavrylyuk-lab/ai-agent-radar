@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { LocalJsonGeminiUsageStore } from "../src/services/localJsonGeminiUsageStore.js";
+import * as geminiBatch from "../src/tools/llm/gemini.js";
 import {
   getGeminiAmbiguityRetirementTime,
   getGeminiUtcAccountingWindows,
@@ -29,6 +34,65 @@ const environment = {
   GEMINI_WEEKLY_TOKEN_LIMIT: "30000",
   GEMINI_MONTHLY_TOKEN_LIMIT: "100000",
 };
+
+test("batch timeout durable local evidence blocks its UTC day and admits a fresh cycle only under all guards", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "radar-batch-accounting-"));
+  try {
+    let clock = new Date("2026-10-14T08:00:00.000Z");
+    const filePath = join(directory, "gemini-usage.json");
+    const store = new LocalJsonGeminiUsageStore(filePath, () => clock);
+    const timeoutContext = geminiBatch.createGeminiBatchCycleContext();
+    let fetchCalls = 0;
+    let reading = 0;
+    await assert.rejects(geminiBatch.generateBatchWithGemini("batch", {
+      usageTracker: store, environment, now: () => clock, cycleContext: timeoutContext,
+      monotonicNow: () => reading++ === 0 ? 0 : 90_001,
+      fetchImplementation: (async () => {
+        fetchCalls++;
+        clock = new Date("2026-10-14T08:01:30.001Z");
+        return new Response(JSON.stringify({ output_text: "[]", usage: { total_input_tokens: 1, total_output_tokens: 1, total_tokens: 2 } }));
+      }) as typeof fetch,
+    }), /timed out/);
+    const timeoutRecord = (await store.getUsageData()).records[0]!;
+    assert.equal(timeoutRecord.accountingStatus, "transport_ambiguous");
+    assert.equal(timeoutRecord.ambiguityReason, "timeout");
+    assert.equal(timeoutRecord.accountingThrough, "2026-10-14T08:01:30.001Z");
+    assert.equal(timeoutRecord.settledAt, undefined);
+    assert.equal(timeoutRecord.totalTokens, 0, "placeholder stays unknown, never settled as zero");
+    // Reopen the real store so admission depends on durable evidence, not an in-memory fake.
+    const reopened = new LocalJsonGeminiUsageStore(filePath, () => clock);
+    const freshFetch = (async () => {
+      fetchCalls++;
+      return new Response(JSON.stringify({ output_text: "[]", usage: { total_input_tokens: 1, total_output_tokens: 1, total_tokens: 2 } }));
+    }) as typeof fetch;
+    const dependencies = { usageTracker: reopened, environment, now: () => clock, fetchImplementation: freshFetch };
+    clock = new Date("2026-10-14T23:59:59.999Z");
+    const sameDayContext = geminiBatch.createGeminiBatchCycleContext();
+    await assert.rejects(geminiBatch.generateBatchWithGemini("same day", { ...dependencies, cycleContext: sameDayContext }), /usage guard/);
+    assert.equal(sameDayContext.reservationAttempts, 0);
+    clock = new Date("2026-10-15T00:00:00.000Z");
+    await assert.rejects(geminiBatch.generateBatchWithGemini("old cycle", { ...dependencies, cycleContext: timeoutContext }), /batch.*already started/i);
+    const quotaContext = geminiBatch.createGeminiBatchCycleContext();
+    await assert.rejects(geminiBatch.generateBatchWithGemini("quota blocked", {
+      ...dependencies, cycleContext: quotaContext, environment: { ...environment, GEMINI_WEEKLY_REQUEST_LIMIT: "1" },
+    }), /usage guard/);
+    assert.equal(quotaContext.reservationAttempts, 0);
+    assert.equal(fetchCalls, 1);
+    const nextDayContext = geminiBatch.createGeminiBatchCycleContext();
+    await geminiBatch.generateBatchWithGemini("new cycle", { ...dependencies, cycleContext: nextDayContext });
+    assert.equal(fetchCalls, 2);
+    assert.deepEqual([nextDayContext.reservationAttempts, nextDayContext.reservations, nextDayContext.providerDispatches], [1, 1, 1]);
+    const data = await reopened.getUsageData();
+    assert.equal(data.records.length, 2);
+    assert.deepEqual(data.records[0], timeoutRecord);
+    assert.equal(data.records[1]?.accountingStatus, "exact");
+    const availability = await inspectGeminiAvailability(reopened, environment, clock);
+    assert.equal(availability.allowed, true);
+    if (availability.allowed) assert.deepEqual(availability.timeoutIncompleteAccounting, { dailyRequests: 0, weeklyRequests: 1, monthlyRequests: 1 });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 function legacyIncident(): GeminiUsageData {
   return {

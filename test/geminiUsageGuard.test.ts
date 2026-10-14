@@ -4,6 +4,9 @@ import { APPROVED_GEMINI_MODELS, type ApprovedGeminiModel } from "../src/config/
 import { checkGeminiUsage, getGeminiUsageCounts, inspectGeminiAvailability, reachedGeminiLimit, type GeminiBlockedReason, type GeminiUsageLimits } from "../src/services/geminiUsageGuard.js";
 import type { GeminiAmbiguityReason, GeminiAmbiguityRetirementExpectation, GeminiReservedReconciliationExpectation, GeminiUsageAdmission, GeminiUsageData, GeminiUsageRecord, GeminiUsageReservation, GeminiUsageSettlement, GeminiUsageTracker } from "../src/services/geminiUsageTracker.js";
 import { createGeminiCycleContext, GEMINI_TIMEOUT_MS, generateWithGemini, MAX_GEMINI_ATTEMPTS_PER_ANALYSIS } from "../src/tools/llm/gemini.js";
+import * as geminiBatch from "../src/tools/llm/gemini.js";
+import { analyzeBatch, BatchAnalysisError } from "../src/services/analysisAgent.js";
+import type { BatchAnalysisResult, PreparedBatch } from "../src/types/index.js";
 
 const limits: GeminiUsageLimits = { dailyRequests: 5, weeklyRequests: 20, monthlyRequests: 50, dailyTokens: 10_000, weeklyTokens: 30_000, monthlyTokens: 100_000 };
 const env = { GEMINI_API_KEY: "test-key", GEMINI_MODEL: "ignored-model", GEMINI_DAILY_REQUEST_LIMIT: "5", GEMINI_WEEKLY_REQUEST_LIMIT: "20", GEMINI_MONTHLY_REQUEST_LIMIT: "50", GEMINI_DAILY_TOKEN_LIMIT: "10000", GEMINI_WEEKLY_TOKEN_LIMIT: "30000", GEMINI_MONTHLY_TOKEN_LIMIT: "100000" };
@@ -78,6 +81,163 @@ const helpDetail = { "@type": "type.googleapis.com/google.rpc.Help", links: [{ d
 const retryInfoDetail = { "@type": "type.googleapis.com/google.rpc.RetryInfo", retryDelay: "60s" };
 const modelQuota = (details: unknown[], message = "Quota exhausted") => jsonResponse({ error: { status: "RESOURCE_EXHAUSTED", message, details } }, 429, "Too Many Requests");
 const requestedModel = (init?: RequestInit) => JSON.parse(String(init?.body)).model as ApprovedGeminiModel;
+
+test("batch single-dispatch policy preserves accounting for every provider outcome", async (t) => {
+  const cases = [
+    { name: "success", response: () => jsonResponse(successfulBody), status: "exact", settlements: 1 },
+    { name: "verified 503", response: unavailable, status: "confirmed_zero", settlements: 1, error: /HTTP 503/ },
+    { name: "model-specific 429", response: () => modelQuota([quotaFailure(quotaViolation("gemini-3.8-flash"))]), status: "confirmed_zero", settlements: 1, error: /HTTP 429/ },
+    { name: "ambiguous 429", response: () => modelQuota([]), status: "transport_ambiguous", reason: "response_usage_unavailable", settlements: 0, error: /unconfirmed usage/ },
+    { name: "synchronous transport throw", response: (): Response => { throw new Error("network unavailable"); }, status: "transport_ambiguous", reason: "network_error", settlements: 0, error: /network unavailable/ },
+    { name: "invalid provider JSON", response: () => new Response("not-json"), status: "transport_ambiguous", reason: "response_usage_unavailable", settlements: 0, error: /not valid JSON/ },
+    { name: "missing usage", response: () => jsonResponse({ output_text: "[]" }), status: "transport_ambiguous", reason: "response_usage_unavailable", settlements: 0, error: /valid token usage/ },
+    { name: "settlement failure", response: () => jsonResponse(successfulBody), status: "transport_ambiguous", reason: "settlement_uncertain", settlements: 0, error: /could not be recorded safely/, failSettlement: true },
+  ];
+  for (const item of cases) await t.test(item.name, async () => {
+    const tracker = new MemoryTracker({ records: [], usageUnknown: false }, item.failSettlement);
+    const context = geminiBatch.createGeminiBatchCycleContext();
+    assert.equal(context.batchStarted, false);
+    assert.deepEqual([context.reservationAttempts, context.reservations, context.providerDispatches], [0, 0, 0]);
+    const models: ApprovedGeminiModel[] = [];
+    const dependencies = { usageTracker: tracker, environment: highLimitEnv, cycleContext: context, retryDelayMs: 0,
+      fetchImplementation: ((_url, init) => { models.push(requestedModel(init)); return Promise.resolve(item.response()); }) as typeof fetch };
+    const result = geminiBatch.generateBatchWithGemini("batch input", dependencies);
+    assert.equal(context.batchStarted, true, "invocation must be consumed before any await");
+    if (item.error) await assert.rejects(result, item.error);
+    else {
+      const success = await result;
+      assert.equal(success.outputText, "GEMINI_OK");
+      assert.equal(success.usedFallback, false);
+      assert.deepEqual(success.usage, { inputTokens: 9, outputTokens: 4, thoughtTokens: 99, totalTokens: 112 });
+      assert.equal(tracker.data.records[0]?.totalTokens, 112);
+    }
+    await assert.rejects(geminiBatch.generateBatchWithGemini("second", dependencies), /batch.*already started/i);
+    assert.deepEqual(models, ["gemini-3.8-flash"]);
+    assert.deepEqual([context.reservationAttempts, context.reservations, context.providerDispatches], [1, 1, 1]);
+    assert.equal(context.providerAttempts, 1);
+    assert.equal(context.fallbacks, 0);
+    assert.equal(context.analysesUsingFallbackModel, 0);
+    assert.deepEqual(context.requestsByModel, { "gemini-3.8-flash": 1, "gemini-3.6-flash": 0, "gemini-3.5-flash-lite": 0 });
+    assert.equal(tracker.recordCalls, 1);
+    assert.equal(tracker.settlementCalls, item.settlements);
+    assert.equal(tracker.data.records[0]?.accountingStatus, item.status);
+    assert.equal(tracker.data.records[0]?.ambiguityReason, item.reason);
+  });
+});
+
+test("batch admission denial and reservation failure consume the invocation without dispatch", async (t) => {
+  for (const reserveFails of [false, true]) await t.test(reserveFails ? "reservation fails" : "admission denied", async () => {
+    const tracker = new MemoryTracker({ records: [], usageUnknown: !reserveFails });
+    let reserveCalls = 0;
+    tracker.reserveRequest = async () => { reserveCalls++; throw new Error("reservation failed"); };
+    let fetchCalls = 0;
+    const context = geminiBatch.createGeminiBatchCycleContext();
+    const dependencies = { usageTracker: tracker, environment: env, cycleContext: context,
+      fetchImplementation: (async () => { fetchCalls++; return jsonResponse(successfulBody); }) as typeof fetch };
+    await assert.rejects(geminiBatch.generateBatchWithGemini("batch", dependencies), reserveFails ? /reserved safely/ : /usage guard/);
+    await assert.rejects(geminiBatch.generateBatchWithGemini("later", dependencies), /batch.*already started/i);
+    assert.equal(reserveCalls, reserveFails ? 1 : 0);
+    assert.equal(context.reservationAttempts, reserveCalls);
+    assert.equal(context.reservations, 0);
+    assert.equal(context.providerAttempts, 0);
+    assert.equal(context.providerDispatches, 0);
+    assert.equal(fetchCalls, 0);
+  });
+});
+
+test("RF4 batch final-handoff window crossing preserves reservation with no dispatch or second reserve", async () => {
+  let clock = new Date("2026-10-31T23:59:59.999Z");
+  const tracker = new MemoryTracker({ records: [], usageUnknown: false }, false, () => clock);
+  const context = geminiBatch.createGeminiBatchCycleContext();
+  let fetchCalls = 0;
+  const dependencies = { usageTracker: tracker, environment: env, cycleContext: context, now: () => new Date(clock),
+    beforeDispatch: () => { clock = new Date("2026-11-01T00:00:00.000Z"); },
+    fetchImplementation: (async () => { fetchCalls++; return jsonResponse(successfulBody); }) as typeof fetch };
+  await assert.rejects(geminiBatch.generateBatchWithGemini("batch", dependencies), /accounting window changed/);
+  await assert.rejects(geminiBatch.generateBatchWithGemini("later", dependencies), /batch.*already started/i);
+  assert.deepEqual([context.reservationAttempts, context.reservations, context.providerDispatches], [1, 1, 0]);
+  assert.equal(context.providerAttempts, 1, "legacy counter remains reservation-based");
+  assert.equal(fetchCalls, 0);
+  assert.equal(tracker.recordCalls, 1);
+  assert.equal(tracker.settlementCalls, 0);
+  assert.equal(tracker.data.records[0]?.accountingStatus, "transport_ambiguous");
+  assert.equal(tracker.data.records[0]?.ambiguityReason, "abandoned_reservation");
+});
+
+test("concurrent batch calls consume one shared invocation before asynchronous admission", async () => {
+  const tracker = new MemoryTracker({ records: [], usageUnknown: false });
+  const context = geminiBatch.createGeminiBatchCycleContext();
+  let reads = 0;
+  const getUsageData = tracker.getUsageData.bind(tracker);
+  tracker.getUsageData = async () => { reads++; return getUsageData(); };
+  let fetchCalls = 0;
+  const dependencies = { usageTracker: tracker, environment: env, cycleContext: context,
+    fetchImplementation: (async () => { fetchCalls++; return jsonResponse(successfulBody); }) as typeof fetch };
+  const results = await Promise.allSettled([
+    geminiBatch.generateBatchWithGemini("first", dependencies),
+    geminiBatch.generateBatchWithGemini("second", dependencies),
+  ]);
+  assert.deepEqual(results.map((result) => result.status), ["fulfilled", "rejected"]);
+  assert.equal(reads, 1);
+  assert.equal(fetchCalls, 1);
+  assert.equal(tracker.recordCalls, 1);
+  assert.deepEqual([context.reservationAttempts, context.reservations, context.providerDispatches], [1, 1, 1]);
+});
+
+test("batch deadline covers stalled body and monotonic parsing boundary with no redispatch", async (t) => {
+  assert.equal(GEMINI_TIMEOUT_MS, 90_000);
+  for (const phase of ["dispatch", "body", "parse"]) await t.test(phase, async () => {
+    const tracker = new MemoryTracker({ records: [], usageUnknown: false });
+    const context = geminiBatch.createGeminiBatchCycleContext();
+    let reading = 0;
+    const readings = [0, 0, 90_001];
+    let fetchCalls = 0;
+    const dependencies = { usageTracker: tracker, environment: env, cycleContext: context,
+      ...(phase === "parse" ? { monotonicNow: () => readings[Math.min(reading++, 2)]! } : { timeoutMs: 2 }),
+      fetchImplementation: (async (_url, init) => {
+        fetchCalls++;
+        assert.equal(requestedModel(init), "gemini-3.8-flash");
+        if (phase === "parse") return jsonResponse(successfulBody);
+        const stalled = () => new Promise<never>((_resolve, reject) => init!.signal!.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true }));
+        if (phase === "dispatch") return stalled();
+        const response = new Response(null);
+        Object.defineProperty(response, "text", { value: stalled });
+        return response;
+      }) as typeof fetch };
+    await assert.rejects(geminiBatch.generateBatchWithGemini("batch", dependencies), /timed out after 90 seconds/);
+    await assert.rejects(geminiBatch.generateBatchWithGemini("later", dependencies), /batch.*already started/i);
+    assert.equal(fetchCalls, 1);
+    assert.deepEqual([context.reservationAttempts, context.reservations, context.providerDispatches], [1, 1, 1]);
+    assert.equal(context.dispatchBlockedByTimeout, true);
+    assert.equal(context.fallbacks, 0);
+    assert.equal(tracker.settlementCalls, 0);
+    assert.equal(tracker.data.records[0]?.accountingStatus, "transport_ambiguous");
+    assert.equal(tracker.data.records[0]?.ambiguityReason, "timeout");
+  });
+});
+
+test("RF3 invalid batch analysis content retains one exact settlement and yields no selections", async () => {
+  const tracker = new MemoryTracker({ records: [], usageUnknown: false });
+  const context = geminiBatch.createGeminiBatchCycleContext();
+  let fetchCalls = 0;
+  const batch: PreparedBatch = { prompt: "prepared batch", promptBytes: 14, candidates: [], sizeExcluded: 0, truncationStage: "initial" };
+  let selections: BatchAnalysisResult["selections"] = [];
+  await assert.rejects(async () => {
+    const result = await analyzeBatch(batch, { generate: (input) => geminiBatch.generateBatchWithGemini(input, {
+      usageTracker: tracker, environment: env, cycleContext: context,
+      fetchImplementation: (async () => { fetchCalls++; return jsonResponse({ ...successfulBody, output_text: "invalid analysis JSON" }); }) as typeof fetch,
+    }) });
+    selections = result.selections;
+  }, BatchAnalysisError);
+  assert.deepEqual(selections, []);
+  assert.equal(fetchCalls, 1);
+  assert.equal(context.providerDispatches, 1);
+  assert.equal(tracker.recordCalls, 1);
+  assert.equal(tracker.settlementCalls, 1);
+  assert.equal(tracker.data.records[0]?.accountingStatus, "exact");
+  assert.equal(tracker.data.records[0]?.totalTokens, 112);
+  assert.equal(tracker.data.records[0]?.ambiguityReason, undefined);
+});
 
 test("allows below all Gemini limits", () => assert.equal(reachedGeminiLimit(counts({ dailyRequests: 2, weeklyRequests: 10, monthlyRequests: 20, dailyTokens: 3_000, weeklyTokens: 9_000, monthlyTokens: 20_000 }), limits), undefined));
 test("blocks each reached request limit", () => { assert.equal(reachedGeminiLimit(counts({ dailyRequests: 5 }), limits), "daily request"); assert.equal(reachedGeminiLimit(counts({ weeklyRequests: 20 }), limits), "weekly request"); assert.equal(reachedGeminiLimit(counts({ monthlyRequests: 50 }), limits), "monthly request"); });
