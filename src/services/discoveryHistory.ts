@@ -1,7 +1,7 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import type { AgentAnalysis, StoredDiscovery, XSourceProvenance } from "../types/index.js";
-import { copyXSourceProvenance, DiscoveryHistoryError, isValidAgentAnalysis, isValidXSourceProvenance, normalizeDiscoveryUrl, validateRecentDiscoveryQuery, type DiscoveryHistory, type RecentDiscoveryQuery, type RecentDiscoveryResult } from "./discoveryHistoryCore.js";
+import { copyXSourceProvenance, DiscoveryHistoryError, isValidAgentAnalysis, isValidXSourceProvenance, normalizeDiscoveryUrl, validateRecentDiscoveryQuery, type DiscoveryHistory, type DiscoveryRecordOutcome, type RecentDiscoveryQuery, type RecentDiscoveryResult } from "./discoveryHistoryCore.js";
 export { DiscoveryHistoryError, isValidAgentAnalysis, isValidXSourceProvenance, normalizeDiscoveryUrl, type DiscoveryHistory, type RecentDiscoveryQuery, type RecentDiscoveryResult } from "./discoveryHistoryCore.js";
 
 interface DiscoveryHistoryData {
@@ -88,6 +88,10 @@ export class JsonDiscoveryHistory implements DiscoveryHistory {
   }
 
   async recordDiscovery(analysis: AgentAnalysis, seenAt = new Date(), sourceProvenance?: XSourceProvenance): Promise<StoredDiscovery> {
+    return (await this.recordDiscoveryWithOutcome(analysis, seenAt, sourceProvenance)).discovery;
+  }
+
+  async recordDiscoveryWithOutcome(analysis: AgentAnalysis, seenAt = new Date(), sourceProvenance?: XSourceProvenance): Promise<DiscoveryRecordOutcome> {
     if (!isValidAgentAnalysis(analysis)) throw new DiscoveryHistoryError("Discovery analysis is invalid and cannot be recorded.");
     if (sourceProvenance !== undefined && !isValidXSourceProvenance(sourceProvenance)) throw new DiscoveryHistoryError("Discovery source provenance is invalid.");
     if (Number.isNaN(seenAt.getTime())) throw new DiscoveryHistoryError("Discovery timestamp is invalid.");
@@ -95,12 +99,12 @@ export class JsonDiscoveryHistory implements DiscoveryHistory {
     const normalizedUrl = normalizeDiscoveryUrl(analysis.sourceUrl);
     const data = await this.read();
     const existing = data.discoveries.find((item) => item.normalizedUrl === normalizedUrl);
-    if (existing) return copy(existing);
+    if (existing) return { discovery: copy(existing), created: false };
 
     const timestamp = seenAt.toISOString();
     const discovery: StoredDiscovery = { normalizedUrl, firstSeenAt: timestamp, lastSeenAt: timestamp, analysis: copyAnalysis(analysis), sourceProvenance: copyXSourceProvenance(sourceProvenance) };
     await this.write({ discoveries: [...data.discoveries, discovery] });
-    return copy(discovery);
+    return { discovery: copy(discovery), created: true };
   }
 
   async touchDiscovery(url: string, seenAt = new Date()): Promise<StoredDiscovery | undefined> {

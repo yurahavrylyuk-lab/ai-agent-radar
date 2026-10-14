@@ -209,10 +209,17 @@ test("D1 batch persistence round-trips rich existing fields and excludes the bat
   });
 });
 
-test("D1 insert race returns the earlier stored row without overwriting analysis or firstSeenAt", async () => {
+for (const race of [
+  { name: "earlier stored row", firstSeenAt: "2026-10-01T08:00:00.000Z", sameAnalysis: false },
+  { name: "same-timestamp winner with different content", firstSeenAt: "2026-10-12T08:00:00.000Z", sameAnalysis: false },
+  { name: "same-timestamp winner with identical content", firstSeenAt: "2026-10-12T08:00:00.000Z", sameAnalysis: true },
+])
+test(`D1 insert race returns ${race.name} as duplicate without overwriting it`, async () => {
   await withDatabase(async (database) => {
-    const originalFirstSeenAt = "2026-10-01T08:00:00.000Z";
-    const originalAnalysis = { ...analysis("https://example.test/news/race"), summary: "Earlier durable interpretation", relevanceScore: 4 };
+    const originalFirstSeenAt = race.firstSeenAt;
+    const incomingAnalysis = analysis("https://example.test/news/race");
+    const originalAnalysis = race.sameAnalysis ? incomingAnalysis
+      : { ...incomingAnalysis, summary: "Earlier durable interpretation", relevanceScore: 4 };
     let raced = false;
     class RacingStatement extends SqliteD1Statement {
       override bind(...values: unknown[]): RacingStatement { return new RacingStatement(this.database, this.query, values); }
@@ -229,14 +236,33 @@ test("D1 insert race returns the earlier stored row without overwriting analysis
       override prepare(query: string): RacingStatement { return new RacingStatement(this.database, query); }
     }
     const history = new D1DiscoveryHistory(new RacingDatabase(database) as unknown as D1Database);
-    const result = await discoveryProcessor.recordBatchSelection(selectionFor(analysis(originalAnalysis.sourceUrl)),
+    const result = await discoveryProcessor.recordBatchSelection(selectionFor(incomingAnalysis),
       { history, seenAt: new Date("2026-10-12T08:00:00.000Z") });
     assert.equal(raced, true);
     assert.equal(result.status, "duplicate");
     assert.equal(result.discovery.firstSeenAt, originalFirstSeenAt);
+    assert.equal(result.discovery.lastSeenAt, originalFirstSeenAt);
     assert.deepEqual(result.discovery.analysis, originalAnalysis);
     assert.deepEqual(await history.getDiscovery(originalAnalysis.sourceUrl), result.discovery);
     assert.equal((database.prepare("SELECT COUNT(*) AS count FROM discoveries").get() as { count: number }).count, 1);
+  });
+});
+
+test("D1 batch persistence rejects an unverified insert outcome instead of offering a fresh result", async () => {
+  await withDatabase(async (database) => {
+    class UnverifiedStatement extends SqliteD1Statement {
+      override bind(...values: unknown[]): UnverifiedStatement { return new UnverifiedStatement(this.database, this.query, values); }
+      override async run(): Promise<D1Result> {
+        const result = await super.run();
+        return { ...result, meta: {} as D1Meta };
+      }
+    }
+    class UnverifiedDatabase extends SqliteD1Database {
+      override prepare(query: string): UnverifiedStatement { return new UnverifiedStatement(this.database, query); }
+    }
+    const history = new D1DiscoveryHistory(new UnverifiedDatabase(database) as unknown as D1Database);
+    await assert.rejects(discoveryProcessor.recordBatchSelection(selectionFor(analysis("https://example.test/news/unverified")),
+      { history, seenAt: new Date("2026-10-12T08:00:00.000Z") }), /insert outcome/i);
   });
 });
 

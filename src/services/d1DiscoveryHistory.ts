@@ -6,6 +6,7 @@ import {
   normalizeDiscoveryUrl,
   validateRecentDiscoveryQuery,
   type DiscoveryHistory,
+  type DiscoveryRecordOutcome,
   type RecentDiscoveryQuery,
   type RecentDiscoveryResult,
 } from "./discoveryHistoryCore.js";
@@ -119,6 +120,10 @@ export class D1DiscoveryHistory implements DiscoveryHistory {
   }
 
   async recordDiscovery(analysis: AgentAnalysis, seenAt = new Date(), sourceProvenance?: XSourceProvenance): Promise<StoredDiscovery> {
+    return (await this.recordDiscoveryWithOutcome(analysis, seenAt, sourceProvenance)).discovery;
+  }
+
+  async recordDiscoveryWithOutcome(analysis: AgentAnalysis, seenAt = new Date(), sourceProvenance?: XSourceProvenance): Promise<DiscoveryRecordOutcome> {
     if (!isValidAgentAnalysis(analysis)) throw new DiscoveryHistoryError("Discovery analysis is invalid and cannot be recorded.");
     if (sourceProvenance !== undefined && !isValidXSourceProvenance(sourceProvenance)) throw new DiscoveryHistoryError("Discovery source provenance is invalid.");
     if (Number.isNaN(seenAt.getTime())) throw new DiscoveryHistoryError("Discovery timestamp is invalid.");
@@ -126,12 +131,15 @@ export class D1DiscoveryHistory implements DiscoveryHistory {
     const normalizedUrl = normalizeDiscoveryUrl(analysis.sourceUrl);
     const timestamp = seenAt.toISOString();
     try {
-      await this.database.prepare(
+      const result = await this.database.prepare(
         "INSERT OR IGNORE INTO discoveries (normalized_url, first_seen_at, last_seen_at, analysis_json) VALUES (?1, ?2, ?3, ?4)",
       ).bind(normalizedUrl, timestamp, timestamp, JSON.stringify({ ...copyAnalysis(analysis), ...(sourceProvenance ? { sourceProvenance: copyXSourceProvenance(sourceProvenance) } : {}) })).run();
+      if (result.success !== true || (result.meta?.changes !== 0 && result.meta?.changes !== 1)) {
+        throw new DiscoveryHistoryError("D1 discovery insert outcome could not be verified safely.");
+      }
       const discovery = await this.getDiscovery(normalizedUrl);
       if (!discovery) throw new DiscoveryHistoryError("Recorded D1 discovery could not be retrieved safely.");
-      return discovery;
+      return { discovery, created: result.meta.changes === 1 };
     } catch (error) {
       if (error instanceof DiscoveryHistoryError) throw error;
       throw new DiscoveryHistoryError("D1 discovery history could not be written safely.");

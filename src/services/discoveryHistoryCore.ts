@@ -13,10 +13,18 @@ export interface RecentDiscoveryResult {
   truncated: boolean;
 }
 
+export interface DiscoveryRecordOutcome {
+  discovery: StoredDiscovery;
+  /** True only when this recording operation confirmed creation of the row. */
+  created: boolean;
+}
+
 export interface DiscoveryHistory {
   getDiscovery(url: string): Promise<StoredDiscovery | undefined>;
   listRecentDiscoveries(query: RecentDiscoveryQuery): Promise<RecentDiscoveryResult>;
   recordDiscovery(analysis: AgentAnalysis, seenAt?: Date, sourceProvenance?: XSourceProvenance): Promise<StoredDiscovery>;
+  /** Optional for legacy histories; batch persistence requires confirmed insertion evidence. */
+  recordDiscoveryWithOutcome?(analysis: AgentAnalysis, seenAt?: Date, sourceProvenance?: XSourceProvenance): Promise<DiscoveryRecordOutcome>;
   touchDiscovery(url: string, seenAt?: Date): Promise<StoredDiscovery | undefined>;
 }
 

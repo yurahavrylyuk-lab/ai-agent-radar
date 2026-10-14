@@ -219,6 +219,38 @@ test("batch duplicate touches canonical identity while retaining stored content 
   });
 });
 
+for (const sameAnalysis of [false, true]) {
+  test(`JSON batch persistence classifies same-timestamp winner with ${sameAnalysis ? "identical" : "different"} content as duplicate`, async () => {
+    await withHistory(async (history) => {
+      const selection = batchSelection();
+      const originalAnalysis = sameAnalysis ? selection.analysis : { ...selection.analysis, summary: "Existing interpretation" };
+      const original = await history.recordDiscovery(originalAnalysis, firstSeen);
+      // Model a row appearing after the helper's initial read; the real JSON
+      // recording operation still reads the durable row itself.
+      history.getDiscovery = async () => undefined;
+      const result = await discoveryProcessor.recordBatchSelection(selection, { history, seenAt: firstSeen });
+      assert.equal(result.status, "duplicate");
+      assert.deepEqual(result.discovery, original);
+      assert.deepEqual(await history.listDiscoveries(), [original]);
+    });
+  });
+}
+
+test("batch persistence without insertion evidence fails closed before a new write", async () => {
+  let writes = 0;
+  const history: DiscoveryHistory = {
+    async getDiscovery() { return undefined; },
+    async listRecentDiscoveries() { return { discoveries: [], truncated: false }; },
+    async touchDiscovery() { return undefined; },
+    async recordDiscovery(analysis) {
+      writes++;
+      return { normalizedUrl: analysis.sourceUrl, analysis, firstSeenAt: firstSeen.toISOString(), lastSeenAt: firstSeen.toISOString() };
+    },
+  };
+  await assert.rejects(discoveryProcessor.recordBatchSelection(batchSelection(), { history, seenAt: firstSeen }), /insert outcome/i);
+  assert.equal(writes, 0);
+});
+
 test("batch history read and duplicate-touch failures provide no result or replacement write", async () => {
   await withHistory(async (history) => {
     const selection = batchSelection();
@@ -247,9 +279,10 @@ test("RF5 second-of-three persistence failure leaves only first and third durabl
       getDiscovery: history.getDiscovery.bind(history),
       listRecentDiscoveries: history.listRecentDiscoveries.bind(history),
       touchDiscovery: history.touchDiscovery.bind(history),
-      async recordDiscovery(analysis, seenAt) {
+      recordDiscovery: history.recordDiscovery.bind(history),
+      async recordDiscoveryWithOutcome(analysis, seenAt) {
         if (analysis.sourceUrl === failedUrl) throw new Error("history write failed");
-        return history.recordDiscovery(analysis, seenAt);
+        return history.recordDiscoveryWithOutcome(analysis, seenAt);
       },
     };
     const successfulResults: DiscoveryProcessingResult[] = [];

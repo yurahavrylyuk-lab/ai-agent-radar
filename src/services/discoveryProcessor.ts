@@ -40,10 +40,11 @@ export async function recordBatchSelection(
     return { status: "duplicate", discovery };
   }
 
-  const discovery = await history.recordDiscovery(analysis, seenAt);
-  // Insert-or-ignore can return a race winner. Its durable content and immutable
-  // timestamp must reach replay admission rather than being relabelled fresh.
-  return { status: discovery.firstSeenAt === seenAt.toISOString() ? "new" : "duplicate", discovery };
+  if (!history.recordDiscoveryWithOutcome) {
+    throw new Error("Discovery insert outcome is required for batch persistence.");
+  }
+  const { discovery, created } = await history.recordDiscoveryWithOutcome(analysis, seenAt);
+  return { status: created === true ? "new" : "duplicate", discovery };
 }
 
 export async function processSearchResult(
