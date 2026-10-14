@@ -187,7 +187,10 @@ async function recordDigestDelivery(
 /** Threshold-only delivery of an already-bounded, persisted fresh/replay pool. */
 export async function notifyBatchDeliveryDigest(
   candidates: readonly BatchDeliveryCandidate[],
-  dependencies: NotificationOrchestratorDependencies,
+  dependencies: NotificationOrchestratorDependencies & {
+    /** Reports the exact externally accepted digest before notification-record writes. */
+    onAccepted?: (candidates: readonly BatchDeliveryCandidate[]) => void;
+  },
 ): Promise<DigestDeliveryResult> {
   const history = dependencies.history;
   if (!history) throw new Error("Notification history is required.");
@@ -260,6 +263,7 @@ export async function notifyBatchDeliveryDigest(
   if (digest.length === 0) return { notifications, eligibleCandidates, sentCandidates: [] };
   const sendEmail = dependencies.sendEmail ?? sendWithResend;
   const emailResult = await sendEmail(formatBatchDigestEmail(digest.map(candidate => candidate.discovery)));
+  dependencies.onAccepted?.(digest);
   const sentCandidates = await recordDigestDelivery(digest, history, emailResult, notifications);
   return { notifications, eligibleCandidates, sentCandidates, mode: "normal" };
 }

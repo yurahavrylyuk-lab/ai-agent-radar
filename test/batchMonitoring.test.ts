@@ -124,6 +124,60 @@ test("blocked Gemini admission still searches first and delivers bounded stored 
   assert.equal(result.replayStoriesSent, 1); assert.equal(f.sent.length, 1);
 });
 
+test("accepted email reports its exact fresh/replay inclusion even when notification recording then fails", async () => {
+  const f = fixture(); const replay = stored("https://example.test/replay"); f.discoveries.set(replay.normalizedUrl, replay);
+  f.dependencies.analyze = async batch => selection(batch, [0, 1]);
+  let recordAttempts = 0;
+  f.notificationHistory.recordNotificationSent = async () => { recordAttempts++; throw new Error("offline record failure"); };
+  const result = await run(f.dependencies);
+  assert.equal(f.sent.length, 1); assert.equal(recordAttempts, 3);
+  assert.equal(result.notificationsSent, 1); assert.equal(result.batch?.emailCount, 1);
+  assert.equal(result.freshStoriesSent, 2); assert.equal(result.batch?.freshDelivered, 2);
+  assert.equal(result.replayStoriesSent, 1); assert.equal(result.batch?.replayDelivered, 1);
+  assert.equal(result.failures, 1); assert.match(result.outcomes.at(-1)!.error!, /accepted.*could not be persisted/);
+});
+
+test("failed sender reports zero accepted emails and delivered stories without retry or recording", async () => {
+  const f = fixture(); let sends = 0; let writes = 0;
+  f.dependencies.notification.sendEmail = async () => { sends++; throw new Error("send failed"); };
+  f.notificationHistory.recordNotificationSent = async () => { writes++; throw new Error("unexpected record"); };
+  const result = await run(f.dependencies);
+  assert.equal(sends, 1); assert.equal(writes, 0); assert.equal(result.failures, 1);
+  assert.equal(result.notificationsSent, 0); assert.equal(result.batch?.emailCount, 0);
+  assert.equal(result.batch?.freshDelivered, 0); assert.equal(result.batch?.replayDelivered, 0);
+});
+
+test("reservation without dispatch remains distinct from one batch invocation and no accepted selections", async () => {
+  const f = fixture();
+  f.dependencies.analyze = async () => {
+    Object.assign(f.dependencies.geminiCycleContext, { reservationAttempts: 1, reservations: 1, providerDispatches: 0 });
+    throw new Error("accounting window changed before dispatch");
+  };
+  const result = await run(f.dependencies);
+  assert.equal(result.analysesAttempted, 1); assert.equal(result.geminiProviderAttempts, 0);
+  assert.equal(result.batch?.reservationAttempts, 1); assert.equal(result.batch?.reservations, 1);
+  assert.equal(result.batch?.providerDispatches, 0); assert.equal(result.batch?.status, "provider_failed");
+  assert.equal(result.batch?.returnedStories, 0); assert.equal(result.batch?.acceptedStories, 0);
+  assert.deepEqual(result.batch?.selected, []);
+});
+
+test("known groups, prompt exclusions and truncation diagnostics describe the actual prepared subset", async () => {
+  const f = fixture(); const old = stored("https://example.test/known", 8, "2026-10-01T00:00:00.000Z"); f.discoveries.set(old.normalizedUrl, old);
+  let page = 0;
+  f.dependencies.searchPage = async () => ({ rawCount: 5, positions: Array.from({ length: 5 }, (_, i) => {
+    const ordinal = page++;
+    return { resultOrdinal: i + 1, result: { title: "title ".repeat(100), snippet: "snippet ".repeat(200), url: ordinal === 0 ? old.normalizedUrl : `https://example.test/${ordinal}/${"x".repeat(1800)}` } };
+  }) });
+  f.dependencies.analyze = async batch => {
+    assert.equal(batch.truncationStage, "tail"); assert.ok(batch.candidates.length < 49);
+    return { returnedCount: 0, selections: [] };
+  };
+  const result = await run(f.dependencies);
+  assert.equal(result.batch?.acceptedObservations, 50); assert.equal(result.batch?.known, 1);
+  assert.equal(result.batch?.sizeExcluded! + result.batch?.submittedCandidates!, 49);
+  assert.equal(result.batch?.truncationStage, "tail"); assert.ok(result.batch!.promptBytes <= 32768);
+});
+
 test("quota cutoff stops later queries but analyzes already collected positions once", async () => {
   const f = fixture(); let calls = 0; const search = f.dependencies.searchPage;
   f.dependencies.searchPage = async (...args) => { calls++; if (calls === 3) throw new BraveUsageGuardDeniedError(); return search(...args); };
@@ -274,6 +328,8 @@ test("RF3 invalid analysis after exact provider settlement persists zero fresh r
     assert.equal(fetchCalls, 1); assert.equal(result.analysesAttempted, 1); assert.equal(result.batch?.status, "invalid_output");
     assert.equal(result.newDiscoveries, 0); assert.equal(f.discoveries.size, 1); assert.equal(f.sent.length, 1); assert.equal(result.replayStoriesSent, 1);
     assert.equal(result.geminiProviderAttempts, 1); assert.equal(result.batch?.providerDispatches, 1);
+    assert.equal(result.batch?.reservations, 1); assert.equal(result.batch?.returnedStories, 0);
+    assert.equal(result.batch?.acceptedStories, 0); assert.deepEqual(result.batch?.selected, []);
     const data = await usage.getUsageData(); assert.equal(data.records.length, 1); assert.equal(data.records[0]?.accountingStatus, "exact");
     assert.equal(data.records[0]?.totalTokens, 18); assert.equal(data.usageUnknown, false);
     assert.equal(database.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE name LIKE 'x_%'").get()!.n, 0);
@@ -327,6 +383,11 @@ test("complete Worker D1 batch composition has one provider dispatch for four se
       assert.deepEqual(requests, [...Array.from({ length: 10 }, () => "api.search.brave.com"), "generativelanguage.googleapis.com", "api.resend.com"]);
       assert.equal(result.analysesAttempted, 1); assert.equal(result.geminiProviderAttempts, 1); assert.equal(result.geminiFallbacks, 0);
       assert.equal(result.newDiscoveries, 4); assert.equal(result.notificationsSent, 1); assert.equal(result.freshStoriesSent, 4);
+      assert.equal(result.batch?.reservationAttempts, 1); assert.equal(result.batch?.reservations, 1); assert.equal(result.batch?.providerDispatches, 1);
+      assert.equal(result.batch?.returnedStories, 4); assert.equal(result.batch?.acceptedStories, 4);
+      assert.deepEqual(result.batch?.selected.map(entry => entry.candidateId), ["c050", "c001", "c002", "c003"]);
+      assert.deepEqual(result.batch?.selected[0]?.provenance, [{ queryOrdinal: 10, resultOrdinal: 5 }]);
+      assert.equal(result.batch?.freshDelivered, 4); assert.equal(result.batch?.emailCount, 1);
       assert.deepEqual(database.prepare("SELECT normalized_url FROM discoveries ORDER BY normalized_url").all().map(row => row.normalized_url), [...sourceUrls].sort());
       assert.equal(database.prepare("SELECT COUNT(*) AS n FROM notifications").get()!.n, 4);
       const data = await new D1GeminiUsageStore(d1).getUsageData();

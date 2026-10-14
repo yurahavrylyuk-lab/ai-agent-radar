@@ -290,6 +290,11 @@ export async function runBatchMonitoringCycle(dependencies: BatchMonitoringDepen
     try {
       const delivery = await notifyBatchDeliveryDigest(candidates, {
         ...notification,
+        onAccepted: accepted => {
+          result.notificationsSent = batch.emailCount = 1;
+          result.freshStoriesSent = batch.freshDelivered = accepted.filter(candidate => candidate.origin === "fresh").length;
+          result.replayStoriesSent = batch.replayDelivered = accepted.filter(candidate => candidate.origin === "replay").length;
+        },
         ...(sendEmail ? { sendEmail: async content => {
           const accepted = await sendEmail(content);
           result.notificationsSent = batch.emailCount = 1;

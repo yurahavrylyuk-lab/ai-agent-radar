@@ -6,7 +6,7 @@ import { D1GeminiUsageStore } from "../src/services/d1GeminiUsageStore.js";
 import { D1NotificationHistory } from "../src/services/d1NotificationHistory.js";
 import { MONITORING_FRESHNESS } from "../src/config/discoveryQueries.js";
 import { createMonitoringRuntimeConfiguration, createRadarRuntimeConfiguration } from "../src/services/radarRuntimeConfiguration.js";
-import type { MonitoringCycleResult } from "../src/types/index.js";
+import type { BatchCycleMetrics, MonitoringCycleResult } from "../src/types/index.js";
 import worker, {
   createWorkerMonitoringDependencies,
   createWorkerPersistence,
@@ -270,6 +270,59 @@ test("scheduled summary reports bounded timeout accounting without claiming zero
   }), environment());
   assert.deepEqual(summary.geminiTimeoutIncompleteAccounting, { dailyRequests: 0, weeklyRequests: 2, monthlyRequests: 2 });
   assert.equal(JSON.stringify(summary).includes("tokensUsed"), false);
+});
+
+function batchMetrics(overrides: Partial<BatchCycleMetrics> = {}): BatchCycleMetrics {
+  return {
+    searchAttempts: 10, searchSuccesses: 9, searchFailures: 1, rawObservations: 55, acceptedObservations: 45,
+    invalid: 1, homepages: 1, duplicates: 2, known: 3, sizeExcluded: 2, submittedCandidates: 36, promptBytes: 32000,
+    truncationStage: "tail", status: "validated", reservationAttempts: 1, reservations: 1, providerDispatches: 1,
+    returnedStories: 4, acceptedStories: 4, selected: [{ candidateId: "c050", hostname: "example.test", score: 8, provenance: [{ queryOrdinal: 10, resultOrdinal: 5 }] }],
+    freshDelivered: 2, replayDelivered: 1, emailCount: 1, ...overrides,
+  };
+}
+
+test("scheduled summary copies every batch counter and distinguishes selected stories from one dispatch", () => {
+  const summary = createScheduledCycleSummary(monitoringResult({ batch: batchMetrics() }), environment());
+  assert.deepEqual(summary.batch, batchMetrics());
+  assert.equal(summary.batch?.providerDispatches, 1); assert.equal(summary.batch?.acceptedStories, 4);
+  const reservedOnly = createScheduledCycleSummary(monitoringResult({ batch: batchMetrics({ reservations: 1, providerDispatches: 0, status: "provider_failed", selected: [], acceptedStories: 0 }) }), environment());
+  assert.equal(reservedOnly.batch?.reservations, 1); assert.equal(reservedOnly.batch?.providerDispatches, 0);
+});
+
+test("scheduled batch serialization allowlists and bounds malicious selected evidence and every diagnostic string", () => {
+  const env = environment(); const secret = env.GEMINI_API_KEY;
+  const fullSourceUrl = "https://private.example.test/story?token=private";
+  const selected = Array.from({ length: 8 }, (_, i) => ({ candidateId: `c00${i + 1}`, hostname: i === 0 ? `${secret}.test` : "a".repeat(260), score: 8,
+    provenance: Array.from({ length: 100 }, (_, p) => ({ queryOrdinal: Math.floor((p % 50) / 5) + 1, resultOrdinal: p % 5 + 1, sourceUrl: fullSourceUrl })), sourceTitle: env.NOTIFICATION_EMAIL, sourceUrl: fullSourceUrl }));
+  const input = monitoringResult({ batch: { ...batchMetrics({ selected }), prompt: secret, response: env.NOTIFICATION_EMAIL } as BatchCycleMetrics });
+  const summary = createScheduledCycleSummary(input, env);
+  assert.ok(summary.batch); assert.equal(summary.batch.selected.length, 4);
+  assert.ok(summary.batch.selected.reduce((n, entry) => n + entry.provenance.length, 0) <= 50);
+  assert.ok(summary.batch.selected.every(entry => entry.hostname.length <= 253));
+  const serialized = JSON.stringify(summary);
+  for (const text of [secret, env.NOTIFICATION_EMAIL, fullSourceUrl, "sourceTitle", "sourceUrl", '"prompt":', '"response":']) assert.equal(serialized.includes(text), false, text);
+  const invalid = createScheduledCycleSummary(monitoringResult({ batch: batchMetrics({ selected: [
+    { candidateId: "c051", hostname: "valid.test", score: 8, provenance: [] },
+    { candidateId: "c001", hostname: "valid.test", score: 11, provenance: [] },
+    { candidateId: "c002", hostname: "valid.test", score: 7, provenance: [{ queryOrdinal: 11, resultOrdinal: 1 }, { queryOrdinal: 1, resultOrdinal: 6 }, { queryOrdinal: 2, resultOrdinal: 3 }] },
+  ] }) }), env);
+  assert.deepEqual(invalid.batch?.selected, [{ candidateId: "c002", hostname: "valid.test", score: 7, provenance: [{ queryOrdinal: 2, resultOrdinal: 3 }] }]);
+});
+
+test("scheduled serializer rejects arbitrary strings injected into enum, model-map and status fields", () => {
+  const env = environment(); const poisoned = `${env.GEMINI_API_KEY} https://private.test/path a@b.test Bearer hidden\u0000`;
+  const input = monitoringResult({ batch: batchMetrics(), searchFailures: [{ queryOrdinal: 1, error: poisoned }], outcomes: [{ sourceTitle: "private", sourceUrl: "https://private.test/path", error: poisoned }] });
+  (input.batch as unknown as Record<string, unknown>).status = poisoned;
+  (input.batch as unknown as Record<string, unknown>).truncationStage = poisoned;
+  (input.geminiRequestsByModel as unknown as Record<string, unknown>)[poisoned] = poisoned;
+  (input.outcomes[0] as unknown as Record<string, unknown>).discoveryStatus = poisoned;
+  (input.outcomes[0] as unknown as Record<string, unknown>).notificationStatus = poisoned;
+  (input as unknown as Record<string, unknown>).geminiBlockedReason = poisoned;
+  (input as unknown as Record<string, unknown>).xBlockedReason = poisoned;
+  input.xFailures = [{ accountOrdinal: 1, reason: poisoned as never }];
+  const serialized = JSON.stringify(createScheduledCycleSummary(input, env));
+  for (const forbidden of [env.GEMINI_API_KEY, "private.test", "a@b.test", "hidden", "\\u0000"]) assert.equal(serialized.includes(forbidden), false, forbidden);
 });
 
 test("scheduled handler registers and awaits the single monitoring promise", async () => {
