@@ -113,6 +113,11 @@ export interface DeliveryCandidate {
   origin: DeliveryCandidateOrigin;
 }
 
+/** Observed cycle-local aliases retain their existing durable notification keys. */
+export interface BatchDeliveryCandidate extends DeliveryCandidate {
+  aliases: readonly string[];
+}
+
 /** Provider-neutral content ready for a future email transport. */
 export interface DiscoveryEmailContent {
   subject: string;

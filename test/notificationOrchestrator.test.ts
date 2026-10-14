@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import * as orchestrator from "../src/services/notificationOrchestrator.js";
 import { notifyDeliveryDigest, notifyDiscovery, notifyDigest } from "../src/services/notificationOrchestrator.js";
 import type { DeliveryCandidate, DiscoveryEmailContent, DiscoveryProcessingResult, NotificationRecord } from "../src/types/index.js";
 import type { NotificationHistory } from "../src/services/notificationHistory.js";
@@ -198,6 +199,151 @@ function openHistory(): NotificationHistory {
     async recordNotificationSent(url, _ch, id) { return record(url, id); },
   };
 }
+
+function batchCandidate(score: number, path: string, origin: DeliveryCandidate["origin"] = "fresh", name = "Generic update") {
+  const candidate = deliveryCandidate(score, `https://example.com/${path}`, origin, name);
+  return { ...candidate, aliases: [candidate.discovery.normalizedUrl] };
+}
+
+test("batch preserves fresh order before higher-scoring replay, caps four, and ignores legacy priority", async () => {
+  const candidates = [batchCandidate(10, "replay", "replay"), batchCandidate(8, "first"),
+    batchCandidate(7, "second"), batchCandidate(7, "third"), batchCandidate(7, "codex", "fresh", "Codex update")];
+  const original = structuredClone(candidates);
+  let sends = 0;
+  const outcome = await orchestrator.notifyBatchDeliveryDigest(candidates, {
+    history: openHistory(),
+    isEligible: () => { throw new Error("legacy eligibility must not decide batch eligibility"); },
+    sendEmail: async (email) => { sends++; assert.equal(email.subject, "AI Agent Radar — Daily Digest"); return { id: "batch" }; },
+  });
+  assert.deepEqual(outcome.sentCandidates.map(c => c.discovery.analysis.sourceUrl), [
+    "https://example.com/first", "https://example.com/second", "https://example.com/third", "https://example.com/codex",
+  ]);
+  assert.equal(outcome.mode, "normal");
+  assert.equal(sends, 1);
+  assert.deepEqual(candidates, original);
+});
+
+test("batch hard gates reject trusted score6 and root URLs despite permissive legacy eligibility", async () => {
+  const trusted = { ...deliveryCandidate(6, "https://openai.com/news", "fresh", "Codex"), aliases: [] };
+  const root = { ...deliveryCandidate(10, "https://openai.com/?news=1#release", "replay"), aliases: [] };
+  const invalid = { ...deliveryCandidate(10, "https://example.com/news", "fresh"), aliases: [] };
+  invalid.discovery.analysis.sourceUrl = "javascript:alert(1)";
+  let sends = 0;
+  for (const candidates of [[], [trusted, root, invalid]]) {
+    const outcome = await orchestrator.notifyBatchDeliveryDigest(candidates, {
+      history: openHistory(), isEligible: () => true,
+      sendEmail: async () => { sends++; return { id: "unexpected" }; },
+    });
+    assert.deepEqual(outcome.sentCandidates, []);
+    assert.equal(outcome.mode, undefined);
+  }
+  assert.equal(sends, 0);
+});
+
+test("batch unions normalized fragment aliases and prefers fresh without moving its input position", async () => {
+  const replay = batchCandidate(10, "same#old", "replay");
+  const firstFresh = batchCandidate(8, "first");
+  const fresh = batchCandidate(7, "same#new");
+  replay.aliases.push("https://example.com/same#observed");
+  const reads: string[] = [];
+  const outcome = await orchestrator.notifyBatchDeliveryDigest([replay, firstFresh, fresh], {
+    history: { ...openHistory(), async hasNotificationBeenSent(url) { reads.push(url); return false; } },
+    sendEmail: async () => ({ id: "batch" }),
+  });
+  assert.deepEqual(outcome.sentCandidates.map(c => c.discovery.analysis.sourceUrl), [
+    "https://example.com/first", "https://example.com/same#new",
+  ]);
+  assert.equal(outcome.sentCandidates[1].origin, "fresh");
+  assert.equal(reads.filter(url => url === "https://example.com/same#observed").length, 2);
+});
+
+test("RF2 batch initially notified alias excludes its entire fresh/replay group", async () => {
+  const fresh = batchCandidate(8, "same#new");
+  const replay = batchCandidate(10, "same#old", "replay");
+  replay.aliases.push("https://example.com/same#notified");
+  let sends = 0;
+  const outcome = await orchestrator.notifyBatchDeliveryDigest([fresh, replay], {
+    history: { ...openHistory(),
+      async hasNotificationBeenSent(url) { return url.endsWith("#notified"); },
+      async getNotificationRecord(url) { return record(url); },
+    },
+    sendEmail: async () => { sends++; return { id: "unexpected" }; },
+  });
+  assert.equal(sends, 0);
+  assert.deepEqual(outcome.sentCandidates, []);
+  assert.equal(outcome.notifications.get(fresh.discovery.analysis.sourceUrl)?.status, "already_sent");
+});
+
+test("RF5 final alias evidence removes lead, promotes next fresh story and fills with bounded replay once", async () => {
+  const lead = batchCandidate(9, "lead");
+  lead.aliases.push("https://example.com/lead#observed");
+  const reads = new Map<string, number>();
+  let sends = 0;
+  const outcome = await orchestrator.notifyBatchDeliveryDigest([
+    lead, batchCandidate(8, "promoted"), batchCandidate(7, "third"), batchCandidate(7, "fourth"), batchCandidate(10, "replay", "replay"),
+  ], {
+    history: { ...openHistory(),
+      async hasNotificationBeenSent(url) {
+        const count = (reads.get(url) ?? 0) + 1; reads.set(url, count);
+        return url.endsWith("#observed") && count === 2;
+      },
+      async getNotificationRecord(url) { return record(url); },
+    },
+    sendEmail: async (email) => {
+      sends++;
+      assert.doesNotMatch(email.text, /https:\/\/example.com\/lead/);
+      assert.ok(email.text.indexOf("/promoted") < email.text.indexOf("/replay"));
+      return { id: "batch" };
+    },
+  });
+  assert.equal(sends, 1);
+  assert.deepEqual(outcome.sentCandidates.map(c => c.discovery.analysis.sourceUrl), [
+    "https://example.com/promoted", "https://example.com/third", "https://example.com/fourth", "https://example.com/replay",
+  ]);
+  assert.equal(outcome.notifications.get(lead.discovery.analysis.sourceUrl)?.status, "already_sent");
+});
+
+for (const failOnRead of [1, 2]) {
+  test(`batch history uncertainty on pass ${failOnRead} fails closed before sending`, async () => {
+    let reads = 0;
+    let sends = 0;
+    await assert.rejects(orchestrator.notifyBatchDeliveryDigest([batchCandidate(8, "lead")], {
+      history: { ...openHistory(), async hasNotificationBeenSent() {
+        if (++reads === failOnRead) throw new Error("history unavailable");
+        return false;
+      } },
+      sendEmail: async () => { sends++; return { id: "unexpected" }; },
+    }), /history unavailable/);
+    assert.equal(sends, 0);
+  });
+}
+
+test("batch send failure writes no history and never retries", async () => {
+  let sends = 0;
+  let writes = 0;
+  await assert.rejects(orchestrator.notifyBatchDeliveryDigest([batchCandidate(8, "lead")], {
+    history: { ...openHistory(), async recordNotificationSent() { writes++; return record(); } },
+    sendEmail: async () => { sends++; throw new Error("send failed"); },
+  }), /send failed/);
+  assert.equal(sends, 1);
+  assert.equal(writes, 0);
+});
+
+test("batch accepted send tries all history writes despite failure without resending", async () => {
+  let sends = 0;
+  const writes: string[] = [];
+  await assert.rejects(orchestrator.notifyBatchDeliveryDigest([batchCandidate(8, "lead"), batchCandidate(7, "second")], {
+    history: { ...openHistory(), async recordNotificationSent(url, channel, id) {
+      assert.equal(sends, 1); assert.equal(channel, "email"); assert.equal(id, "accepted");
+      writes.push(url);
+      if (url.endsWith("/lead")) throw new Error("write failed");
+      return record(url, id);
+    } },
+    sendEmail: async () => { sends++; return { id: "accepted" }; },
+  }), /Digest email was accepted, but 1 notification record\(s\) could not be persisted: write failed/);
+  assert.equal(sends, 1);
+  assert.deepEqual(writes, ["https://example.com/lead", "https://example.com/second"]);
+});
 
 function deliveryCandidate(
   relevanceScore: number,

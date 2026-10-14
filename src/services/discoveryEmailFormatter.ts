@@ -193,7 +193,7 @@ function digestSubject(stories: StoredDiscovery[]): string {
     : subjectFor(stories[0].analysis.name);
 }
 
-function leadBlockHtml(story: StoredDiscovery): string {
+function leadBlockHtml(story: StoredDiscovery, batch = false): string {
   const href = safeHref(story.analysis.sourceUrl);
   const keyPointItems = story.analysis.projectOpportunities.length
     ? story.analysis.projectOpportunities
@@ -202,11 +202,12 @@ function leadBlockHtml(story: StoredDiscovery): string {
     : `<li style="color: ${SECONDARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 15px; line-height: 22px;">None</li>`;
   return `<tr>
               <td style="padding: 24px 30px 28px; border-bottom: 1px solid #26344d;">
-                ${sectionLabel("Lead story")}
+                ${sectionLabel(batch ? "MOST RELEVANT" : "Lead story")}
                 <h2 style="margin: 0 0 10px; color: ${PRIMARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 22px; font-weight: 700; line-height: 28px;">${escapeHtml(story.analysis.name)}</h2>
                 <p style="margin: 0 0 20px; color: ${SECONDARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 15px; line-height: 22px;">${escapeHtml(story.analysis.summary)}</p>
                 ${sectionLabel("Why it matters")}
                 <p style="margin: 0 0 20px; color: ${PRIMARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 15px; line-height: 22px;">${escapeHtml(story.analysis.whyItMatters)}</p>
+                ${batch ? `${sectionLabel("What you can learn")}<p style="margin: 0 0 20px; color: ${PRIMARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 15px; line-height: 22px;">${escapeHtml(story.analysis.educationalValue)}</p>` : ""}
                 ${sectionLabel("Key points")}
                 <ul style="margin: 0 0 20px; padding: 0 0 0 18px;">${keyPointItems}</ul>
                 ${sectionLabel("Source")}
@@ -238,19 +239,30 @@ export function formatDigestEmail(
   stories: StoredDiscovery[],
   options: DigestEmailOptions = {},
 ): DiscoveryEmailContent {
+  return formatDigest(stories, options);
+}
+
+/** Batch layout uses stored source fields and requires no further analysis. */
+export function formatBatchDigestEmail(stories: StoredDiscovery[]): DiscoveryEmailContent {
+  return formatDigest(stories, {}, true);
+}
+
+function formatDigest(stories: StoredDiscovery[], options: DigestEmailOptions, batch = false): DiscoveryEmailContent {
   if (stories.length === 0) throw new Error("Digest requires at least one story.");
 
   const lead = stories[0];
   const concise = stories.slice(1);
   const isFallback = options.mode === "fallback";
+  const title = batch ? "AI Agent Radar — Daily Digest" : "AI AGENT RADAR — DAILY DIGEST";
 
   const textParts: string[] = [
-    "AI AGENT RADAR — DAILY DIGEST",
+    title,
     ...(isFallback ? ["It could be relevant"] : []),
     [
-      `STORY 1 — LEAD\n${lead.analysis.name}`,
+      `${batch ? "MOST RELEVANT" : "STORY 1 — LEAD"}\n${lead.analysis.name}`,
       `SUMMARY\n${lead.analysis.summary}`,
       `WHY IT MATTERS\n${lead.analysis.whyItMatters}`,
+      ...(batch ? [`WHAT YOU CAN LEARN\n${lead.analysis.educationalValue}`] : []),
       `KEY POINTS\n${textList(lead.analysis.projectOpportunities)}`,
       `SOURCE\n${lead.analysis.sourceTitle}\n${lead.analysis.sourceUrl}${xAttributionText(lead)}`,
     ].join("\n\n"),
@@ -269,12 +281,12 @@ export function formatDigestEmail(
           <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width: 100%; max-width: 640px; border: 1px solid #26344d; border-radius: 16px; background-color: ${CARD_BACKGROUND}; overflow: hidden;">
             <tr>
               <td style="padding: 30px 30px 24px; border-bottom: 1px solid #26344d;">
-                <p style="margin: 0 0 6px; color: ${PRIMARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 18px; font-weight: 700; letter-spacing: 1.6px; line-height: 24px;">AI AGENT RADAR</p>
+                <p style="margin: 0 0 6px; color: ${PRIMARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 18px; font-weight: 700; letter-spacing: 1.6px; line-height: 24px;">${batch ? title : "AI AGENT RADAR"}</p>
                 <p style="margin: 0; color: ${SECONDARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 14px; line-height: 20px;">Daily digest &middot; ${stories.length} ${stories.length === 1 ? "story" : "stories"}</p>
                 ${isFallback ? `<p style="margin: 14px 0 0; color: ${ACCENT}; font-family: Arial, Helvetica, sans-serif; font-size: 15px; font-weight: 700; line-height: 20px;">It could be relevant</p>` : ""}
               </td>
             </tr>
-            ${leadBlockHtml(lead)}
+            ${leadBlockHtml(lead, batch)}
             ${concise.map((story, i) => conciseBlockHtml(story, i + 2)).join("\n            ")}
             <tr>
               <td style="padding: 18px 30px; border-top: 1px solid #26344d; background-color: #0d1422;">
@@ -288,5 +300,5 @@ export function formatDigestEmail(
   </body>
 </html>`;
 
-  return { subject: digestSubject(stories), text: textParts.join("\n\n---\n\n"), html };
+  return { subject: batch ? title : digestSubject(stories), text: textParts.join("\n\n---\n\n"), html };
 }
