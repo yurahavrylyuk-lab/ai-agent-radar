@@ -1,6 +1,7 @@
 import { analyzeSearchResult } from "./analysisAgent.js";
-import type { DiscoveryHistory } from "./discoveryHistoryCore.js";
-import type { AgentAnalysis, DiscoveryProcessingResult, SearchResult, XSourceProvenance } from "../types/index.js";
+import { isValidAgentAnalysis, normalizeDiscoveryUrl, type DiscoveryHistory } from "./discoveryHistoryCore.js";
+import { isBatchNewsUrl } from "./batchCandidates.js";
+import type { AgentAnalysis, BatchSelection, DiscoveryProcessingResult, SearchResult, XSourceProvenance } from "../types/index.js";
 
 type AnalyzeSearchResult = (result: SearchResult) => Promise<AgentAnalysis>;
 
@@ -15,6 +16,34 @@ function verifySourceIntegrity(analysis: AgentAnalysis, result: SearchResult): v
   if (analysis.sourceTitle !== result.title || analysis.sourceUrl !== result.url) {
     throw new Error("Analysis result source integrity verification failed.");
   }
+}
+
+/** Persist a batch interpretation without invoking an analyzer or generator. */
+export async function recordBatchSelection(
+  selection: BatchSelection,
+  dependencies: { history: DiscoveryHistory; seenAt: Date },
+): Promise<DiscoveryProcessingResult> {
+  const { candidate, analysis } = selection;
+  if (!isValidAgentAnalysis(analysis) || analysis.relevanceScore < 7) {
+    throw new Error("Batch discovery analysis is invalid or below the relevance threshold.");
+  }
+  verifySourceIntegrity(analysis, candidate.source);
+  if (!isBatchNewsUrl(analysis.sourceUrl) || normalizeDiscoveryUrl(analysis.sourceUrl) !== candidate.normalizedUrl) {
+    throw new Error("Batch discovery source identity is invalid.");
+  }
+
+  const { history, seenAt } = dependencies;
+  const existing = await history.getDiscovery(candidate.normalizedUrl);
+  if (existing) {
+    const discovery = await history.touchDiscovery(candidate.normalizedUrl, seenAt);
+    if (!discovery) throw new Error("Known discovery could not be updated safely.");
+    return { status: "duplicate", discovery };
+  }
+
+  const discovery = await history.recordDiscovery(analysis, seenAt);
+  // Insert-or-ignore can return a race winner. Its durable content and immutable
+  // timestamp must reach replay admission rather than being relabelled fresh.
+  return { status: discovery.firstSeenAt === seenAt.toISOString() ? "new" : "duplicate", discovery };
 }
 
 export async function processSearchResult(
