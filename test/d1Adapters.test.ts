@@ -8,6 +8,7 @@ import * as discoveryProcessor from "../src/services/discoveryProcessor.js";
 import { D1GeminiUsageStore } from "../src/services/d1GeminiUsageStore.js";
 import { D1NotificationHistory } from "../src/services/d1NotificationHistory.js";
 import { D1XStore } from "../src/services/d1XStore.js";
+import * as geminiAmbiguityRecovery from "../src/services/geminiAmbiguityRecovery.js";
 import { reconcileStrandedGeminiReservation } from "../src/services/geminiAmbiguityRecovery.js";
 import { checkBraveSearchUsage } from "../src/services/usageGuard.js";
 import { checkGeminiUsage, getGeminiUsageCounts } from "../src/services/geminiUsageGuard.js";
@@ -553,6 +554,31 @@ test("migration 0006 applies after the complete fresh migration sequence", async
     assert.match(index.sql, /ambiguity_reason <> 'timeout'/);
     assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'x_inbox'").get());
   } finally { database.close(); }
+});
+
+test("generic ambiguity-to-confirmed-zero recovery remains unavailable", async (t) => {
+  await withDatabase(async (_database, d1) => {
+    const store = new D1GeminiUsageStore(d1);
+    assert.equal("recoverPreDispatchAbandonedReservation" in store, false);
+    assert.equal("recoverProvenPreDispatchAbandonedReservation" in geminiAmbiguityRecovery, false);
+  });
+  for (const reason of ["abandoned_reservation", "timeout", "network_error", "response_usage_unavailable", "settlement_uncertain"] as const) {
+    await t.test(reason, async () => {
+      const database = new Database(":memory:");
+      try {
+        for (const migration of ["0001_initial.sql", "0003_gemini_usage_model.sql", "0005_gemini_ambiguity_accounting.sql", "0006_gemini_timeout_admission.sql"]) {
+          database.exec(await readFile(new URL(`../migrations/${migration}`, import.meta.url), "utf8"));
+        }
+        database.prepare(
+          "INSERT INTO gemini_usage (timestamp, provider, operation, request_count, input_tokens, output_tokens, total_tokens, model, accounting_status, ambiguity_reason, accounting_through) " +
+          "VALUES (?, 'gemini', 'analysis', 1, 0, 0, 0, 'gemini-3.8-flash', 'transport_ambiguous', ?, ?)",
+        ).run("2026-10-12T08:00:10.882Z", reason, "2026-10-12T08:00:10.947Z");
+        assert.throws(() => database.prepare(
+          "UPDATE gemini_usage SET accounting_status = 'confirmed_zero', ambiguity_reason = NULL, settled_at = accounting_through WHERE id = 1",
+        ).run(), /invalid Gemini accounting transition/);
+      } finally { database.close(); }
+    });
+  }
 });
 
 test("D1 atomic admission admits only one concurrent owner and stale ownership cannot settle it", async () => {

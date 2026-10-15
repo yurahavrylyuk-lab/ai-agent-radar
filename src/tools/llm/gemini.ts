@@ -168,6 +168,16 @@ async function preserveAmbiguity(
   catch { throw new Error("Gemini request outcome is ambiguous, and its durable ambiguity state could not be verified safely."); }
 }
 
+async function rejectBeforeDispatch(
+  tracker: GeminiUsageStore,
+  reservation: GeminiUsageReservation,
+  message: string,
+): Promise<never> {
+  try { await tracker.confirmZeroRequest(reservation); }
+  catch { throw new Error("Gemini request was not dispatched, but confirmed-zero accounting could not be recorded safely."); }
+  throw new Error(message);
+}
+
 export async function generateWithGemini(input: string, dependencies: GeminiDependencies = {}): Promise<LlmResult> {
   return generateWithGeminiPolicy(input, dependencies);
 }
@@ -226,15 +236,16 @@ async function generateWithGeminiPolicy(
       context.requestsByModel[model] += 1;
 
       if (!areGeminiTimestampsInSameUtcWindows(reservation.record.timestamp, now())) {
-        await preserveAmbiguity(tracker, reservation, "abandoned_reservation");
-        throw new Error("Gemini request was not dispatched because its accounting window changed after reservation.");
+        await rejectBeforeDispatch(tracker, reservation,
+          "Gemini request was not dispatched because its accounting window changed after reservation.");
       }
 
-      await dependencies.beforeDispatch?.(reservation);
+      try { await dependencies.beforeDispatch?.(reservation); }
+      catch { await rejectBeforeDispatch(tracker, reservation, "Gemini request failed before provider dispatch."); }
 
       if (batchContext && !areGeminiTimestampsInSameUtcWindows(reservation.record.timestamp, now())) {
-        await preserveAmbiguity(tracker, reservation, "abandoned_reservation");
-        throw new Error("Gemini request was not dispatched because its accounting window changed after reservation.");
+        await rejectBeforeDispatch(tracker, reservation,
+          "Gemini request was not dispatched because its accounting window changed after reservation.");
       }
 
       const controller = new AbortController();

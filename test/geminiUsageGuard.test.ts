@@ -145,7 +145,7 @@ test("batch admission denial and reservation failure consume the invocation with
   });
 });
 
-test("RF4 batch final-handoff window crossing preserves reservation with no dispatch or second reserve", async () => {
+test("RF4 batch final-handoff window crossing confirms zero with no dispatch or second reserve", async () => {
   let clock = new Date("2026-10-31T23:59:59.999Z");
   const tracker = new MemoryTracker({ records: [], usageUnknown: false }, false, () => clock);
   const context = geminiBatch.createGeminiBatchCycleContext();
@@ -159,9 +159,31 @@ test("RF4 batch final-handoff window crossing preserves reservation with no disp
   assert.equal(context.providerAttempts, 1, "legacy counter remains reservation-based");
   assert.equal(fetchCalls, 0);
   assert.equal(tracker.recordCalls, 1);
-  assert.equal(tracker.settlementCalls, 0);
-  assert.equal(tracker.data.records[0]?.accountingStatus, "transport_ambiguous");
-  assert.equal(tracker.data.records[0]?.ambiguityReason, "abandoned_reservation");
+  assert.equal(tracker.settlementCalls, 1);
+  assert.equal(tracker.data.records[0]?.accountingStatus, "confirmed_zero");
+  assert.equal(tracker.data.records[0]?.ambiguityReason, undefined);
+});
+
+test("batch pre-fetch hook rejection records confirmed zero without dispatch", async () => {
+  const tracker = new MemoryTracker({ records: [], usageUnknown: false });
+  const context = geminiBatch.createGeminiBatchCycleContext();
+  let fetchCalls = 0;
+  await assert.rejects(geminiBatch.generateBatchWithGemini("batch", {
+    usageTracker: tracker,
+    environment: env,
+    cycleContext: context,
+    beforeDispatch: () => { throw new Error("pre-fetch rejection"); },
+    fetchImplementation: (async () => { fetchCalls++; return jsonResponse(successfulBody); }) as typeof fetch,
+  }), /before provider dispatch/);
+  assert.equal(fetchCalls, 0);
+  assert.equal(context.providerDispatches, 0);
+  assert.equal(tracker.data.records[0]?.accountingStatus, "confirmed_zero");
+  assert.deepEqual([
+    tracker.data.records[0]?.requestCount,
+    tracker.data.records[0]?.inputTokens,
+    tracker.data.records[0]?.outputTokens,
+    tracker.data.records[0]?.totalTokens,
+  ], [1, 0, 0, 0]);
 });
 
 test("concurrent batch calls consume one shared invocation before asynchronous admission", async () => {
@@ -443,7 +465,7 @@ test("authentication, permission, invalid request, and policy failures never fal
   }
 });
 
-test("a reservation that crosses an accounting boundary is abandoned before provider dispatch", async () => {
+test("a reservation that crosses an accounting boundary is confirmed zero before provider dispatch", async () => {
   const tracker = new MemoryTracker({ records: [], usageUnknown: false });
   const instants = [
     new Date("2026-10-31T23:59:59.999Z"),
@@ -460,8 +482,8 @@ test("a reservation that crosses an accounting boundary is abandoned before prov
     }) as typeof fetch,
   }), /accounting window changed/);
   assert.equal(fetchCalls, 0);
-  assert.equal(tracker.data.records[0]?.accountingStatus, "transport_ambiguous");
-  assert.equal(tracker.data.records[0]?.ambiguityReason, "abandoned_reservation");
+  assert.equal(tracker.data.records[0]?.accountingStatus, "confirmed_zero");
+  assert.equal(tracker.data.records[0]?.ambiguityReason, undefined);
 });
 
 test("durable accounting intervals cover day, week, and month crossings at the final dispatch handoff", async (t) => {
