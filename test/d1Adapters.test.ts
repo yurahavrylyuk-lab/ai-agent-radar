@@ -581,6 +581,68 @@ test("generic ambiguity-to-confirmed-zero recovery remains unavailable", async (
   }
 });
 
+test("migration 0007 recovers only exact historical Gemini row 22 and restores generic protection", async () => {
+  const database = new Database(":memory:");
+  try {
+    for (const migration of ["0001_initial.sql", "0003_gemini_usage_model.sql", "0005_gemini_ambiguity_accounting.sql", "0006_gemini_timeout_admission.sql"]) {
+      database.exec(await readFile(new URL(`../migrations/${migration}`, import.meta.url), "utf8"));
+    }
+    database.prepare(
+      "INSERT INTO gemini_usage (id, timestamp, provider, operation, request_count, input_tokens, output_tokens, total_tokens, model, accounting_status, ambiguity_reason, settled_at, retired_at, accounting_through) " +
+      "VALUES (22, ?, 'gemini', 'analysis', 1, 0, 0, 0, 'gemini-3.8-flash', 'transport_ambiguous', 'abandoned_reservation', NULL, NULL, ?)",
+    ).run("2026-10-12T08:00:10.882Z", "2026-10-12T08:00:10.947Z");
+    const identityBefore = database.prepare(
+      "SELECT id, timestamp, provider, operation, model, request_count, input_tokens, output_tokens, total_tokens, accounting_through FROM gemini_usage WHERE id = 22",
+    ).get();
+    const migration = await readFile(new URL("../migrations/0007_row22_exact_recovery.sql", import.meta.url), "utf8");
+    database.exec(migration);
+    assert.deepEqual(database.prepare(
+      "SELECT id, timestamp, provider, operation, model, request_count, input_tokens, output_tokens, total_tokens, accounting_through FROM gemini_usage WHERE id = 22",
+    ).get(), identityBefore);
+    assert.deepEqual(database.prepare(
+      "SELECT accounting_status, ambiguity_reason, settled_at, retired_at FROM gemini_usage WHERE id = 22",
+    ).get(), {
+      accounting_status: "confirmed_zero", ambiguity_reason: null,
+      settled_at: "2026-10-12T08:00:10.947Z", retired_at: null,
+    });
+    database.exec(migration);
+    assert.equal((database.prepare("SELECT accounting_status FROM gemini_usage WHERE id = 22").get() as { accounting_status: string }).accounting_status, "confirmed_zero");
+
+    const insert = database.prepare(
+      "INSERT INTO gemini_usage (id, timestamp, provider, operation, request_count, input_tokens, output_tokens, total_tokens, model, accounting_status, ambiguity_reason, accounting_through) " +
+      "VALUES (?, ?, 'gemini', 'analysis', 1, 0, 0, 0, 'gemini-3.8-flash', 'transport_ambiguous', ?, ?)",
+    );
+    for (const [id, reason] of [[23, "abandoned_reservation"], [24, "timeout"], [25, "network_error"], [26, "response_usage_unavailable"], [27, "settlement_uncertain"]] as const) {
+      insert.run(id, `2026-10-${id}T08:00:00.000Z`, reason, `2026-10-${id}T08:00:01.000Z`);
+      assert.throws(() => database.prepare(
+        "UPDATE gemini_usage SET accounting_status = 'confirmed_zero', ambiguity_reason = NULL, settled_at = accounting_through WHERE id = ?",
+      ).run(id), /invalid Gemini accounting transition/);
+      database.prepare("DELETE FROM gemini_usage WHERE id = ?").run(id);
+    }
+  } finally { database.close(); }
+});
+
+test("migration 0007 fails closed when row 22 identity does not match", async () => {
+  const database = new Database(":memory:");
+  try {
+    for (const migration of ["0001_initial.sql", "0003_gemini_usage_model.sql", "0005_gemini_ambiguity_accounting.sql", "0006_gemini_timeout_admission.sql"]) {
+      database.exec(await readFile(new URL(`../migrations/${migration}`, import.meta.url), "utf8"));
+    }
+    database.prepare(
+      "INSERT INTO gemini_usage (id, timestamp, provider, operation, request_count, input_tokens, output_tokens, total_tokens, model, accounting_status, ambiguity_reason, accounting_through) " +
+      "VALUES (22, ?, 'gemini', 'analysis', 1, 0, 0, 0, 'gemini-3.6-flash', 'transport_ambiguous', 'abandoned_reservation', ?)",
+    ).run("2026-10-12T08:00:10.882Z", "2026-10-12T08:00:10.947Z");
+    const migration = await readFile(new URL("../migrations/0007_row22_exact_recovery.sql", import.meta.url), "utf8");
+    assert.throws(() => database.exec(migration), /row 22 recovery precondition failed/);
+    assert.deepEqual(database.prepare(
+      "SELECT model, accounting_status, ambiguity_reason, settled_at FROM gemini_usage WHERE id = 22",
+    ).get(), {
+      model: "gemini-3.6-flash", accounting_status: "transport_ambiguous",
+      ambiguity_reason: "abandoned_reservation", settled_at: null,
+    });
+  } finally { database.close(); }
+});
+
 test("D1 atomic admission admits only one concurrent owner and stale ownership cannot settle it", async () => {
   await withDatabase(async (_database, d1) => {
     const store = new D1GeminiUsageStore(d1);
