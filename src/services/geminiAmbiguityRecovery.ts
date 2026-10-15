@@ -4,6 +4,8 @@ import {
   geminiAccountingStatusOf,
   type GeminiAmbiguityReason,
   type GeminiAmbiguityRetirementResult,
+  type GeminiPreDispatchRecoveryExpectation,
+  type GeminiPreDispatchRecoveryResult,
   type GeminiReservedReconciliationResult,
   type GeminiUsageData,
   type GeminiUsageRecord,
@@ -42,6 +44,11 @@ export interface LegacyRow17RecoveryEvidence {
   databaseId: string;
   originalInvocationTerminated: boolean;
   now: Date;
+}
+
+export interface GeminiPreDispatchRecoveryEvidence {
+  originalInvocationTerminated: boolean;
+  providerDispatchDidNotStart: boolean;
 }
 
 function exactStructuredRecord(records: GeminiUsageRecord[], expectation: StructuredAmbiguityExpectation): GeminiUsageRecord {
@@ -107,6 +114,37 @@ export async function reconcileStrandedGeminiReservation(
     throw new Error("Gemini reserved reconciliation time precedes the reservation.");
   }
   return store.reconcileAbandonedReservation(expectation);
+}
+
+/** Operator-only recovery for independently proven pre-dispatch ambiguity. */
+export async function recoverProvenPreDispatchAbandonedReservation(
+  store: GeminiUsageStore,
+  expectation: GeminiPreDispatchRecoveryExpectation,
+  evidence: GeminiPreDispatchRecoveryEvidence,
+): Promise<GeminiPreDispatchRecoveryResult> {
+  if (!evidence.originalInvocationTerminated) {
+    throw new Error("Gemini pre-dispatch recovery requires proof that the original invocation terminated.");
+  }
+  if (!evidence.providerDispatchDidNotStart) {
+    throw new Error("Gemini pre-dispatch recovery requires proof that provider dispatch did not start.");
+  }
+  const data = await store.getUsageData();
+  if (data.usageUnknown) throw new Error("Gemini legacy usage uncertainty blocks pre-dispatch recovery.");
+  const matches = data.records.filter((record) => record.id === expectation.id);
+  if (matches.length !== 1) throw new Error("Gemini pre-dispatch recovery identity does not match exactly one record.");
+  const record = matches[0]!;
+  const exactIdentity = record.timestamp === expectation.timestamp && record.provider === expectation.provider &&
+    record.operation === expectation.operation && record.requestCount === expectation.requestCount &&
+    record.model === expectation.model && record.accountingThrough === expectation.accountingThrough &&
+    record.inputTokens === 0 && record.outputTokens === 0 && record.totalTokens === 0;
+  const recoverable = record.accountingStatus === "transport_ambiguous" &&
+    record.ambiguityReason === "abandoned_reservation" && record.settledAt == null && record.retiredAt == null;
+  const alreadyRecovered = record.accountingStatus === "confirmed_zero" && (record.ambiguityReason ?? null) === null &&
+    record.settledAt === expectation.accountingThrough && record.retiredAt == null;
+  if (!exactIdentity || (!recoverable && !alreadyRecovered)) {
+    throw new Error("Gemini pre-dispatch recovery identity does not match durable accounting.");
+  }
+  return store.recoverPreDispatchAbandonedReservation(expectation);
 }
 
 /** Pure validation used by the separately authorized legacy incident runbook. */

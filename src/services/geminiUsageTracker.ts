@@ -60,8 +60,18 @@ export interface GeminiReservedReconciliationExpectation {
   model: ApprovedGeminiModel;
   operation: string;
 }
+export interface GeminiPreDispatchRecoveryExpectation {
+  id: number;
+  timestamp: string;
+  provider: "gemini";
+  operation: string;
+  requestCount: 1;
+  model: ApprovedGeminiModel;
+  accountingThrough: string;
+}
 export type GeminiReservedReconciliationResult = "reconciled" | "already_reconciled";
 export type GeminiAmbiguityRetirementResult = "retired" | "already_retired";
+export type GeminiPreDispatchRecoveryResult = "recovered" | "already_recovered";
 /** Persistence boundary for Gemini request and token-usage state. */
 export interface GeminiUsageStore {
   getUsageData(): Promise<GeminiUsageData>;
@@ -72,6 +82,7 @@ export interface GeminiUsageStore {
   confirmZeroRequest(reservation: GeminiUsageReservation): Promise<void>;
   markRequestAmbiguous(reservation: GeminiUsageReservation, reason: GeminiAmbiguityReason): Promise<void>;
   reconcileAbandonedReservation(expectation: GeminiReservedReconciliationExpectation): Promise<GeminiReservedReconciliationResult>;
+  recoverPreDispatchAbandonedReservation(expectation: GeminiPreDispatchRecoveryExpectation): Promise<GeminiPreDispatchRecoveryResult>;
   retireAmbiguousRequest(expectation: GeminiAmbiguityRetirementExpectation): Promise<GeminiAmbiguityRetirementResult>;
 }
 

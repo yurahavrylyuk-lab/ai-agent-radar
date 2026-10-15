@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { LocalJsonBraveUsageStore } from "../src/services/localJsonBraveUsageStore.js";
 import { LocalJsonGeminiUsageStore } from "../src/services/localJsonGeminiUsageStore.js";
-import { reconcileStrandedGeminiReservation, retireStructuredGeminiAmbiguity } from "../src/services/geminiAmbiguityRecovery.js";
+import { reconcileStrandedGeminiReservation, recoverProvenPreDispatchAbandonedReservation, retireStructuredGeminiAmbiguity } from "../src/services/geminiAmbiguityRecovery.js";
 import { inspectGeminiAvailability } from "../src/services/geminiUsageGuard.js";
 
 const geminiAdmission = {
@@ -189,6 +189,51 @@ test("stranded local reservation is operator-reconciled without dispatch and ret
     clock = new Date("2026-11-01T00:00:00.000Z");
     assert.equal(await retireStructuredGeminiAmbiguity(restarted, retirement, clock, true), "retired");
     assert.equal((await restarted.getUsageData()).records[0]?.accountingStatus, "retired_outside_accounting_windows");
+  });
+});
+
+test("local proven pre-dispatch ambiguity recovers exactly once to confirmed zero", async () => {
+  await withTemporaryFile("gemini-pre-dispatch-recovery.json", async (filePath) => {
+    let clock = new Date("2026-10-12T08:00:10.882Z");
+    const store = new LocalJsonGeminiUsageStore(filePath, () => clock);
+    const reservation = await store.reserveRequest({
+      timestamp: clock.toISOString(), provider: "gemini", operation: "analysis", requestCount: 1,
+      inputTokens: 0, outputTokens: 0, totalTokens: 0, model: "gemini-3.8-flash",
+    }, geminiAdmission);
+    clock = new Date("2026-10-12T08:00:10.947Z");
+    await store.markRequestAmbiguous(reservation, "abandoned_reservation");
+    const ambiguous = (await store.getUsageData()).records[0]!;
+    const expectation = {
+      id: ambiguous.id!, timestamp: ambiguous.timestamp, provider: "gemini" as const,
+      operation: ambiguous.operation, requestCount: 1 as const, model: "gemini-3.8-flash" as const,
+      accountingThrough: ambiguous.accountingThrough!,
+    };
+    await assert.rejects(recoverProvenPreDispatchAbandonedReservation(store, expectation, {
+      originalInvocationTerminated: true, providerDispatchDidNotStart: false,
+    }), /proof.*dispatch/i);
+    assert.equal(await recoverProvenPreDispatchAbandonedReservation(store, expectation, {
+      originalInvocationTerminated: true, providerDispatchDidNotStart: true,
+    }), "recovered");
+    assert.equal(await recoverProvenPreDispatchAbandonedReservation(store, expectation, {
+      originalInvocationTerminated: true, providerDispatchDidNotStart: true,
+    }), "already_recovered");
+    const recovered = (await store.getUsageData()).records[0]!;
+    assert.deepEqual({
+      id: recovered.id, timestamp: recovered.timestamp, provider: recovered.provider,
+      operation: recovered.operation, model: recovered.model, requestCount: recovered.requestCount,
+      inputTokens: recovered.inputTokens, outputTokens: recovered.outputTokens, totalTokens: recovered.totalTokens,
+      accountingStatus: recovered.accountingStatus, ambiguityReason: recovered.ambiguityReason,
+      accountingThrough: recovered.accountingThrough, settledAt: recovered.settledAt,
+    }, {
+      id: expectation.id, timestamp: expectation.timestamp, provider: "gemini",
+      operation: expectation.operation, model: expectation.model, requestCount: 1,
+      inputTokens: 0, outputTokens: 0, totalTokens: 0,
+      accountingStatus: "confirmed_zero", ambiguityReason: null,
+      accountingThrough: expectation.accountingThrough, settledAt: expectation.accountingThrough,
+    });
+    await assert.rejects(recoverProvenPreDispatchAbandonedReservation(store, { ...expectation, operation: "other" }, {
+      originalInvocationTerminated: true, providerDispatchDidNotStart: true,
+    }), /identity/);
   });
 });
 

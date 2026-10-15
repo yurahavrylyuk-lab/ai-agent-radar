@@ -15,6 +15,7 @@ import { runBatchMonitoringCycle } from "../src/services/monitor.js";
 import worker, { createWorkerMonitoringDependencies, type RadarWorkerEnv } from "../src/worker.js";
 import type { AgentAnalysis, BatchSelection, XSourceProvenance } from "../src/types/index.js";
 import type { XInboxRecord } from "../src/services/xStore.js";
+import type { GeminiPreDispatchRecoveryExpectation } from "../src/services/geminiUsageTracker.js";
 
 class SqliteD1Statement {
   constructor(
@@ -108,6 +109,7 @@ async function withDatabase(callback: (database: Database.Database, d1: D1Databa
     database.exec(await readFile(new URL("../migrations/0003_gemini_usage_model.sql", import.meta.url), "utf8"));
     database.exec(await readFile(new URL("../migrations/0005_gemini_ambiguity_accounting.sql", import.meta.url), "utf8"));
     database.exec(await readFile(new URL("../migrations/0006_gemini_timeout_admission.sql", import.meta.url), "utf8"));
+    database.exec(await readFile(new URL("../migrations/0007_gemini_predispatch_recovery.sql", import.meta.url), "utf8"));
     await callback(database, new SqliteD1Database(database) as unknown as D1Database);
   } finally {
     database.close();
@@ -530,7 +532,7 @@ test("migration 0005 preserves legacy rows and enforces one unresolved structure
 test("migration 0006 permits historical timeouts but preserves one protected unresolved owner", async () => {
   const database = new Database(":memory:");
   try {
-    for (const migration of ["0001_initial.sql", "0002_controlled_execution_lock.sql", "0003_gemini_usage_model.sql", "0005_gemini_ambiguity_accounting.sql", "0006_gemini_timeout_admission.sql"]) {
+    for (const migration of ["0001_initial.sql", "0002_controlled_execution_lock.sql", "0003_gemini_usage_model.sql", "0005_gemini_ambiguity_accounting.sql", "0006_gemini_timeout_admission.sql", "0007_gemini_predispatch_recovery.sql"]) {
       database.exec(await readFile(new URL(`../migrations/${migration}`, import.meta.url), "utf8"));
     }
     const insert = database.prepare("INSERT INTO gemini_usage (timestamp, provider, operation, request_count, input_tokens, output_tokens, total_tokens, model, accounting_status, ambiguity_reason, accounting_through) VALUES (?, 'gemini', 'analysis', 1, 0, 0, 0, ?, 'transport_ambiguous', ?, ?)");
@@ -546,7 +548,7 @@ test("migration 0006 permits historical timeouts but preserves one protected unr
 test("migration 0006 applies after the complete fresh migration sequence", async () => {
   const database = new Database(":memory:");
   try {
-    for (const migration of ["0001_initial.sql", "0002_controlled_execution_lock.sql", "0003_gemini_usage_model.sql", "0004_x_discovery.sql", "0005_gemini_ambiguity_accounting.sql", "0006_gemini_timeout_admission.sql"]) {
+    for (const migration of ["0001_initial.sql", "0002_controlled_execution_lock.sql", "0003_gemini_usage_model.sql", "0004_x_discovery.sql", "0005_gemini_ambiguity_accounting.sql", "0006_gemini_timeout_admission.sql", "0007_gemini_predispatch_recovery.sql"]) {
       database.exec(await readFile(new URL(`../migrations/${migration}`, import.meta.url), "utf8"));
     }
     const index = database.prepare("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'gemini_usage_one_unresolved_request'").get() as { sql: string };
@@ -674,6 +676,64 @@ test("D1 stranded reservation reconciliation uses exact CAS and authoritative re
     assert.ok(record.accountingThrough && record.accountingThrough >= record.timestamp);
     assert.equal(await reconcileStrandedGeminiReservation(restarted, expectation, new Date(), true), "already_reconciled");
   });
+});
+
+test("D1 proven pre-dispatch ambiguity recovers with exact CAS and idempotent reread", async () => {
+  await withDatabase(async (_database, d1) => {
+    const store = new D1GeminiUsageStore(d1);
+    const reservation = await store.reserveRequest({
+      timestamp: new Date().toISOString(), provider: "gemini", operation: "analysis", requestCount: 1,
+      inputTokens: 0, outputTokens: 0, totalTokens: 0, model: "gemini-3.8-flash",
+    }, { cycleRequestsRemaining: 5, limits: {
+      dailyRequests: 5, weeklyRequests: 20, monthlyRequests: 50,
+      dailyTokens: 10_000, weeklyTokens: 30_000, monthlyTokens: 100_000,
+    } });
+    await assert.rejects(store.recoverPreDispatchAbandonedReservation({
+      id: reservation.record.id!, timestamp: reservation.record.timestamp, provider: "gemini",
+      operation: reservation.record.operation, requestCount: 1, model: "gemini-3.8-flash",
+      accountingThrough: reservation.record.accountingThrough!,
+    }), /pre-dispatch recovery preconditions/);
+    await store.markRequestAmbiguous(reservation, "abandoned_reservation");
+    const ambiguous = (await store.getUsageData()).records[0]!;
+    const expectation: GeminiPreDispatchRecoveryExpectation = {
+      id: ambiguous.id!, timestamp: ambiguous.timestamp, provider: "gemini",
+      operation: ambiguous.operation, requestCount: 1, model: "gemini-3.8-flash",
+      accountingThrough: ambiguous.accountingThrough!,
+    };
+    assert.equal(await store.recoverPreDispatchAbandonedReservation(expectation), "recovered");
+    assert.equal(await store.recoverPreDispatchAbandonedReservation(expectation), "already_recovered");
+    const recovered = (await store.getUsageData()).records[0]!;
+    assert.deepEqual([
+      recovered.id, recovered.timestamp, recovered.provider, recovered.operation, recovered.model, recovered.requestCount,
+      recovered.inputTokens, recovered.outputTokens, recovered.totalTokens,
+      recovered.accountingStatus, recovered.ambiguityReason, recovered.accountingThrough, recovered.settledAt,
+    ], [
+      expectation.id, expectation.timestamp, "gemini", expectation.operation, expectation.model, 1,
+      0, 0, 0, "confirmed_zero", null, expectation.accountingThrough, expectation.accountingThrough,
+    ]);
+    await assert.rejects(store.recoverPreDispatchAbandonedReservation(
+      { ...expectation, timestamp: "2026-10-12T08:00:00.000Z" }), /pre-dispatch recovery preconditions/);
+  });
+});
+
+test("D1 pre-dispatch recovery rejects every non-abandoned ambiguity reason", async (t) => {
+  for (const reason of ["timeout", "network_error", "response_usage_unavailable", "settlement_uncertain"] as const) {
+    await t.test(reason, async () => withDatabase(async (database, d1) => {
+      const timestamp = "2026-10-12T08:00:10.882Z";
+      const accountingThrough = "2026-10-12T08:00:10.947Z";
+      const inserted = database.prepare(
+        "INSERT INTO gemini_usage (timestamp, provider, operation, request_count, input_tokens, output_tokens, total_tokens, model, accounting_status, ambiguity_reason, accounting_through) " +
+        "VALUES (?, 'gemini', 'analysis', 1, 0, 0, 0, 'gemini-3.8-flash', 'transport_ambiguous', ?, ?) RETURNING id",
+      ).get(timestamp, reason, accountingThrough) as { id: number };
+      const store = new D1GeminiUsageStore(d1);
+      const expectation: GeminiPreDispatchRecoveryExpectation = {
+        id: inserted.id, timestamp, provider: "gemini", operation: "analysis", requestCount: 1,
+        model: "gemini-3.8-flash", accountingThrough,
+      };
+      await assert.rejects(store.recoverPreDispatchAbandonedReservation(expectation), /pre-dispatch recovery preconditions/);
+      assert.equal((await store.getUsageData()).records[0]?.ambiguityReason, reason);
+    }));
+  }
 });
 
 test("D1 operator retirement and admission serialize without overlapping unresolved ownership", async () => {
