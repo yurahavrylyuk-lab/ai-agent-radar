@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { APPROVED_GEMINI_MODELS, type ApprovedGeminiModel } from "../src/config/geminiModels.js";
 import { checkGeminiUsage, getGeminiUsageCounts, inspectGeminiAvailability, reachedGeminiLimit, type GeminiBlockedReason, type GeminiUsageLimits } from "../src/services/geminiUsageGuard.js";
-import type { GeminiAmbiguityReason, GeminiAmbiguityRetirementExpectation, GeminiPreDispatchRecoveryExpectation, GeminiReservedReconciliationExpectation, GeminiUsageAdmission, GeminiUsageData, GeminiUsageRecord, GeminiUsageReservation, GeminiUsageSettlement, GeminiUsageTracker } from "../src/services/geminiUsageTracker.js";
+import type { GeminiAmbiguityReason, GeminiAmbiguityRetirementExpectation, GeminiReservedReconciliationExpectation, GeminiUsageAdmission, GeminiUsageData, GeminiUsageRecord, GeminiUsageReservation, GeminiUsageSettlement, GeminiUsageTracker } from "../src/services/geminiUsageTracker.js";
 import { createGeminiCycleContext, GEMINI_TIMEOUT_MS, generateWithGemini, MAX_GEMINI_ATTEMPTS_PER_ANALYSIS } from "../src/tools/llm/gemini.js";
 import * as geminiBatch from "../src/tools/llm/gemini.js";
 import { analyzeBatch, BatchAnalysisError } from "../src/services/analysisAgent.js";
@@ -61,16 +61,6 @@ class MemoryTracker implements GeminiUsageTracker {
     this.data.records[index] = { ...record, accountingStatus: "transport_ambiguous", ambiguityReason: "abandoned_reservation",
       accountingThrough: this.accountingNow().toISOString() };
     return "reconciled" as const;
-  }
-  async recoverPreDispatchAbandonedReservation(expectation: GeminiPreDispatchRecoveryExpectation) {
-    const index = this.data.records.findIndex((record) => record.id === expectation.id);
-    const record = this.data.records[index];
-    if (!record || record.accountingStatus !== "transport_ambiguous" || record.ambiguityReason !== "abandoned_reservation") {
-      throw new Error("not recoverable");
-    }
-    this.data.records[index] = { ...record, accountingStatus: "confirmed_zero", ambiguityReason: null,
-      settledAt: record.accountingThrough };
-    return "recovered" as const;
   }
   async retireAmbiguousRequest(expectation: GeminiAmbiguityRetirementExpectation) {
     const index = this.data.records.findIndex((record) => record.id === expectation.id);

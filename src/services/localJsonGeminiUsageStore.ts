@@ -8,8 +8,6 @@ import {
   type GeminiAmbiguityReason,
   type GeminiAmbiguityRetirementExpectation,
   type GeminiAmbiguityRetirementResult,
-  type GeminiPreDispatchRecoveryExpectation,
-  type GeminiPreDispatchRecoveryResult,
   type GeminiReservedReconciliationExpectation,
   type GeminiReservedReconciliationResult,
   type GeminiUsageAdmission,
@@ -176,38 +174,6 @@ export class LocalJsonGeminiUsageStore implements GeminiUsageStore {
     return result;
   }
 
-  async recoverPreDispatchAbandonedReservation(
-    expectation: GeminiPreDispatchRecoveryExpectation,
-  ): Promise<GeminiPreDispatchRecoveryResult> {
-    let result: GeminiPreDispatchRecoveryResult | undefined;
-    await this.withExclusiveMutation(async () => {
-      const data = await this.getUsageData();
-      if (data.usageUnknown) throw new Error("Gemini legacy usage state blocks pre-dispatch recovery.");
-      const index = data.records.findIndex((record) => record.id === expectation.id);
-      const record = data.records[index];
-      if (record?.accountingStatus === "confirmed_zero" && this.matchesPreDispatchRecovery(record, expectation) &&
-        (record.ambiguityReason ?? null) === null && record.inputTokens === 0 && record.outputTokens === 0 &&
-        record.totalTokens === 0 && record.settledAt === expectation.accountingThrough && (record.retiredAt ?? null) === null) {
-        result = "already_recovered";
-        return;
-      }
-      const unresolved = data.records.filter(isProtectedGeminiUnresolvedRecord);
-      if (!record || unresolved.length !== 1 || unresolved[0]?.id !== expectation.id ||
-        record.accountingStatus !== "transport_ambiguous" || record.ambiguityReason !== "abandoned_reservation" ||
-        !this.matchesPreDispatchRecovery(record, expectation) || record.inputTokens !== 0 ||
-        record.outputTokens !== 0 || record.totalTokens !== 0 || record.settledAt != null || record.retiredAt != null) {
-        throw new Error("Gemini pre-dispatch recovery preconditions were not satisfied.");
-      }
-      const recovered = { ...record, accountingStatus: "confirmed_zero" as const, ambiguityReason: null,
-        settledAt: record.accountingThrough };
-      if (!isGeminiUsageRecord(recovered)) throw new Error("Gemini pre-dispatch recovery produced invalid state.");
-      await this.write({ ...data, records: data.records.map((item, itemIndex) => itemIndex === index ? recovered : item) });
-      result = "recovered";
-    });
-    if (!result) throw new Error("Gemini pre-dispatch recovery outcome is uncertain; authoritative reread is required.");
-    return result;
-  }
-
   async retireAmbiguousRequest(expectation: GeminiAmbiguityRetirementExpectation): Promise<GeminiAmbiguityRetirementResult> {
     let result: GeminiAmbiguityRetirementResult | undefined;
     await this.withExclusiveMutation(async () => {
@@ -259,13 +225,6 @@ export class LocalJsonGeminiUsageStore implements GeminiUsageStore {
   private matchesReconciliation(record: GeminiUsageRecord, expectation: GeminiReservedReconciliationExpectation): boolean {
     return record.id === expectation.id && record.timestamp === expectation.timestamp && record.provider === "gemini" &&
       record.operation === expectation.operation && record.requestCount === 1 && record.model === expectation.model;
-  }
-
-  private matchesPreDispatchRecovery(record: GeminiUsageRecord, expectation: GeminiPreDispatchRecoveryExpectation): boolean {
-    return record.id === expectation.id && record.timestamp === expectation.timestamp &&
-      record.provider === expectation.provider && record.operation === expectation.operation &&
-      record.requestCount === expectation.requestCount && record.model === expectation.model &&
-      record.accountingThrough === expectation.accountingThrough;
   }
 
   private async withExclusiveMutation<T>(callback: () => Promise<T>): Promise<T> {

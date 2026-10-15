@@ -4,8 +4,6 @@ import {
   type GeminiAmbiguityReason,
   type GeminiAmbiguityRetirementExpectation,
   type GeminiAmbiguityRetirementResult,
-  type GeminiPreDispatchRecoveryExpectation,
-  type GeminiPreDispatchRecoveryResult,
   type GeminiReservedReconciliationExpectation,
   type GeminiReservedReconciliationResult,
   type GeminiUsageAdmission,
@@ -261,35 +259,6 @@ export class D1GeminiUsageStore implements GeminiUsageStore {
       if (!data.usageUnknown && unresolved.length === 1 && unresolved[0]?.id === expectation.id) return "already_reconciled";
     }
     throw new Error("Gemini reserved reconciliation preconditions were not satisfied.");
-  }
-
-  async recoverPreDispatchAbandonedReservation(
-    expectation: GeminiPreDispatchRecoveryExpectation,
-  ): Promise<GeminiPreDispatchRecoveryResult> {
-    const row = await this.database.prepare(
-      "UPDATE gemini_usage SET accounting_status = 'confirmed_zero', ambiguity_reason = NULL, " +
-      "settled_at = accounting_through " +
-      "WHERE id = ?1 AND timestamp = ?2 AND provider = ?3 AND operation = ?4 AND request_count = ?5 AND model = ?6 " +
-      "AND accounting_status = 'transport_ambiguous' AND ambiguity_reason = 'abandoned_reservation' " +
-      "AND input_tokens = 0 AND output_tokens = 0 AND total_tokens = 0 AND accounting_through = ?7 " +
-      "AND settled_at IS NULL AND retired_at IS NULL " +
-      "AND EXISTS (SELECT 1 FROM gemini_usage_state WHERE id = 1 AND usage_unknown = 0) RETURNING id",
-    ).bind(
-      expectation.id, expectation.timestamp, expectation.provider, expectation.operation,
-      expectation.requestCount, expectation.model, expectation.accountingThrough,
-    ).first<{ id: number }>().catch(() => null);
-    if (row?.id === expectation.id) return "recovered";
-    const authoritative = await this.getRecord(expectation.id);
-    if (authoritative?.id === expectation.id && authoritative.timestamp === expectation.timestamp &&
-      authoritative.provider === expectation.provider && authoritative.operation === expectation.operation &&
-      authoritative.requestCount === expectation.requestCount && authoritative.model === expectation.model &&
-      authoritative.accountingStatus === "confirmed_zero" && authoritative.ambiguityReason === null &&
-      authoritative.inputTokens === 0 && authoritative.outputTokens === 0 && authoritative.totalTokens === 0 &&
-      authoritative.accountingThrough === expectation.accountingThrough &&
-      authoritative.settledAt === expectation.accountingThrough && authoritative.retiredAt === null) {
-      return "already_recovered";
-    }
-    throw new Error("Gemini pre-dispatch recovery preconditions were not satisfied.");
   }
 
   async retireAmbiguousRequest(expectation: GeminiAmbiguityRetirementExpectation): Promise<GeminiAmbiguityRetirementResult> {
