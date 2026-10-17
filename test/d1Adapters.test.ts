@@ -189,7 +189,7 @@ test("D1 discovery history round-trips strict application-owned X provenance", a
 function selectionFor(analysis: AgentAnalysis): BatchSelection {
   return { candidate: { candidateId: "c001", source: { title: analysis.sourceTitle, url: analysis.sourceUrl },
     normalizedUrl: analysis.sourceUrl, aliasKey: analysis.sourceUrl, aliases: [analysis.sourceUrl],
-    provenance: [{ queryOrdinal: 1, resultOrdinal: 1 }] }, analysis };
+    provenance: [{ kind: "brave", queryOrdinal: 1, resultOrdinal: 1 }] }, analysis };
 }
 
 test("D1 batch persistence round-trips rich existing fields and excludes the batch envelope", async () => {
@@ -828,6 +828,13 @@ test("disabled-X Worker cycle remains safe without migration 0004 tables", async
     await new D1DiscoveryHistory(d1).recordDiscovery(stored, new Date("2026-10-10T07:00:00.000Z"));
     let searches = 0;
     const dependencies = createWorkerMonitoringDependencies(env, {
+      collectRss: async () => ({
+        observations: [],
+        metrics: {
+          status: "disabled", configuredFeeds: 0, attemptedFeeds: 0, succeededFeeds: 0, failedFeeds: 0,
+          observedPositions: 0, validCandidates: 0, rejectedItems: 0, itemLimitTruncations: 0, outcomes: [],
+        },
+      }),
       searchPage: (async () => {
         searches += 1;
         return { rawCount: 1, positions: [{ resultOrdinal: 1, result: { title: stored.sourceTitle, url: stored.sourceUrl, snippet: "Known ordinary article." } }] };

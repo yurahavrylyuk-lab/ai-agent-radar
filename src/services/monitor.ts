@@ -12,7 +12,7 @@ import { type GeminiAvailability, type GeminiBlockedReason } from "./geminiUsage
 import { createGeminiCycleContext, type GeminiBatchCycleContext, type GeminiCycleContext } from "../tools/llm/gemini.js";
 import { xPostIdFromUrl, type XDiscoveryResult } from "./xDiscovery.js";
 import { BraveUsageGuardDeniedError } from "../tools/webSearch.js";
-import type { BatchAnalysisResult, BatchCycleMetrics, BatchDeliveryCandidate, BatchObservation, BraveSearchPage, DeliveryCandidate, DiscoveryProcessingResult, MonitoringCycleResult, MonitoringSearchFailure, NotificationResult, PreparedBatch, SearchResult, StoredDiscovery, XSourceProvenance } from "../types/index.js";
+import type { BatchAnalysisResult, BatchCycleMetrics, BatchDeliveryCandidate, BatchObservation, BraveSearchPage, DeliveryCandidate, DiscoveryProcessingResult, MonitoringCycleResult, MonitoringSearchFailure, NotificationResult, PreparedBatch, RssDiscoveryResult, SearchResult, StoredDiscovery, XSourceProvenance } from "../types/index.js";
 
 export const MONITORING_QUERY = "new AI agent developer tool framework release";
 export { MONITORING_QUERIES };
@@ -53,6 +53,7 @@ export interface BatchMonitoringDependencies {
   geminiPreflight: (now: Date) => Promise<GeminiAvailability>;
   analyze: (batch: PreparedBatch) => Promise<BatchAnalysisResult>;
   geminiCycleContext: GeminiBatchCycleContext;
+  collectRss: (now: Date) => Promise<RssDiscoveryResult>;
   now?: () => Date;
 }
 
@@ -164,7 +165,8 @@ export async function runBatchMonitoringCycle(dependencies: BatchMonitoringDepen
   result.xBlockedReason = "disabled";
   const batch: BatchCycleMetrics = {
     searchAttempts: 0, searchSuccesses: 0, searchFailures: 0, rawObservations: 0, acceptedObservations: 0,
-    invalid: 0, homepages: 0, duplicates: 0, known: 0, sizeExcluded: 0, submittedCandidates: 0, promptBytes: 0,
+    invalid: 0, homepages: 0, duplicates: 0, known: 0, poolCapExcluded: 0, sizeExcluded: 0, submittedCandidates: 0, promptBytes: 0,
+    submittedBySource: { brave: 0, rss: 0 },
     truncationStage: null, status: "empty", reservationAttempts: 0, reservations: 0, providerDispatches: 0,
     returnedStories: 0, acceptedStories: 0, selected: [], freshDelivered: 0, replayDelivered: 0, emailCount: 0,
   };
@@ -195,7 +197,10 @@ export async function runBatchMonitoringCycle(dependencies: BatchMonitoringDepen
       const page = await dependencies.searchPage(descriptor.query, { freshness: MONITORING_FRESHNESS });
       batch.searchSuccesses += 1;
       batch.rawObservations += page.rawCount;
-      observations.push(...page.positions.slice(0, 5).map(position => ({ queryOrdinal: index + 1, ...position })));
+      observations.push(...page.positions.slice(0, 5).map(position => ({
+        result: position.result,
+        provenance: { kind: "brave" as const, queryOrdinal: index + 1, resultOrdinal: position.resultOrdinal },
+      })));
     } catch (error) {
       if (error instanceof BraveUsageGuardDeniedError) break;
       batch.searchFailures += 1;
@@ -203,7 +208,23 @@ export async function runBatchMonitoringCycle(dependencies: BatchMonitoringDepen
       result.failures += 1;
     }
   }
-  result.searchResultsReceived = batch.rawObservations;
+  const braveResultsReceived = batch.rawObservations;
+  let rss: RssDiscoveryResult;
+  try {
+    rss = await dependencies.collectRss(cycleStartedAt);
+  } catch {
+    rss = {
+      observations: [],
+      metrics: { status: "configuration", configuredFeeds: 0, attemptedFeeds: 0, succeededFeeds: 0, failedFeeds: 0,
+        observedPositions: 0, validCandidates: 0, rejectedItems: 0, itemLimitTruncations: 0, outcomes: [] },
+    };
+  }
+  result.rss = rss.metrics;
+  observations.push(...rss.observations);
+  batch.rawObservations += rss.metrics.observedPositions;
+  result.failures += rss.metrics.failedFeeds;
+  if (rss.metrics.status === "configuration") result.failures += 1;
+  result.searchResultsReceived = braveResultsReceived;
   // Any required history read/touch failure rejects before analysis or delivery.
   const pool = await prepareBatchCandidates(observations, { history, notificationHistory: notification.history, seenAt: cycleStartedAt });
   Object.assign(batch, pool.counts);
@@ -215,6 +236,10 @@ export async function runBatchMonitoringCycle(dependencies: BatchMonitoringDepen
       prepared = prepareBatchPrompt(pool.candidates);
       batch.sizeExcluded = prepared.sizeExcluded;
       batch.submittedCandidates = prepared.candidates.length;
+      batch.submittedBySource = {
+        brave: prepared.candidates.filter(candidate => candidate.provenance.some(entry => entry.kind === "brave")).length,
+        rss: prepared.candidates.filter(candidate => candidate.provenance.some(entry => entry.kind === "rss")).length,
+      };
       batch.promptBytes = prepared.promptBytes;
       batch.truncationStage = prepared.truncationStage;
     } catch (error) {

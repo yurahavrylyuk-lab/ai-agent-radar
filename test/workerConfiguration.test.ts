@@ -111,6 +111,7 @@ test("Worker composition uses D1 stores and exposes a scheduled handler without 
   assert.ok(persistence.geminiUsageStore instanceof D1GeminiUsageStore);
   assert.ok(dependencies.history instanceof D1DiscoveryHistory, "replay discovery history must use D1");
   assert.equal(typeof dependencies.searchPage, "function");
+  assert.equal(typeof dependencies.collectRss, "function");
   assert.equal(typeof dependencies.analyze, "function");
   assert.equal("process" in dependencies, false);
   assert.equal("collectX" in dependencies, false);
@@ -149,14 +150,16 @@ test("default scheduled Worker uses batch entry with no X tables and HTTP method
   try {
     globalThis.fetch = async input => {
       providerUrls.push(String(input));
-      assert.equal(new URL(String(input)).hostname, "api.search.brave.com");
-      return new Response(JSON.stringify({ web: { results: [] } }));
+      const hostname = new URL(String(input)).hostname;
+      if (hostname === "api.search.brave.com") return new Response(JSON.stringify({ web: { results: [] } }));
+      assert.ok(["openai.com", "github.blog", "blog.cloudflare.com", "developer.chrome.com"].includes(hostname));
+      return new Response(`<rss version="2.0"><channel><title>Empty</title></channel></rss>`, { headers: { "content-type": "application/rss+xml" } });
     };
     console.info = value => { if (value?.event === "scheduled_monitoring_cycle_completed") summaries.push(value); };
     const result = await runScheduledMonitoring(env);
     assert.equal(result.batch?.status, "empty");
     assert.equal(result.analysesAttempted, 0);
-    assert.equal(providerUrls.length, 10);
+    assert.equal(providerUrls.length, 14);
     assert.equal(summaries.length, 1);
     assert.equal(result.xRequestsAttempted, 0);
     assert.equal(result.xBlockedReason, "disabled");
@@ -275,9 +278,10 @@ test("scheduled summary reports bounded timeout accounting without claiming zero
 function batchMetrics(overrides: Partial<BatchCycleMetrics> = {}): BatchCycleMetrics {
   return {
     searchAttempts: 10, searchSuccesses: 9, searchFailures: 1, rawObservations: 55, acceptedObservations: 45,
-    invalid: 1, homepages: 1, duplicates: 2, known: 3, sizeExcluded: 2, submittedCandidates: 36, promptBytes: 32000,
+    invalid: 1, homepages: 1, duplicates: 2, known: 3, poolCapExcluded: 0, sizeExcluded: 2, submittedCandidates: 36, promptBytes: 32000,
+    submittedBySource: { brave: 36, rss: 0 },
     truncationStage: "tail", status: "validated", reservationAttempts: 1, reservations: 1, providerDispatches: 1,
-    returnedStories: 4, acceptedStories: 4, selected: [{ candidateId: "c050", hostname: "example.test", score: 8, provenance: [{ queryOrdinal: 10, resultOrdinal: 5 }] }],
+    returnedStories: 4, acceptedStories: 4, selected: [{ candidateId: "c050", hostname: "example.test", score: 8, provenance: [{ kind: "brave", queryOrdinal: 10, resultOrdinal: 5 }] }],
     freshDelivered: 2, replayDelivered: 1, emailCount: 1, ...overrides,
   };
 }
@@ -290,24 +294,63 @@ test("scheduled summary copies every batch counter and distinguishes selected st
   assert.equal(reservedOnly.batch?.reservations, 1); assert.equal(reservedOnly.batch?.providerDispatches, 0);
 });
 
+test("scheduled summary allowlists and bounds RSS telemetry without source content", () => {
+  const summary = createScheduledCycleSummary(monitoringResult({
+    rss: {
+      status: "collected", configuredFeeds: 999, attemptedFeeds: 999, succeededFeeds: 999, failedFeeds: 999,
+      observedPositions: 999, validCandidates: 999, rejectedItems: 999, itemLimitTruncations: 999,
+      outcomes: [
+        { feedId: "openai_news", reason: "ok", elapsedMs: 6000 },
+        { feedId: "forged_private_feed", reason: "http", httpStatus: 599, elapsedMs: 10 },
+        { feedId: "github_changelog", reason: "http", httpStatus: 503, elapsedMs: -1 },
+      ],
+    },
+  }), environment());
+  assert.deepEqual(summary.rss, {
+    status: "collected", configuredFeeds: 5, attemptedFeeds: 5, succeededFeeds: 5, failedFeeds: 5,
+    observedPositions: 25, validCandidates: 25, rejectedItems: 25, itemLimitTruncations: 5,
+    outcomes: [
+      { feedId: "openai_news", reason: "ok", elapsedMs: 5000 },
+      { feedId: "github_changelog", reason: "http", httpStatus: 503, elapsedMs: 0 },
+    ],
+  });
+  const serialized = JSON.stringify(summary);
+  assert.doesNotMatch(serialized, /forged_private_feed|sourceUrl|snippet|private/i);
+});
+
+test("scheduled selected telemetry retains bounded mixed Brave and RSS provenance", () => {
+  const summary = createScheduledCycleSummary(monitoringResult({ batch: batchMetrics({ selected: [{
+    candidateId: "c001", hostname: "example.test", score: 8,
+    provenance: [
+      { kind: "brave", queryOrdinal: 10, resultOrdinal: 5 },
+      { kind: "rss", feedId: "openai_news", itemOrdinal: 5 },
+      { kind: "rss", feedId: "forged", itemOrdinal: 1 },
+    ],
+  }] }) }), environment());
+  assert.deepEqual(summary.batch?.selected[0]?.provenance, [
+    { kind: "brave", queryOrdinal: 10, resultOrdinal: 5 },
+    { kind: "rss", feedId: "openai_news", itemOrdinal: 5 },
+  ]);
+});
+
 test("scheduled batch serialization allowlists and bounds malicious selected evidence and every diagnostic string", () => {
   const env = environment(); const secret = env.GEMINI_API_KEY;
   const fullSourceUrl = "https://private.example.test/story?token=private";
   const selected = Array.from({ length: 8 }, (_, i) => ({ candidateId: `c00${i + 1}`, hostname: i === 0 ? `${secret}.test` : "a".repeat(260), score: 8,
-    provenance: Array.from({ length: 100 }, (_, p) => ({ queryOrdinal: Math.floor((p % 50) / 5) + 1, resultOrdinal: p % 5 + 1, sourceUrl: fullSourceUrl })), sourceTitle: env.NOTIFICATION_EMAIL, sourceUrl: fullSourceUrl }));
+    provenance: Array.from({ length: 100 }, (_, p) => ({ kind: "brave" as const, queryOrdinal: Math.floor((p % 50) / 5) + 1, resultOrdinal: p % 5 + 1, sourceUrl: fullSourceUrl })), sourceTitle: env.NOTIFICATION_EMAIL, sourceUrl: fullSourceUrl }));
   const input = monitoringResult({ batch: { ...batchMetrics({ selected }), prompt: secret, response: env.NOTIFICATION_EMAIL } as BatchCycleMetrics });
   const summary = createScheduledCycleSummary(input, env);
   assert.ok(summary.batch); assert.equal(summary.batch.selected.length, 4);
-  assert.ok(summary.batch.selected.reduce((n, entry) => n + entry.provenance.length, 0) <= 50);
+  assert.ok(summary.batch.selected.reduce((n, entry) => n + entry.provenance.length, 0) <= 75);
   assert.ok(summary.batch.selected.every(entry => entry.hostname.length <= 253));
   const serialized = JSON.stringify(summary);
   for (const text of [secret, env.NOTIFICATION_EMAIL, fullSourceUrl, "sourceTitle", "sourceUrl", '"prompt":', '"response":']) assert.equal(serialized.includes(text), false, text);
   const invalid = createScheduledCycleSummary(monitoringResult({ batch: batchMetrics({ selected: [
     { candidateId: "c051", hostname: "valid.test", score: 8, provenance: [] },
     { candidateId: "c001", hostname: "valid.test", score: 11, provenance: [] },
-    { candidateId: "c002", hostname: "valid.test", score: 7, provenance: [{ queryOrdinal: 11, resultOrdinal: 1 }, { queryOrdinal: 1, resultOrdinal: 6 }, { queryOrdinal: 2, resultOrdinal: 3 }] },
+    { candidateId: "c002", hostname: "valid.test", score: 7, provenance: [{ kind: "brave", queryOrdinal: 11, resultOrdinal: 1 }, { kind: "brave", queryOrdinal: 1, resultOrdinal: 6 }, { kind: "brave", queryOrdinal: 2, resultOrdinal: 3 }] },
   ] }) }), env);
-  assert.deepEqual(invalid.batch?.selected, [{ candidateId: "c002", hostname: "valid.test", score: 7, provenance: [{ queryOrdinal: 2, resultOrdinal: 3 }] }]);
+  assert.deepEqual(invalid.batch?.selected, [{ candidateId: "c002", hostname: "valid.test", score: 7, provenance: [{ kind: "brave", queryOrdinal: 2, resultOrdinal: 3 }] }]);
 });
 
 test("scheduled serializer rejects arbitrary strings injected into enum, model-map and status fields", () => {

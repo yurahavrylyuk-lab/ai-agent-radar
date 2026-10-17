@@ -58,7 +58,7 @@ export function prepareBatchPrompt(
     snippet: normalizeText(candidate.source.snippet ?? ""),
     url: candidate.source.url,
     publishedAt: publishedAtUtc(candidate.source.publishedAt),
-    queryOrdinals: [...new Set(candidate.provenance.map(({ queryOrdinal }) => queryOrdinal)
+    queryOrdinals: [...new Set(candidate.provenance.flatMap(provenance => provenance.kind === "brave" ? [provenance.queryOrdinal] : [])
       .filter((ordinal) => Number.isInteger(ordinal) && ordinal >= 1 && ordinal <= 10))].sort((left, right) => left - right),
   }));
 

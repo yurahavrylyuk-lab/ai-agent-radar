@@ -109,7 +109,7 @@ test("RF5 partial persistence delivers only successful fresh rows and bounded re
     const selection: BatchSelection = { analysis: item.discovery.analysis, candidate: {
       candidateId: item.discovery.analysis.name, source: { title: item.discovery.analysis.sourceTitle, url: item.discovery.analysis.sourceUrl },
       normalizedUrl: item.discovery.normalizedUrl, aliasKey: item.discovery.normalizedUrl,
-      aliases: item.aliases, provenance: [{ queryOrdinal: 1, resultOrdinal: 1 }],
+      aliases: item.aliases, provenance: [{ kind: "brave", queryOrdinal: 1, resultOrdinal: 1 }],
     } };
     try {
       const saved = await recordBatchSelection(selection, { history, seenAt: new Date("2026-10-14T08:00:00Z") });

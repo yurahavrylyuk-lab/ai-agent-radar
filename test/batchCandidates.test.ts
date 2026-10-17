@@ -12,7 +12,10 @@ import type { AgentAnalysis, BatchObservation, SearchResult } from "../src/types
 const seenAt = new Date("2026-10-12T08:00:00.000Z");
 const firstSeenAt = new Date("2026-10-11T08:00:00.000Z");
 function observation(url: string, queryOrdinal = 1, resultOrdinal = 1, title = "Original title"): BatchObservation {
-  return { queryOrdinal, resultOrdinal, result: { title, url, snippet: "Original snippet" } };
+  return { provenance: { kind: "brave", queryOrdinal, resultOrdinal }, result: { title, url, snippet: "Original snippet" } };
+}
+function rssObservation(url: string, feedId = "openai_news", itemOrdinal = 1, title = "RSS title"): BatchObservation {
+  return { provenance: { kind: "rss", feedId, itemOrdinal }, result: { title, url, snippet: "RSS snippet", source: "RSS" } };
 }
 function analysis(sourceUrl: string): AgentAnalysis {
   return {
@@ -49,7 +52,7 @@ test("batch news URLs reject credentials, non-HTTP schemes, oversized bytes and 
 test("candidate preparation counts invalid fields and homepages once without history lookups", async () => {
   await withHistory(async (history, notificationHistory) => {
     const inputs: BatchObservation[] = [
-      { queryOrdinal: 1, resultOrdinal: 1, result: null },
+      { provenance: { kind: "brave", queryOrdinal: 1, resultOrdinal: 1 }, result: null },
       observation("https://example.test/news", 1, 2, "  "),
       observation("https://user@example.test/news", 1, 3),
       observation("https://example.test/?q=1#news", 1, 4),
@@ -57,7 +60,7 @@ test("candidate preparation counts invalid fields and homepages once without his
       observation("https://example.test/invalid", 0, 1),
     ];
     const pool = await prepareBatchCandidates(inputs, { history, notificationHistory, seenAt });
-    assert.deepEqual(pool.counts, { acceptedObservations: 5, invalid: 4, homepages: 1, duplicates: 0, known: 0 });
+    assert.deepEqual(pool.counts, { acceptedObservations: 5, invalid: 4, homepages: 1, duplicates: 0, known: 0, poolCapExcluded: 0 });
     assert.deepEqual(pool.candidates.map(({ candidateId, normalizedUrl }) => ({ candidateId, normalizedUrl })), [{ candidateId: "c001", normalizedUrl: "https://example.test/news" }]);
     assert.deepEqual([...pool.observedAliases], [["https://example.test/news", ["https://example.test/news"]]]);
   });
@@ -69,12 +72,12 @@ test("canonical slash and fragment duplicates retain first original source and a
     const inputs = [observation("https://example.test/news#b", 2, 1, "Later title"), first, observation("https://example.test/news/#a", 1, 3)];
     const pool = await prepareBatchCandidates(inputs, { history, notificationHistory, seenAt });
     assert.equal(pool.candidates.length, 1);
-    assert.deepEqual(pool.counts, { acceptedObservations: 3, invalid: 0, homepages: 0, duplicates: 2, known: 0 });
+    assert.deepEqual(pool.counts, { acceptedObservations: 3, invalid: 0, homepages: 0, duplicates: 2, known: 0, poolCapExcluded: 0 });
     assert.deepEqual(pool.candidates[0], {
       candidateId: "c001", source: first.result,
       normalizedUrl: "https://example.test/news#a", aliasKey: "https://example.test/news",
       aliases: ["https://example.test/news#a", "https://example.test/news#b"],
-      provenance: [{ queryOrdinal: 1, resultOrdinal: 2 }, { queryOrdinal: 1, resultOrdinal: 3 }, { queryOrdinal: 2, resultOrdinal: 1 }],
+      provenance: [{ kind: "brave", queryOrdinal: 1, resultOrdinal: 2 }, { kind: "brave", queryOrdinal: 1, resultOrdinal: 3 }, { kind: "brave", queryOrdinal: 2, resultOrdinal: 1 }],
     });
     assert.deepEqual([...pool.observedAliases], [["https://example.test/news", ["https://example.test/news#a", "https://example.test/news#b"]]]);
   });
@@ -102,7 +105,7 @@ test("fifty positions are the ceiling and invalid or repeated ordinals never add
     inputs.push(observation("https://example.test/eleventh-query", 11, 1), observation("https://example.test/sixth-result", 1, 6), observation("https://example.test/fraction", 1.5, 1), observation("https://example.test/repeated", 1, 1));
     const pool = await prepareBatchCandidates(inputs, { history, notificationHistory, seenAt });
     assert.equal(pool.candidates.length, 50);
-    assert.deepEqual(pool.counts, { acceptedObservations: 50, invalid: 4, homepages: 0, duplicates: 0, known: 0 });
+    assert.deepEqual(pool.counts, { acceptedObservations: 50, invalid: 4, homepages: 0, duplicates: 0, known: 0, poolCapExcluded: 0 });
     assert.equal(pool.candidates[0].candidateId, "c001");
     assert.equal(pool.candidates[49].candidateId, "c050");
     assert.equal(pool.candidates.some(({ source }) => source.url.includes("repeated")), false);
@@ -112,10 +115,10 @@ test("fifty positions are the ceiling and invalid or repeated ordinals never add
 test("an invalid source consumes its provider position even when repeated with usable fields", async () => {
   await withHistory(async (history, notificationHistory) => {
     const pool = await prepareBatchCandidates([
-      { queryOrdinal: 1, resultOrdinal: 1, result: null }, observation("https://example.test/replacement", 1, 1),
+      { provenance: { kind: "brave", queryOrdinal: 1, resultOrdinal: 1 }, result: null }, observation("https://example.test/replacement", 1, 1),
     ], { history, notificationHistory, seenAt });
     assert.equal(pool.candidates.length, 0);
-    assert.deepEqual(pool.counts, { acceptedObservations: 1, invalid: 2, homepages: 0, duplicates: 0, known: 0 });
+    assert.deepEqual(pool.counts, { acceptedObservations: 1, invalid: 2, homepages: 0, duplicates: 0, known: 0, poolCapExcluded: 0 });
   });
 });
 
@@ -185,10 +188,37 @@ test("unverifiable discovery, notification or touch evidence rejects even after 
 test("candidate preparation rejects malformed optional source fields without forwarding objects", async () => {
   await withHistory(async (history, notificationHistory) => {
     const pool = await prepareBatchCandidates([
-      { queryOrdinal: 1, resultOrdinal: 1, result: { title: "Story", url: "https://example.test/news", snippet: {} } as SearchResult },
-      { queryOrdinal: 1, resultOrdinal: 2, result: { title: "Story", url: "https://example.test/other", publishedAt: [] } as unknown as SearchResult },
+      { provenance: { kind: "brave", queryOrdinal: 1, resultOrdinal: 1 }, result: { title: "Story", url: "https://example.test/news", snippet: {} } as SearchResult },
+      { provenance: { kind: "brave", queryOrdinal: 1, resultOrdinal: 2 }, result: { title: "Story", url: "https://example.test/other", publishedAt: [] } as unknown as SearchResult },
     ], { history, notificationHistory, seenAt });
     assert.equal(pool.candidates.length, 0);
-    assert.deepEqual(pool.counts, { acceptedObservations: 2, invalid: 2, homepages: 0, duplicates: 0, known: 0 });
+    assert.deepEqual(pool.counts, { acceptedObservations: 2, invalid: 2, homepages: 0, duplicates: 0, known: 0, poolCapExcluded: 0 });
+  });
+});
+
+test("shared pool prefers Brave evidence and alternates Brave-backed with RSS-only candidates", async () => {
+  await withHistory(async (history, notificationHistory) => {
+    const pool = await prepareBatchCandidates([
+      rssObservation("https://example.test/rss-only-2", "github_changelog", 2, "RSS 2"),
+      rssObservation("https://example.test/shared#rss", "openai_news", 1, "RSS shared"),
+      observation("https://example.test/brave-only-1", 1, 1, "Brave 1"),
+      observation("https://example.test/shared#brave", 2, 1, "Brave shared"),
+      rssObservation("https://example.test/rss-only-1", "openai_news", 2, "RSS 1"),
+    ], { history, notificationHistory, seenAt });
+    assert.deepEqual(pool.candidates.map(candidate => candidate.source.title), ["Brave 1", "RSS 1", "Brave shared", "RSS 2"]);
+    assert.equal(pool.candidates[2]?.provenance.some(entry => entry.kind === "rss"), true);
+    assert.equal(pool.candidates[2]?.source.title, "Brave shared");
+  });
+});
+
+test("shared pool rejects forged RSS positions and caps admitted candidates at fifty", async () => {
+  await withHistory(async (history, notificationHistory) => {
+    const brave = Array.from({ length: 50 }, (_, index) => observation(`https://example.test/brave-${index}`, Math.floor(index / 5) + 1, index % 5 + 1));
+    const rss = Array.from({ length: 20 }, (_, index) => rssObservation(`https://example.test/rss-${index}`, ["openai_news", "github_changelog", "cloudflare_ai", "chrome_developers"][Math.floor(index / 5)]!, index % 5 + 1));
+    const pool = await prepareBatchCandidates([...rss, ...brave, rssObservation("https://example.test/forged", "unapproved", 1)], { history, notificationHistory, seenAt });
+    assert.equal(pool.candidates.length, 50);
+    assert.equal(pool.counts.poolCapExcluded, 20);
+    assert.equal(pool.counts.invalid, 1);
+    assert.equal(pool.candidates.some(candidate => candidate.source.url.endsWith("/forged")), false);
   });
 });

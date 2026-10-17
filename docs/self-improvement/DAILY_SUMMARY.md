@@ -1,5 +1,13 @@
 # Daily Self-Improvement Summary
 
+## 2026-10-17 — Bounded RSS discovery implementation
+
+- Status: REVIEW; branch `codex/rss-discovery`, exact baseline `846489e5c179e4b4391fc8eb702052a734f32dab`.
+- Implemented the four approved first-party feeds with sequential one-request collection, five items/feed, a complete-body five-second deadline, 256 KiB/feed, no retries or redirects, strict RSS 2.0/Atom parsing, isolated sanitized failures, and shared Brave/RSS canonical/history deduplication.
+- Combined admission remains capped at 50 candidates and a 32 KiB prompt. The existing scheduled path retains one Gemini dispatch, score threshold 7, four stories, and one email maximum; no D1 schema, X/0004, or Threads behavior changed.
+- The Task 7 bundle audit rejected `sax@1.4.1` because its unused SAXStream export retained `stream` and `string_decoder`. The approved bounded dependency amendment replaced it with pinned `saxes@6.0.0` and `xmlchars@2.2.0`; the emitted Worker contains neither those imports nor any other inspected Node built-in, dotenv, local JSON, or OpenAI runtime dependency.
+- Validation passed: focused RSS parser/collector tests 15/15; full offline suite 601/601; `npm run build`; `WRANGLER_SEND_METRICS=false npm run worker:typecheck`; `git diff --check`; `npm ls --depth=0`; and Wrangler dry-run bundle audit. No live feed, provider, monitoring, deployment, migration, D1, Cloudflare, or production action occurred.
+
 ## 2026-10-10 — Gemini timeout admission correction
 
 - Status: REVIEW; branch `codex/gemini-timeout-admission`, exact source baseline `02e3f6c491cc91db08902db7d47740a07085fab7`.
