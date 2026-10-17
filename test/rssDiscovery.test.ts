@@ -206,6 +206,55 @@ test("collector deadline covers a stalled response body and cancels its reader",
   assert.equal(cancelled, true);
 });
 
+test("collector timeout does not await a stalled reader cancellation", { timeout: 1000 }, async (context) => {
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  let cancellationStarted = false;
+  const body = new ReadableStream<Uint8Array>({
+    pull: () => new Promise<void>(() => {}),
+    cancel: () => {
+      cancellationStarted = true;
+      return new Promise<void>(() => {});
+    },
+  });
+  const pending = collectRss({
+    now,
+    feeds: [feed()],
+    fetch: async () => new Response(body, { headers: { "content-type": "application/xml" } }),
+  });
+  await Promise.resolve();
+  context.mock.timers.tick(RSS_LIMITS.timeoutMs);
+  await Promise.resolve();
+  const outcome = await Promise.race([
+    pending.then(result => result.metrics.outcomes[0]?.reason),
+    new Promise<"still_pending">(resolve => setImmediate(() => resolve("still_pending"))),
+  ]);
+  assert.equal(cancellationStarted, true);
+  assert.equal(outcome, "timeout");
+});
+
+test("collector safely handles a rejected reader cancellation", { timeout: 1000 }, async (context) => {
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  let cancellationStarted = false;
+  const body = new ReadableStream<Uint8Array>({
+    pull: () => new Promise<void>(() => {}),
+    cancel: () => {
+      cancellationStarted = true;
+      return Promise.reject(new Error("private cancellation failure"));
+    },
+  });
+  const pending = collectRss({
+    now,
+    feeds: [feed()],
+    fetch: async () => new Response(body, { headers: { "content-type": "application/xml" } }),
+  });
+  await Promise.resolve();
+  context.mock.timers.tick(RSS_LIMITS.timeoutMs);
+  const result = await pending;
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(cancellationStarted, true);
+  assert.equal(result.metrics.outcomes[0]?.reason, "timeout");
+});
+
 test("collector deadline covers stalled response headers without retry", { timeout: 1000 }, async (context) => {
   context.mock.timers.enable({ apis: ["setTimeout"] });
   let calls = 0;

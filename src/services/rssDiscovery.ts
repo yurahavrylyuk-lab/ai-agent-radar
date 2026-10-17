@@ -217,7 +217,9 @@ async function boundedXml(response: Response, signal: AbortSignal): Promise<stri
     if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
     return text;
   } catch (error) {
-    try { await reader.cancel(); } catch { /* cancellation cannot replace the primary failure */ }
+    try {
+      void reader.cancel().catch(() => { /* cancellation cannot replace the primary failure */ });
+    } catch { /* synchronous cancellation failure cannot replace the primary failure */ }
     throw error;
   } finally {
     reader.releaseLock();
