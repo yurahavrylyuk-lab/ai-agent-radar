@@ -13,10 +13,13 @@ export interface BraveSearchPage {
   positions: Array<{ resultOrdinal: number; result: SearchResult | null }>;
 }
 
+export type DiscoveryProvenance =
+  | { kind: "brave"; queryOrdinal: number; resultOrdinal: number }
+  | { kind: "rss"; feedId: string; itemOrdinal: number };
+
 export interface BatchObservation {
-  queryOrdinal: number;
-  resultOrdinal: number;
   result: SearchResult | null;
+  provenance: DiscoveryProvenance;
 }
 
 export interface BatchCandidate {
@@ -25,7 +28,7 @@ export interface BatchCandidate {
   normalizedUrl: string;
   aliasKey: string;
   aliases: string[];
-  provenance: Array<{ queryOrdinal: number; resultOrdinal: number }>;
+  provenance: DiscoveryProvenance[];
 }
 
 export type BatchTruncationStage = "initial" | "snippet384" | "snippet192" | "snippet96" | "snippet0" | "title128" | "tail";
@@ -42,7 +45,21 @@ export interface PreparedBatch {
 export interface CandidatePool {
   candidates: BatchCandidate[];
   observedAliases: ReadonlyMap<string, readonly string[]>;
-  counts: { acceptedObservations: number; invalid: number; homepages: number; duplicates: number; known: number };
+  counts: { acceptedObservations: number; invalid: number; homepages: number; duplicates: number; known: number; poolCapExcluded: number };
+}
+
+export type RssFailureReason = "disabled" | "configuration" | "http" | "redirect" | "timeout" | "body_limit" | "encoding" | "parse" | "structure" | "ok";
+
+export interface RssCycleMetrics {
+  status: "disabled" | "configuration" | "collected";
+  configuredFeeds: number; attemptedFeeds: number; succeededFeeds: number; failedFeeds: number;
+  observedPositions: number; validCandidates: number; rejectedItems: number; itemLimitTruncations: number;
+  outcomes: Array<{ feedId: string; reason: RssFailureReason; httpStatus?: number; elapsedMs: number }>;
+}
+
+export interface RssDiscoveryResult {
+  observations: BatchObservation[];
+  metrics: RssCycleMetrics;
 }
 
 export const agentAnalysisCategories = [
@@ -189,20 +206,22 @@ export interface BatchCycleMetrics {
   searchAttempts: number; searchSuccesses: number; searchFailures: number;
   rawObservations: number; acceptedObservations: number;
   invalid: number; homepages: number; duplicates: number; known: number;
-  sizeExcluded: number; submittedCandidates: number; promptBytes: number;
+  poolCapExcluded: number; sizeExcluded: number; submittedCandidates: number; promptBytes: number;
+  submittedBySource: { brave: number; rss: number };
   truncationStage: BatchTruncationStage | null;
   status: "empty" | "blocked" | "preparation_failed" | "provider_failed" | "timeout" | "invalid_output" | "validated";
   reservationAttempts: number; reservations: number; providerDispatches: number;
   returnedStories: number; acceptedStories: number;
   selected: Array<{
     candidateId: string; hostname: string; score: number;
-    provenance: Array<{ queryOrdinal: number; resultOrdinal: number }>;
+    provenance: DiscoveryProvenance[];
   }>;
   freshDelivered: number; replayDelivered: number; emailCount: number;
 }
 
 export interface MonitoringCycleResult {
   batch?: BatchCycleMetrics;
+  rss?: RssCycleMetrics;
   query: string;
   searchResultsReceived: number;
   searchFailures: MonitoringSearchFailure[];

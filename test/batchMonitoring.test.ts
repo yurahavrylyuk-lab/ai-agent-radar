@@ -10,7 +10,7 @@ import { D1GeminiUsageStore } from "../src/services/d1GeminiUsageStore.js";
 import { createScheduledCycleSummary, createWorkerMonitoringDependencies, type RadarWorkerEnv } from "../src/worker.js";
 import { BraveUsageGuardDeniedError } from "../src/tools/webSearch.js";
 import { createGeminiBatchCycleContext, generateBatchWithGemini } from "../src/tools/llm/gemini.js";
-import type { AgentAnalysis, BatchAnalysisResult, BraveSearchPage, DiscoveryEmailContent, NotificationRecord, PreparedBatch, StoredDiscovery } from "../src/types/index.js";
+import type { AgentAnalysis, BatchAnalysisResult, BraveSearchPage, DiscoveryEmailContent, NotificationRecord, PreparedBatch, RssDiscoveryResult, StoredDiscovery } from "../src/types/index.js";
 
 const cycleStart = new Date("2026-10-14T08:00:00.000Z");
 const counts = { dailyRequests: 0, weeklyRequests: 0, monthlyRequests: 0, dailyTokens: 0, weeklyTokens: 0, monthlyTokens: 0 };
@@ -69,6 +69,7 @@ function fixture() {
     history, notification: { history: notificationHistory, sendEmail: async content => { events.push("send"); sent.push(content); return { id: "offline-message" }; } },
     now: () => cycleStart,
     geminiCycleContext: createGeminiBatchCycleContext(),
+    collectRss: async () => { events.push("rss"); return emptyRss(); },
     searchPage: async (_query, options) => {
       searchCalls++; events.push(`search:${searchCalls}`); assert.equal(options?.freshness, "pw");
       return { rawCount: 5, positions: Array.from({ length: 5 }, (_, index) => ({ resultOrdinal: index + 1,
@@ -78,6 +79,16 @@ function fixture() {
     analyze: async batch => { analyzeCalls++; events.push("analysis"); return selection(batch, [49, 0, 1, 2]); },
   };
   return { dependencies, discoveries, notifications, events, sent, history, notificationHistory, searchCalls: () => searchCalls, analyzeCalls: () => analyzeCalls };
+}
+
+function emptyRss(overrides: Partial<RssDiscoveryResult> = {}): RssDiscoveryResult {
+  return {
+    observations: [],
+    metrics: { status: "collected", configuredFeeds: 4, attemptedFeeds: 4, succeededFeeds: 4, failedFeeds: 0,
+      observedPositions: 0, validCandidates: 0, rejectedItems: 0, itemLimitTruncations: 0,
+      outcomes: ["openai_news", "github_changelog", "cloudflare_ai", "chrome_developers"].map(feedId => ({ feedId, reason: "ok" as const, elapsedMs: 1 })) },
+    ...overrides,
+  };
 }
 
 function selection(batch: PreparedBatch, indexes: number[]): BatchAnalysisResult {
@@ -98,7 +109,8 @@ test("all fifty observations reach one batch after all ten searches, including a
     f.events.push("analysis");
     assert.equal(batch.candidates.length, 50);
     assert.equal(batch.candidates[49]?.source.url, "https://example.test/query10/story5");
-    assert.ok(f.events.indexOf("admission") > f.events.lastIndexOf("search:10"));
+    assert.ok(f.events.indexOf("rss") > f.events.lastIndexOf("search:10"));
+    assert.ok(f.events.indexOf("admission") > f.events.indexOf("rss"));
     return selection(batch, [49, 0, 1, 2]);
   };
   const result = await run(f.dependencies);
@@ -112,6 +124,39 @@ test("all fifty observations reach one batch after all ten searches, including a
   assert.ok(f.events.indexOf("send") > f.events.lastIndexOf("persist:https://example.test/query1/story3"));
   assert.ok(f.sent[0]!.text.indexOf("Query 10 result 5") < f.sent[0]!.text.indexOf("Query 1 result 1"));
   assert.equal(result.batch?.submittedCandidates, 50);
+});
+
+test("Brave and RSS candidates share one pool and one Gemini analysis", async () => {
+  const f = fixture();
+  f.dependencies.searchPage = async (_query, _options) => ({ rawCount: 0, positions: [] });
+  f.dependencies.collectRss = async () => {
+    f.events.push("rss");
+    return emptyRss({
+      observations: [{ result: { title: "RSS story", url: "https://openai.com/news/rss-story", publishedAt: "2026-10-14T07:00:00.000Z" }, provenance: { kind: "rss", feedId: "openai_news", itemOrdinal: 1 } }],
+      metrics: { ...emptyRss().metrics, observedPositions: 1, validCandidates: 1 },
+    });
+  };
+  f.dependencies.analyze = async batch => {
+    assert.equal(batch.candidates.length, 1);
+    assert.equal(batch.candidates[0]?.source.title, "RSS story");
+    return selection(batch, [0]);
+  };
+  const result = await run(f.dependencies);
+  assert.equal(result.analysesAttempted, 1);
+  assert.equal(result.geminiProviderAttempts, 0);
+  assert.equal(result.newDiscoveries, 1);
+  assert.equal(result.rss?.validCandidates, 1);
+});
+
+test("RSS collector rejection is isolated and Brave still reaches analysis", async () => {
+  const f = fixture();
+  f.dependencies.collectRss = async () => { throw new Error("private feed failure"); };
+  f.dependencies.analyze = async batch => selection(batch, [0]);
+  const result = await run(f.dependencies);
+  assert.equal(result.rss?.status, "configuration");
+  assert.equal(result.rss?.outcomes.length, 0);
+  assert.equal(result.failures, 1);
+  assert.equal(result.newDiscoveries, 1);
 });
 
 test("blocked Gemini admission still searches first and delivers bounded stored replay", async () => {
@@ -190,7 +235,13 @@ test("quota cutoff stops later queries but analyzes already collected positions 
 test("non-quota partial failure preserves successes and later search positions", async () => {
   const f = fixture(); let calls = 0; const search = f.dependencies.searchPage;
   f.dependencies.searchPage = async (...args) => { calls++; if (calls === 2) throw new Error("temporary error"); return search(...args); };
-  f.dependencies.analyze = async batch => { assert.equal(batch.candidates.length, 45); assert.equal(batch.candidates[5]?.provenance[0]?.queryOrdinal, 3); return selection(batch, [44]); };
+  f.dependencies.analyze = async batch => {
+    assert.equal(batch.candidates.length, 45);
+    const provenance = batch.candidates[5]?.provenance[0];
+    assert.equal(provenance?.kind, "brave");
+    assert.equal(provenance?.kind === "brave" ? provenance.queryOrdinal : undefined, 3);
+    return selection(batch, [44]);
+  };
   const result = await run(f.dependencies);
   assert.equal(calls, 10); assert.equal(result.searchFailures[0]?.queryOrdinal, 2); assert.equal(result.failures, 1); assert.equal(result.newDiscoveries, 1);
 });
@@ -422,7 +473,7 @@ test("complete Worker D1 batch composition has one provider dispatch for four se
         assert.ok(email.text.includes("Original query10 source5"));
         return new Response(JSON.stringify({ id: "one-offline-email" }));
       };
-      const dependencies = createWorkerMonitoringDependencies(env);
+      const dependencies = createWorkerMonitoringDependencies(env, { collectRss: async () => emptyRss() });
       const result = await run(dependencies);
       assert.equal(result.failures, 0, JSON.stringify(result.outcomes.length ? result.outcomes : result.searchFailures));
       assert.deepEqual(requests, [...Array.from({ length: 10 }, () => "api.search.brave.com"), "generativelanguage.googleapis.com", "api.resend.com"]);
@@ -431,7 +482,7 @@ test("complete Worker D1 batch composition has one provider dispatch for four se
       assert.equal(result.batch?.reservationAttempts, 1); assert.equal(result.batch?.reservations, 1); assert.equal(result.batch?.providerDispatches, 1);
       assert.equal(result.batch?.returnedStories, 4); assert.equal(result.batch?.acceptedStories, 4);
       assert.deepEqual(result.batch?.selected.map(entry => entry.candidateId), ["c050", "c001", "c002", "c003"]);
-      assert.deepEqual(result.batch?.selected[0]?.provenance, [{ queryOrdinal: 10, resultOrdinal: 5 }]);
+      assert.deepEqual(result.batch?.selected[0]?.provenance, [{ kind: "brave", queryOrdinal: 10, resultOrdinal: 5 }]);
       assert.equal(result.batch?.freshDelivered, 4); assert.equal(result.batch?.emailCount, 1);
       assert.deepEqual(database.prepare("SELECT normalized_url FROM discoveries ORDER BY normalized_url").all().map(row => row.normalized_url), [...sourceUrls].sort());
       assert.equal(database.prepare("SELECT COUNT(*) AS n FROM notifications").get()!.n, 4);

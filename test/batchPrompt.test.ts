@@ -12,7 +12,7 @@ function candidate(index: number, source: Partial<SearchResult> = {}): BatchCand
   return {
     candidateId: `c${String(index).padStart(3, "0")}`, source: result,
     normalizedUrl: result.url, aliasKey: result.url, aliases: [result.url],
-    provenance: [{ queryOrdinal: 1, resultOrdinal: 1 }],
+    provenance: [{ kind: "brave", queryOrdinal: 1, resultOrdinal: 1 }],
   };
 }
 
@@ -47,9 +47,15 @@ test("normal fifty-result pool is submitted together", () => {
 test("fixed-key JSON preserves full URLs and serializes sorted unique valid query ordinals", () => {
   const input = candidate(1, { title: " \t Original\n title  ", snippet: "  One\r\n two\tthree ", url: "https://EXAMPLE.test/news///?x=1#part" });
   input.normalizedUrl = "https://example.test/news?x=1#part";
-  input.provenance = [8, 2, 8, 1, 10, 0, 11, 1.5].map((queryOrdinal) => ({ queryOrdinal, resultOrdinal: 1 }));
+  input.provenance = [8, 2, 8, 1, 10, 0, 11, 1.5].map((queryOrdinal) => ({ kind: "brave" as const, queryOrdinal, resultOrdinal: 1 }));
   const batch = prepareBatchPrompt([input], "instructions");
   assert.equal(batch.prompt, 'instructions\n\n{"schemaVersion":1,"candidates":[{"candidateId":"c001","title":"Original title","snippet":"One two three","url":"https://EXAMPLE.test/news///?x=1#part","publishedAt":null,"queryOrdinals":[1,2,8,10]}]}');
+});
+
+test("RSS-only candidates submit with no invented Brave query ordinals", () => {
+  const input = candidate(1, { title: "RSS release", url: "https://example.test/rss-release" });
+  input.provenance = [{ kind: "rss", feedId: "openai_news", itemOrdinal: 1 }];
+  assert.deepEqual(payload(prepareBatchPrompt([input], "instructions")).candidates[0]?.queryOrdinals, []);
 });
 
 test("provider dates use UTC midnight or explicit timezone and reject relative, invalid and ambiguous values", () => {

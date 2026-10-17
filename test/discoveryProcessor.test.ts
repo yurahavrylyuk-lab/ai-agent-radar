@@ -159,7 +159,7 @@ function batchSelection(url = "https://example.test/news/release"): BatchSelecti
   const source = searchResult(url);
   return {
     candidate: { candidateId: "c001", source, normalizedUrl: url, aliasKey: url,
-      aliases: [url], provenance: [{ queryOrdinal: 1, resultOrdinal: 1 }] },
+      aliases: [url], provenance: [{ kind: "brave", queryOrdinal: 1, resultOrdinal: 1 }] },
     analysis: analysisFor(source),
   };
 }

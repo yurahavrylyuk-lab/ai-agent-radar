@@ -9,7 +9,9 @@ import { createGeminiBatchCycleContext, generateBatchWithGemini } from "./tools/
 import { sendWithResend } from "./tools/email/resend.js";
 import { searchWebPage } from "./tools/webSearch.js";
 import { runBatchMonitoringCycle, type BatchMonitoringDependencies } from "./services/monitor.js";
-import type { BatchCycleMetrics, MonitoringCycleResult } from "./types/index.js";
+import { collectRss } from "./services/rssDiscovery.js";
+import { RSS_FEEDS } from "./config/rssSources.js";
+import type { BatchCycleMetrics, MonitoringCycleResult, RssCycleMetrics } from "./types/index.js";
 
 export const MAX_SCHEDULED_OUTCOMES_LOGGED = 10;
 export const MAX_SCHEDULED_SEARCH_FAILURES_LOGGED = 10;
@@ -40,6 +42,7 @@ export interface RadarWorkerEnv {
 
 export interface ScheduledCycleSummary {
   batch?: BatchCycleMetrics;
+  rss?: RssCycleMetrics;
   event: "scheduled_monitoring_cycle_completed";
   searchResultsReceived: number;
   searchFailuresTotal: number;
@@ -126,7 +129,8 @@ function allowedString<T extends string>(value: unknown, allowed: readonly T[]):
 /** Copies only bounded application evidence; never serialize the candidate map or model/source text. */
 function summarizeBatch(batch: BatchCycleMetrics, env: RadarWorkerEnv): BatchCycleMetrics {
   const selected: BatchCycleMetrics["selected"] = [];
-  let remainingProvenance = 50;
+  let remainingProvenance = 75;
+  const approvedFeedIds = new Set(RSS_FEEDS.map(feed => feed.id));
   for (const entry of (Array.isArray(batch.selected) ? batch.selected : []).slice(0, 4)) {
     if (!entry || typeof entry.candidateId !== "string" || !/^c(?:00[1-9]|0[1-4][0-9]|050)$/.test(entry.candidateId)
       || !Number.isInteger(entry.score) || entry.score < 7 || entry.score > 10) continue;
@@ -137,25 +141,52 @@ function summarizeBatch(batch: BatchCycleMetrics, env: RadarWorkerEnv): BatchCyc
     const seen = new Set<string>();
     for (const pair of (Array.isArray(entry.provenance) ? entry.provenance : []).slice(0, 50)) {
       if (remainingProvenance === 0) break;
-      if (!pair || !Number.isInteger(pair.queryOrdinal) || pair.queryOrdinal < 1 || pair.queryOrdinal > 10
-        || !Number.isInteger(pair.resultOrdinal) || pair.resultOrdinal < 1 || pair.resultOrdinal > 5) continue;
-      const key = `${pair.queryOrdinal}:${pair.resultOrdinal}`;
+      if (!pair || typeof pair !== "object") continue;
+      const valid = pair.kind === "brave"
+        ? Number.isInteger(pair.queryOrdinal) && pair.queryOrdinal >= 1 && pair.queryOrdinal <= 10
+          && Number.isInteger(pair.resultOrdinal) && pair.resultOrdinal >= 1 && pair.resultOrdinal <= 5
+        : pair.kind === "rss" && typeof pair.feedId === "string" && approvedFeedIds.has(pair.feedId)
+          && Number.isInteger(pair.itemOrdinal) && pair.itemOrdinal >= 1 && pair.itemOrdinal <= 5;
+      if (!valid) continue;
+      const key = pair.kind === "brave" ? `b:${pair.queryOrdinal}:${pair.resultOrdinal}` : `r:${pair.feedId}:${pair.itemOrdinal}`;
       if (seen.has(key)) continue;
       seen.add(key); remainingProvenance--;
-      provenance.push({ queryOrdinal: pair.queryOrdinal, resultOrdinal: pair.resultOrdinal });
+      provenance.push(pair.kind === "brave"
+        ? { kind: "brave", queryOrdinal: pair.queryOrdinal, resultOrdinal: pair.resultOrdinal }
+        : { kind: "rss", feedId: pair.feedId, itemOrdinal: pair.itemOrdinal });
     }
     selected.push({ candidateId: entry.candidateId, hostname, score: entry.score, provenance });
   }
   return {
     searchAttempts: boundedCount(batch.searchAttempts, 10), searchSuccesses: boundedCount(batch.searchSuccesses, 10), searchFailures: boundedCount(batch.searchFailures, 10),
-    rawObservations: boundedCount(batch.rawObservations), acceptedObservations: boundedCount(batch.acceptedObservations, 50),
-    invalid: boundedCount(batch.invalid, 50), homepages: boundedCount(batch.homepages, 50), duplicates: boundedCount(batch.duplicates, 50), known: boundedCount(batch.known, 50),
+    rawObservations: boundedCount(batch.rawObservations, 75), acceptedObservations: boundedCount(batch.acceptedObservations, 75),
+    invalid: boundedCount(batch.invalid, 75), homepages: boundedCount(batch.homepages, 75), duplicates: boundedCount(batch.duplicates, 75), known: boundedCount(batch.known, 75),
+    poolCapExcluded: boundedCount(batch.poolCapExcluded, 75),
     sizeExcluded: boundedCount(batch.sizeExcluded, 50), submittedCandidates: boundedCount(batch.submittedCandidates, 50), promptBytes: boundedCount(batch.promptBytes, 32768),
+    submittedBySource: { brave: boundedCount(batch.submittedBySource?.brave, 50), rss: boundedCount(batch.submittedBySource?.rss, 25) },
     truncationStage: allowedString(batch.truncationStage, ["initial", "snippet384", "snippet192", "snippet96", "snippet0", "title128", "tail"] as const) ?? null,
     status: allowedString(batch.status, ["empty", "blocked", "preparation_failed", "provider_failed", "timeout", "invalid_output", "validated"]) ?? "preparation_failed",
     reservationAttempts: boundedCount(batch.reservationAttempts, 1), reservations: boundedCount(batch.reservations, 1), providerDispatches: boundedCount(batch.providerDispatches, 1),
     returnedStories: boundedCount(batch.returnedStories, 4), acceptedStories: boundedCount(batch.acceptedStories, 4), selected,
     freshDelivered: boundedCount(batch.freshDelivered, 4), replayDelivered: boundedCount(batch.replayDelivered, 4), emailCount: boundedCount(batch.emailCount, 1),
+  };
+}
+
+function summarizeRss(rss: RssCycleMetrics): RssCycleMetrics {
+  const approvedFeedIds = new Set(RSS_FEEDS.map(feed => feed.id));
+  const outcomes = (Array.isArray(rss.outcomes) ? rss.outcomes : []).slice(0, 5).flatMap(outcome => {
+    if (!outcome || !approvedFeedIds.has(outcome.feedId)) return [];
+    const reason = allowedString(outcome.reason, ["disabled", "configuration", "http", "redirect", "timeout", "body_limit", "encoding", "parse", "structure", "ok"] as const);
+    if (!reason) return [];
+    const httpStatus = Number.isInteger(outcome.httpStatus) && outcome.httpStatus! >= 100 && outcome.httpStatus! <= 599 ? outcome.httpStatus : undefined;
+    return [{ feedId: outcome.feedId, reason, ...(httpStatus === undefined ? {} : { httpStatus }), elapsedMs: boundedCount(outcome.elapsedMs, 5000) }];
+  });
+  return {
+    status: allowedString(rss.status, ["disabled", "configuration", "collected"] as const) ?? "configuration",
+    configuredFeeds: boundedCount(rss.configuredFeeds, 5), attemptedFeeds: boundedCount(rss.attemptedFeeds, 5),
+    succeededFeeds: boundedCount(rss.succeededFeeds, 5), failedFeeds: boundedCount(rss.failedFeeds, 5),
+    observedPositions: boundedCount(rss.observedPositions, 25), validCandidates: boundedCount(rss.validCandidates, 25),
+    rejectedItems: boundedCount(rss.rejectedItems, 25), itemLimitTruncations: boundedCount(rss.itemLimitTruncations, 5), outcomes,
   };
 }
 
@@ -183,6 +214,7 @@ export function createScheduledCycleSummary(
   return {
     event: "scheduled_monitoring_cycle_completed",
     ...(result.batch === undefined ? {} : { batch: summarizeBatch(result.batch, env) }),
+    ...(result.rss === undefined ? {} : { rss: summarizeRss(result.rss) }),
     searchResultsReceived: boundedCount(result.searchResultsReceived),
     searchFailuresTotal: result.searchFailures.length,
     searchFailuresOmitted: Math.max(0, result.searchFailures.length - searchFailures.length),
@@ -247,6 +279,7 @@ export function createWorkerPersistence(env: RadarWorkerEnv) {
 /** Creates cloud-ready cycle dependencies without invoking a monitoring cycle. */
 export interface WorkerMonitoringDependencyOverrides {
   readonly searchPage?: typeof searchWebPage;
+  readonly collectRss?: BatchMonitoringDependencies["collectRss"];
 }
 
 export function createWorkerMonitoringDependencies(
@@ -267,6 +300,7 @@ export function createWorkerMonitoringDependencies(
       environment: configuration.environment,
       freshness: options?.freshness,
     }),
+    collectRss: overrides.collectRss ?? (now => collectRss({ now, fetch: globalThis.fetch })),
     analyze: batch => analyzeBatch(batch, {
       generate: input => generateBatchWithGemini(input, {
         usageTracker: persistence.geminiUsageStore,

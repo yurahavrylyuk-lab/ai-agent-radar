@@ -48,6 +48,14 @@ Cloudflare Cron
 - Optional discovery: P6 X selected-account polling is implemented but disabled by default and is not a verified production provider. Its immutable v1 identity registry is source-controlled; handles are display-only.
 - OpenAI: not used in the cloud production execution path. Local legacy tooling/dependencies do not authorize inclusion in the deployed Worker runtime.
 
+## RSS implementation checkpoint (not deployed)
+
+The `codex/rss-discovery` source checkpoint implements the approved RSS design for independent review; it is not a deployed production fact. The registry contains exactly four approved first-party feeds (OpenAI News, GitHub Changelog, Cloudflare AI, and Chrome for Developers) in fixed order. Collection remains bounded to five configured feeds, five item positions per feed, one request with no retry or redirect, a 5-second request-through-body deadline, and 256 KiB per feed. Failures are isolated from Brave and expose only bounded allowlisted telemetry.
+
+Brave and RSS observations enter the same canonical URL/history/notification deduplication path before deterministic interleaving into the existing 50-candidate, 32 KiB prompt. The scheduled path retains one Gemini dispatch maximum, score threshold 7, four stories maximum, and one email maximum. The implementation adds no D1 schema or migration, does not use X or migration `0004`, and does not add Threads behavior. Production remains on the verified checkpoint recorded above until a separate review, merge, and deployment authorization.
+
+The parser dependency is pinned to `saxes@6.0.0` with `xmlchars@2.2.0`. This is the bounded amendment to the original `sax` selection after Wrangler proved that `sax` retained unused Node stream shims. Offline verification passed 601/601 tests, build, Worker typecheck, whitespace validation, and a Wrangler bundle audit with no Node built-in, dotenv, local JSON, or OpenAI runtime dependency introduced by RSS.
+
 ## Limits
 
 Maximum per autonomous monitoring cycle:
