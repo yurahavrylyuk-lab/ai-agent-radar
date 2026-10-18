@@ -244,13 +244,13 @@ export async function collectRss(options: { now: Date; fetch: typeof fetch; feed
     try {
       const response = await withAbort(options.fetch(feed.endpoint, {
         method: "GET",
-        redirect: "error",
+        redirect: "manual",
         credentials: "omit",
         signal: controller.signal,
         headers: { accept: "application/rss+xml, application/atom+xml, application/xml, text/xml" },
       }), controller.signal);
       httpStatus = response.status;
-      if (response.redirected) { reason = "redirect"; throw new Error("redirect"); }
+      if ((response.status >= 300 && response.status <= 399) || response.redirected) { reason = "redirect"; throw new Error("redirect"); }
       if (!response.ok) { reason = "http"; throw new Error("http"); }
       if (!xmlMediaType(response)) { reason = "encoding"; throw new Error("encoding"); }
       const declared = response.headers.get("content-length");
