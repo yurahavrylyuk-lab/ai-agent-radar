@@ -136,7 +136,7 @@ test("collector fetches configured feeds sequentially once with hardened request
     return new Response(healthyXml, { headers: { "content-type": "application/rss+xml; charset=utf-8" } });
   } });
   assert.deepEqual(calls.map(call => call.url), feeds.map(entry => entry.endpoint));
-  assert.ok(calls.every(call => call.init?.redirect === "error" && call.init?.credentials === "omit" && call.init?.signal instanceof AbortSignal));
+  assert.ok(calls.every(call => call.init?.redirect === "manual" && call.init?.credentials === "omit" && call.init?.signal instanceof AbortSignal));
   assert.equal(result.observations.length, 2);
   assert.deepEqual(result.observations[0]?.provenance, { kind: "rss", feedId: "one", itemOrdinal: 1 });
   assert.deepEqual({ ...result.metrics, outcomes: result.metrics.outcomes.map(({ elapsedMs: _elapsedMs, ...outcome }) => outcome) }, {
@@ -145,6 +145,48 @@ test("collector fetches configured feeds sequentially once with hardened request
     outcomes: [{ feedId: "one", reason: "ok" }, { feedId: "two", reason: "ok" }],
   });
   assert.ok(result.metrics.outcomes.every(outcome => Number.isSafeInteger(outcome.elapsedMs) && outcome.elapsedMs >= 0));
+});
+
+test("collector succeeds with a workerd-compatible manual redirect policy", async () => {
+  let calls = 0;
+  const result = await collectRss({
+    now,
+    feeds: [feed()],
+    fetch: async (_input, init) => {
+      calls += 1;
+      if (init?.redirect === "error") throw new TypeError("redirect error mode is unsupported");
+      assert.equal(init?.redirect, "manual");
+      return new Response(healthyXml, { headers: { "content-type": "application/rss+xml; charset=utf-8" } });
+    },
+  });
+
+  assert.equal(calls, 1);
+  assert.equal(result.metrics.succeededFeeds, 1);
+  assert.equal(result.metrics.failedFeeds, 0);
+  assert.equal(result.observations.length, 1);
+});
+
+test("collector classifies manual redirects without following them", async () => {
+  const statuses = [301, 302, 307, 308];
+  const feeds = statuses.map((status, index) => feed({ id: `redirect_${status}`, endpoint: `https://example.com/feed-${index}.xml` }));
+  const calls: string[] = [];
+  const result = await collectRss({
+    now,
+    feeds,
+    fetch: async (input, init) => {
+      calls.push(String(input));
+      assert.equal(init?.redirect, "manual");
+      const status = statuses[calls.length - 1]!;
+      return new Response(null, { status, headers: { location: `https://redirected.example/feed-${status}.xml` } });
+    },
+  });
+
+  assert.deepEqual(calls, feeds.map(entry => entry.endpoint));
+  assert.equal(calls.length, feeds.length);
+  assert.equal(result.metrics.succeededFeeds, 0);
+  assert.equal(result.metrics.failedFeeds, feeds.length);
+  assert.deepEqual(result.metrics.outcomes.map(outcome => outcome.reason), statuses.map(() => "redirect"));
+  assert.equal(result.observations.length, 0);
 });
 
 test("collector disables empty registry and fails closed on invalid configuration without fetch", async () => {
