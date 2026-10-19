@@ -282,6 +282,8 @@ export interface WorkerMonitoringDependencyOverrides {
   readonly collectRss?: BatchMonitoringDependencies["collectRss"];
 }
 
+export const workerdRssFetch: typeof fetch = (input, init) => globalThis.fetch(input, init);
+
 export function createWorkerMonitoringDependencies(
   env: RadarWorkerEnv,
   overrides: WorkerMonitoringDependencyOverrides = {},
@@ -300,7 +302,7 @@ export function createWorkerMonitoringDependencies(
       environment: configuration.environment,
       freshness: options?.freshness,
     }),
-    collectRss: overrides.collectRss ?? (now => collectRss({ now, fetch: globalThis.fetch })),
+    collectRss: overrides.collectRss ?? (now => collectRss({ now, fetch: workerdRssFetch })),
     analyze: batch => analyzeBatch(batch, {
       generate: input => generateBatchWithGemini(input, {
         usageTracker: persistence.geminiUsageStore,
