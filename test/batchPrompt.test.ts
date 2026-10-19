@@ -44,6 +44,13 @@ test("normal fifty-result pool is submitted together", () => {
   assert.ok(batch.prompt.startsWith(BATCH_ANALYSIS_INSTRUCTIONS + "\n\n"));
 });
 
+test("batch instructions ask for the best bounded stories regardless of score", () => {
+  assert.match(BATCH_ANALYSIS_INSTRUCTIONS, /up to four best/i);
+  assert.match(BATCH_ANALYSIS_INSTRUCTIONS, /integer relevanceScore from 1 to 10/i);
+  assert.match(BATCH_ANALYSIS_INSTRUCTIONS, /do not omit.*solely.*below 7/i);
+  assert.doesNotMatch(BATCH_ANALYSIS_INSTRUCTIONS, /relevanceScore >= 7/);
+});
+
 test("fixed-key JSON preserves full URLs and serializes sorted unique valid query ordinals", () => {
   const input = candidate(1, { title: " \t Original\n title  ", snippet: "  One\r\n two\tthree ", url: "https://EXAMPLE.test/news///?x=1#part" });
   input.normalizedUrl = "https://example.test/news?x=1#part";

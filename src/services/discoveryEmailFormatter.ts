@@ -14,6 +14,7 @@ const PANEL_BACKGROUND = "#182235";
 const PRIMARY_TEXT = "#f8fafc";
 const SECONDARY_TEXT = "#a8b3c7";
 const ACCENT = "#78a9ff";
+const LOW_RELEVANCE_LABEL = "It could be relevant";
 
 function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, (character) => ({
@@ -203,7 +204,7 @@ function leadBlockHtml(story: StoredDiscovery, batch = false): string {
   return `<tr>
               <td style="padding: 24px 30px 28px; border-bottom: 1px solid #26344d;">
                 ${sectionLabel(batch ? "MOST RELEVANT" : "Lead story")}
-                <h2 style="margin: 0 0 10px; color: ${PRIMARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 22px; font-weight: 700; line-height: 28px;">${escapeHtml(story.analysis.name)}</h2>${batch ? `<p style="margin: 0 0 10px; color: ${ACCENT}; font-family: Arial, Helvetica, sans-serif; font-size: 14px; line-height: 20px;">Relevance: ${story.analysis.relevanceScore}/10</p>` : ""}
+                <h2 style="margin: 0 0 10px; color: ${PRIMARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 22px; font-weight: 700; line-height: 28px;">${escapeHtml(story.analysis.name)}</h2>${batch ? `<p style="margin: 0 0 10px; color: ${ACCENT}; font-family: Arial, Helvetica, sans-serif; font-size: 14px; line-height: 20px;">Relevance: ${story.analysis.relevanceScore}/10</p>${story.analysis.relevanceScore < 7 ? `<p style="margin: 0 0 10px; color: ${ACCENT}; font-family: Arial, Helvetica, sans-serif; font-size: 14px; font-weight: 700; line-height: 20px;">${LOW_RELEVANCE_LABEL}</p>` : ""}` : ""}
                 <p style="margin: 0 0 20px; color: ${SECONDARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 15px; line-height: 22px;">${escapeHtml(story.analysis.summary)}</p>
                 ${sectionLabel("Why it matters")}
                 <p style="margin: 0 0 20px; color: ${PRIMARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 15px; line-height: 22px;">${escapeHtml(story.analysis.whyItMatters)}</p>
@@ -222,7 +223,7 @@ function conciseBlockHtml(story: StoredDiscovery, slot: number, batch = false): 
   return `<tr>
               <td style="padding: 20px 30px; border-top: 1px solid #26344d;">
                 <p style="margin: 0 0 4px; color: ${ACCENT}; font-family: Arial, Helvetica, sans-serif; font-size: 11px; font-weight: 700; letter-spacing: 1.1px; line-height: 16px; text-transform: uppercase;">Story ${slot}</p>
-                <p style="margin: 0 0 8px; color: ${PRIMARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 15px; font-weight: 700; line-height: 20px;">${escapeHtml(story.analysis.name)}</p>${batch ? `<p style="margin: 0 0 8px; color: ${ACCENT}; font-family: Arial, Helvetica, sans-serif; font-size: 14px; line-height: 20px;">Relevance: ${story.analysis.relevanceScore}/10</p>` : ""}
+                <p style="margin: 0 0 8px; color: ${PRIMARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 15px; font-weight: 700; line-height: 20px;">${escapeHtml(story.analysis.name)}</p>${batch ? `<p style="margin: 0 0 8px; color: ${ACCENT}; font-family: Arial, Helvetica, sans-serif; font-size: 14px; line-height: 20px;">Relevance: ${story.analysis.relevanceScore}/10</p>${story.analysis.relevanceScore < 7 ? `<p style="margin: 0 0 8px; color: ${ACCENT}; font-family: Arial, Helvetica, sans-serif; font-size: 14px; font-weight: 700; line-height: 20px;">${LOW_RELEVANCE_LABEL}</p>` : ""}` : ""}
                 <p style="margin: 0 0 10px; color: ${SECONDARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 14px; line-height: 20px;">${escapeHtml(story.analysis.summary)}</p>${batch ? `<p style="margin: 0 0 10px; color: ${PRIMARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 14px; line-height: 20px;">${escapeHtml(story.analysis.whyItMatters)}</p>` : ""}
                 <a href="${escapeHtml(href)}" style="color: ${ACCENT}; font-family: Arial, Helvetica, sans-serif; font-size: 13px; font-weight: 700; line-height: 18px; text-decoration: none;">${escapeHtml(story.analysis.sourceTitle)} &#8594;</a>
                 ${xAttributionHtml(story)}
@@ -261,6 +262,7 @@ function formatDigest(stories: StoredDiscovery[], options: DigestEmailOptions, b
     [
       `${batch ? "MOST RELEVANT" : "STORY 1 — LEAD"}\n${lead.analysis.name}`,
       ...(batch ? [`Relevance: ${lead.analysis.relevanceScore}/10`] : []),
+      ...(batch && lead.analysis.relevanceScore < 7 ? [LOW_RELEVANCE_LABEL] : []),
       `SUMMARY\n${lead.analysis.summary}`,
       `WHY IT MATTERS\n${lead.analysis.whyItMatters}`,
       ...(batch ? [`WHAT YOU CAN LEARN\n${lead.analysis.educationalValue}`] : []),
@@ -269,7 +271,7 @@ function formatDigest(stories: StoredDiscovery[], options: DigestEmailOptions, b
       `SOURCE\n${lead.analysis.sourceTitle}\n${lead.analysis.sourceUrl}${xAttributionText(lead)}`,
     ].join("\n\n"),
     ...concise.map((story, i) =>
-      [`STORY ${i + 2}\n${story.analysis.name}`, ...(batch ? [`Relevance: ${story.analysis.relevanceScore}/10`] : []), story.analysis.summary, ...(batch ? [`WHY IT MATTERS\n${story.analysis.whyItMatters}`] : []), `SOURCE\n${story.analysis.sourceTitle}\n${story.analysis.sourceUrl}${xAttributionText(story)}`].join("\n\n"),
+      [`STORY ${i + 2}\n${story.analysis.name}`, ...(batch ? [`Relevance: ${story.analysis.relevanceScore}/10`] : []), ...(batch && story.analysis.relevanceScore < 7 ? [LOW_RELEVANCE_LABEL] : []), story.analysis.summary, ...(batch ? [`WHY IT MATTERS\n${story.analysis.whyItMatters}`] : []), `SOURCE\n${story.analysis.sourceTitle}\n${story.analysis.sourceUrl}${xAttributionText(story)}`].join("\n\n"),
     ),
     "AI Agent Radar\nAutomated AI discovery monitor",
   ];

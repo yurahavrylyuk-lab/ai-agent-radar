@@ -185,7 +185,7 @@ export function parseBatchAnalysis(outputText: string, batch: PreparedBatch): Ba
 
   return {
     returnedCount: validated.length,
-    selections: validated.filter(({ story }) => story.relevanceScore >= 7).map(({ story, candidate }) => {
+    selections: validated.map(({ story, candidate }) => {
       const { candidateId: _candidateId, ...analysis } = story;
       return { candidate, analysis: { ...analysis, sourceTitle: candidate.source.title, sourceUrl: candidate.source.url } };
     }),

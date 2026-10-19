@@ -76,6 +76,42 @@ test("batch replay sorts score then immutable firstSeenAt then direct lexical UR
   ]);
 });
 
+test("batch replay keeps and visibly marks a previously selected low-score story", async () => {
+  const low = replayCandidate("low-replay", 5);
+  let sends = 0;
+  const outcome = await orchestrator.notifyBatchDeliveryDigest([low], {
+    history: replayNotificationHistory(),
+    sendEmail: async email => {
+      sends += 1;
+      assert.match(email.text, /It could be relevant/);
+      assert.match(email.html, /It could be relevant/);
+      return { id: "low-replay" };
+    },
+  });
+  assert.equal(sends, 1);
+  assert.deepEqual(outcome.sentCandidates.map(candidate => candidate.discovery.analysis.sourceUrl), [
+    "https://example.com/low-replay",
+  ]);
+});
+
+test("an already-notified low-score Batch story is not resent", async () => {
+  const low = replayCandidate("already-sent-low", 4);
+  let sends = 0;
+  const existing = { normalizedUrl: low.discovery.normalizedUrl, channel: "email" as const,
+    providerMessageId: "existing", sentAt: "2026-10-13T08:00:00.000Z" };
+  const outcome = await orchestrator.notifyBatchDeliveryDigest([low], {
+    history: {
+      async hasNotificationBeenSent() { return true; },
+      async getNotificationRecord() { return existing; },
+      async recordNotificationSent() { throw new Error("unexpected notification write"); },
+    },
+    sendEmail: async () => { sends += 1; return { id: "unexpected" }; },
+  });
+  assert.equal(sends, 0);
+  assert.equal(outcome.notifications.get(low.discovery.analysis.sourceUrl)?.status, "already_sent");
+  assert.deepEqual(outcome.sentCandidates, []);
+});
+
 test("batch fresh scores8 and7 precede replay10 without a trusted-source bonus", async () => {
   const fresh = [replayCandidate("fresh8", 8), replayCandidate("fresh7", 7)];
   fresh.forEach(c => { c.origin = "fresh"; });

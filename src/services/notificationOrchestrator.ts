@@ -184,7 +184,7 @@ async function recordDigestDelivery(
   return sentCandidates;
 }
 
-/** Threshold-only delivery of an already-bounded, persisted fresh/replay pool. */
+/** Delivery of an already-bounded, persisted fresh/replay Batch selection. */
 export async function notifyBatchDeliveryDigest(
   candidates: readonly BatchDeliveryCandidate[],
   dependencies: NotificationOrchestratorDependencies & {
@@ -211,7 +211,7 @@ export async function notifyBatchDeliveryDigest(
       group.index = index;
     }
     // Collect all evidence before choosing a representative, including aliases
-    // contributed by duplicate or below-threshold candidates.
+    // contributed by duplicate candidates.
     group.urls.add(url);
     for (const alias of [url, candidate.discovery.normalizedUrl, ...candidate.aliases]) {
       group.aliases.add(normalizeDiscoveryUrl(alias));
@@ -244,8 +244,7 @@ export async function notifyBatchDeliveryDigest(
   };
 
   const initiallyUnsent = await excludeNotified([...groups.values()]);
-  const ranked = initiallyUnsent.filter(({ candidate }) => candidate.discovery.analysis.relevanceScore >= 7)
-    .sort((left, right) => {
+  const ranked = initiallyUnsent.sort((left, right) => {
       const a = left.candidate;
       const b = right.candidate;
       if (a.origin !== b.origin) return a.origin === "fresh" ? -1 : 1;

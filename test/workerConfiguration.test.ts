@@ -333,6 +333,14 @@ test("scheduled selected telemetry retains bounded mixed Brave and RSS provenanc
   ]);
 });
 
+test("scheduled selected telemetry retains bounded low-relevance Batch stories", () => {
+  const summary = createScheduledCycleSummary(monitoringResult({ batch: batchMetrics({ selected: [
+    { candidateId: "c001", hostname: "example.test", score: 6, provenance: [] },
+    { candidateId: "c002", hostname: "example.test", score: 1, provenance: [] },
+  ] }) }), environment());
+  assert.deepEqual(summary.batch?.selected.map(entry => entry.score), [6, 1]);
+});
+
 test("scheduled batch serialization allowlists and bounds malicious selected evidence and every diagnostic string", () => {
   const env = environment(); const secret = env.GEMINI_API_KEY;
   const fullSourceUrl = "https://private.example.test/story?token=private";
