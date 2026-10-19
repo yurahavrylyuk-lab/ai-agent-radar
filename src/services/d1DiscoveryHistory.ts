@@ -1,7 +1,9 @@
 import {
   DiscoveryHistoryError,
+  copyBatchSelectionProvenance,
   copyXSourceProvenance,
   isValidAgentAnalysis,
+  isValidBatchSelectionProvenance,
   isValidXSourceProvenance,
   normalizeDiscoveryUrl,
   validateRecentDiscoveryQuery,
@@ -10,7 +12,7 @@ import {
   type RecentDiscoveryQuery,
   type RecentDiscoveryResult,
 } from "./discoveryHistoryCore.js";
-import type { AgentAnalysis, StoredDiscovery, XSourceProvenance } from "../types/index.js";
+import type { AgentAnalysis, BatchSelectionProvenance, StoredDiscovery, XSourceProvenance } from "../types/index.js";
 
 interface DiscoveryRow {
   normalized_url: string;
@@ -29,7 +31,8 @@ function copyAnalysis(analysis: AgentAnalysis): AgentAnalysis {
 }
 
 function copy(discovery: StoredDiscovery): StoredDiscovery {
-  return { ...discovery, analysis: copyAnalysis(discovery.analysis), sourceProvenance: copyXSourceProvenance(discovery.sourceProvenance) };
+  return { ...discovery, analysis: copyAnalysis(discovery.analysis), sourceProvenance: copyXSourceProvenance(discovery.sourceProvenance),
+    batchSelectionProvenance: copyBatchSelectionProvenance(discovery.batchSelectionProvenance) };
 }
 
 function isTimestamp(value: string): boolean {
@@ -52,9 +55,12 @@ function discoveryFromRow(row: DiscoveryRow): StoredDiscovery {
   if (!isValidAgentAnalysis(persisted) || row.normalized_url !== normalizeDiscoveryUrl(persisted.sourceUrl)) {
     throw new DiscoveryHistoryError("D1 discovery history contains an invalid record.");
   }
-  const persistedRecord = persisted as AgentAnalysis & { sourceProvenance?: unknown };
+  const persistedRecord = persisted as AgentAnalysis & { sourceProvenance?: unknown; batchSelectionProvenance?: unknown };
   if (persistedRecord.sourceProvenance !== undefined && !isValidXSourceProvenance(persistedRecord.sourceProvenance)) {
     throw new DiscoveryHistoryError("D1 discovery history contains invalid source provenance.");
+  }
+  if (persistedRecord.batchSelectionProvenance !== undefined && !isValidBatchSelectionProvenance(persistedRecord.batchSelectionProvenance)) {
+    throw new DiscoveryHistoryError("D1 discovery history contains invalid batch selection provenance.");
   }
   const analysis: AgentAnalysis = copyAnalysis(persistedRecord);
 
@@ -64,6 +70,7 @@ function discoveryFromRow(row: DiscoveryRow): StoredDiscovery {
     lastSeenAt: row.last_seen_at,
     analysis: copyAnalysis(analysis),
     sourceProvenance: copyXSourceProvenance(persistedRecord.sourceProvenance as XSourceProvenance | undefined),
+    batchSelectionProvenance: copyBatchSelectionProvenance(persistedRecord.batchSelectionProvenance as BatchSelectionProvenance | undefined),
   };
 }
 
@@ -119,13 +126,14 @@ export class D1DiscoveryHistory implements DiscoveryHistory {
     return (await this.getDiscovery(url)) !== undefined;
   }
 
-  async recordDiscovery(analysis: AgentAnalysis, seenAt = new Date(), sourceProvenance?: XSourceProvenance): Promise<StoredDiscovery> {
-    return (await this.recordDiscoveryWithOutcome(analysis, seenAt, sourceProvenance)).discovery;
+  async recordDiscovery(analysis: AgentAnalysis, seenAt = new Date(), sourceProvenance?: XSourceProvenance, batchSelectionProvenance?: BatchSelectionProvenance): Promise<StoredDiscovery> {
+    return (await this.recordDiscoveryWithOutcome(analysis, seenAt, sourceProvenance, batchSelectionProvenance)).discovery;
   }
 
-  async recordDiscoveryWithOutcome(analysis: AgentAnalysis, seenAt = new Date(), sourceProvenance?: XSourceProvenance): Promise<DiscoveryRecordOutcome> {
+  async recordDiscoveryWithOutcome(analysis: AgentAnalysis, seenAt = new Date(), sourceProvenance?: XSourceProvenance, batchSelectionProvenance?: BatchSelectionProvenance): Promise<DiscoveryRecordOutcome> {
     if (!isValidAgentAnalysis(analysis)) throw new DiscoveryHistoryError("Discovery analysis is invalid and cannot be recorded.");
     if (sourceProvenance !== undefined && !isValidXSourceProvenance(sourceProvenance)) throw new DiscoveryHistoryError("Discovery source provenance is invalid.");
+    if (batchSelectionProvenance !== undefined && !isValidBatchSelectionProvenance(batchSelectionProvenance)) throw new DiscoveryHistoryError("Discovery batch selection provenance is invalid.");
     if (Number.isNaN(seenAt.getTime())) throw new DiscoveryHistoryError("Discovery timestamp is invalid.");
 
     const normalizedUrl = normalizeDiscoveryUrl(analysis.sourceUrl);
@@ -133,7 +141,8 @@ export class D1DiscoveryHistory implements DiscoveryHistory {
     try {
       const result = await this.database.prepare(
         "INSERT OR IGNORE INTO discoveries (normalized_url, first_seen_at, last_seen_at, analysis_json) VALUES (?1, ?2, ?3, ?4)",
-      ).bind(normalizedUrl, timestamp, timestamp, JSON.stringify({ ...copyAnalysis(analysis), ...(sourceProvenance ? { sourceProvenance: copyXSourceProvenance(sourceProvenance) } : {}) })).run();
+      ).bind(normalizedUrl, timestamp, timestamp, JSON.stringify({ ...copyAnalysis(analysis), ...(sourceProvenance ? { sourceProvenance: copyXSourceProvenance(sourceProvenance) } : {}),
+        ...(batchSelectionProvenance ? { batchSelectionProvenance: copyBatchSelectionProvenance(batchSelectionProvenance) } : {}) })).run();
       if (result.success !== true || (result.meta?.changes !== 0 && result.meta?.changes !== 1)) {
         throw new DiscoveryHistoryError("D1 discovery insert outcome could not be verified safely.");
       }

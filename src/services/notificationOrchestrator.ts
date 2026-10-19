@@ -201,6 +201,8 @@ export async function notifyBatchDeliveryDigest(
     const url = candidate.discovery.analysis.sourceUrl;
     notifications.set(url, { status: "not_eligible" });
     if (!isBatchNewsUrl(url)) continue;
+    if (candidate.origin === "replay" && candidate.discovery.analysis.relevanceScore < 7
+      && candidate.discovery.batchSelectionProvenance?.kind !== "batch") continue;
     const key = batchAliasKey(candidate.discovery.normalizedUrl);
     let group = groups.get(key);
     if (!group) {

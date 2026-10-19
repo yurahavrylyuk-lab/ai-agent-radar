@@ -192,7 +192,7 @@ function selectionFor(analysis: AgentAnalysis): BatchSelection {
     provenance: [{ kind: "brave", queryOrdinal: 1, resultOrdinal: 1 }] }, analysis };
 }
 
-test("D1 batch persistence round-trips rich existing fields and excludes the batch envelope", async () => {
+test("D1 batch persistence round-trips exact Batch provenance and excludes the batch envelope", async () => {
   await withDatabase(async (database, d1) => {
     const history = new D1DiscoveryHistory(d1);
     const rich: AgentAnalysis = { ...analysis("https://example.test/news/release"),
@@ -204,8 +204,9 @@ test("D1 batch persistence round-trips rich existing fields and excludes the bat
     const result = await discoveryProcessor.recordBatchSelection(selection, { history, seenAt: new Date("2026-10-12T08:00:00.000Z") });
     assert.equal(result.status, "new");
     assert.deepEqual((await new D1DiscoveryHistory(d1).getDiscovery(rich.sourceUrl))?.analysis, rich);
+    assert.deepEqual((result.discovery as typeof result.discovery & { batchSelectionProvenance?: unknown }).batchSelectionProvenance, { kind: "batch" });
     const row = database.prepare("SELECT analysis_json FROM discoveries").get() as { analysis_json: string };
-    assert.deepEqual(JSON.parse(row.analysis_json), rich);
+    assert.deepEqual(JSON.parse(row.analysis_json), { ...rich, batchSelectionProvenance: { kind: "batch" } });
     assert.equal((database.prepare("SELECT COUNT(*) AS count FROM discoveries").get() as { count: number }).count, 1);
   });
 });
@@ -377,6 +378,19 @@ test("D1 discovery history rejects malformed persisted analysis", async () => {
       "{not-json",
     );
     await assert.rejects(new D1DiscoveryHistory(d1).listDiscoveries(), /invalid analysis JSON/);
+  });
+});
+
+test("D1 discovery history rejects malformed Batch-selection provenance", async () => {
+  await withDatabase(async (database, d1) => {
+    const value = analysis("https://example.com/bad-batch-marker");
+    database.prepare("INSERT INTO discoveries VALUES (?, ?, ?, ?)").run(
+      value.sourceUrl,
+      "2026-10-12T08:00:00.000Z",
+      "2026-10-12T08:00:00.000Z",
+      JSON.stringify({ ...value, batchSelectionProvenance: { kind: "batch", note: "unbounded" } }),
+    );
+    await assert.rejects(new D1DiscoveryHistory(d1).listDiscoveries(), /invalid batch selection provenance/i);
   });
 });
 

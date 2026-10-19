@@ -109,6 +109,11 @@ export interface XSourceProvenance {
   label: string;
 }
 
+/** Bounded durable evidence that this discovery was selected by Batch Gemini. */
+export interface BatchSelectionProvenance {
+  kind: "batch";
+}
+
 /** A validated analysis retained under its normalized source URL identity. */
 export interface StoredDiscovery {
   normalizedUrl: string;
@@ -116,6 +121,7 @@ export interface StoredDiscovery {
   lastSeenAt: string;
   analysis: AgentAnalysis;
   sourceProvenance?: XSourceProvenance;
+  batchSelectionProvenance?: BatchSelectionProvenance;
 }
 
 export type DiscoveryProcessingResult =

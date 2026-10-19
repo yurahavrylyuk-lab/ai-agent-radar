@@ -146,6 +146,21 @@ test("an all-low Batch selection still produces one marked digest", async () => 
   assert.equal((f.sent[0]!.html.match(/It could be relevant/g) ?? []).length, 3);
 });
 
+test("an empty current Batch does not revive a legacy low-score replay record", async () => {
+  const f = fixture();
+  const legacy = stored("https://example.test/legacy-low", 5);
+  f.discoveries.set(legacy.normalizedUrl, legacy);
+  f.dependencies.analyze = async () => ({ returnedCount: 0, selections: [] });
+  const result = await run(f.dependencies);
+  assert.equal(result.analysesAttempted, 1);
+  assert.equal(result.batch?.acceptedStories, 0);
+  assert.equal(result.replayCandidatesConsidered, 1);
+  assert.equal(result.replayCandidatesEligible, 0);
+  assert.equal(result.replayStoriesSent, 0);
+  assert.equal(result.notificationsSent, 0);
+  assert.equal(f.sent.length, 0);
+});
+
 test("Brave and RSS candidates share one pool and one Gemini analysis", async () => {
   const f = fixture();
   f.dependencies.searchPage = async (_query, _options) => ({ rawCount: 0, positions: [] });

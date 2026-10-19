@@ -1,4 +1,4 @@
-import { agentAnalysisCategories, type AgentAnalysis, type AgentAnalysisCategory, type StoredDiscovery, type XSourceProvenance } from "../types/index.js";
+import { agentAnalysisCategories, type AgentAnalysis, type AgentAnalysisCategory, type BatchSelectionProvenance, type StoredDiscovery, type XSourceProvenance } from "../types/index.js";
 
 export class DiscoveryHistoryError extends Error {}
 
@@ -22,9 +22,9 @@ export interface DiscoveryRecordOutcome {
 export interface DiscoveryHistory {
   getDiscovery(url: string): Promise<StoredDiscovery | undefined>;
   listRecentDiscoveries(query: RecentDiscoveryQuery): Promise<RecentDiscoveryResult>;
-  recordDiscovery(analysis: AgentAnalysis, seenAt?: Date, sourceProvenance?: XSourceProvenance): Promise<StoredDiscovery>;
+  recordDiscovery(analysis: AgentAnalysis, seenAt?: Date, sourceProvenance?: XSourceProvenance, batchSelectionProvenance?: BatchSelectionProvenance): Promise<StoredDiscovery>;
   /** Optional for legacy histories; batch persistence requires confirmed insertion evidence. */
-  recordDiscoveryWithOutcome?(analysis: AgentAnalysis, seenAt?: Date, sourceProvenance?: XSourceProvenance): Promise<DiscoveryRecordOutcome>;
+  recordDiscoveryWithOutcome?(analysis: AgentAnalysis, seenAt?: Date, sourceProvenance?: XSourceProvenance, batchSelectionProvenance?: BatchSelectionProvenance): Promise<DiscoveryRecordOutcome>;
   touchDiscovery(url: string, seenAt?: Date): Promise<StoredDiscovery | undefined>;
 }
 
@@ -57,8 +57,18 @@ export function isValidXSourceProvenance(value: unknown): value is XSourceProven
   }
 }
 
+export function isValidBatchSelectionProvenance(value: unknown): value is BatchSelectionProvenance {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const item = value as Record<string, unknown>;
+  return Object.keys(item).length === 1 && item.kind === "batch";
+}
+
 export function copyXSourceProvenance(value: XSourceProvenance | undefined): XSourceProvenance | undefined {
   return value ? { ...value } : undefined;
+}
+
+export function copyBatchSelectionProvenance(value: BatchSelectionProvenance | undefined): BatchSelectionProvenance | undefined {
+  return value ? { kind: "batch" } : undefined;
 }
 
 export function normalizeDiscoveryUrl(value: string): string {

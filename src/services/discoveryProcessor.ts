@@ -43,7 +43,7 @@ export async function recordBatchSelection(
   if (!history.recordDiscoveryWithOutcome) {
     throw new Error("Discovery insert outcome is required for batch persistence.");
   }
-  const { discovery, created } = await history.recordDiscoveryWithOutcome(analysis, seenAt);
+  const { discovery, created } = await history.recordDiscoveryWithOutcome(analysis, seenAt, undefined, { kind: "batch" });
   return { status: created === true ? "new" : "duplicate", discovery };
 }
 

@@ -1,7 +1,7 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
-import type { AgentAnalysis, StoredDiscovery, XSourceProvenance } from "../types/index.js";
-import { copyXSourceProvenance, DiscoveryHistoryError, isValidAgentAnalysis, isValidXSourceProvenance, normalizeDiscoveryUrl, validateRecentDiscoveryQuery, type DiscoveryHistory, type DiscoveryRecordOutcome, type RecentDiscoveryQuery, type RecentDiscoveryResult } from "./discoveryHistoryCore.js";
+import type { AgentAnalysis, BatchSelectionProvenance, StoredDiscovery, XSourceProvenance } from "../types/index.js";
+import { copyBatchSelectionProvenance, copyXSourceProvenance, DiscoveryHistoryError, isValidAgentAnalysis, isValidBatchSelectionProvenance, isValidXSourceProvenance, normalizeDiscoveryUrl, validateRecentDiscoveryQuery, type DiscoveryHistory, type DiscoveryRecordOutcome, type RecentDiscoveryQuery, type RecentDiscoveryResult } from "./discoveryHistoryCore.js";
 export { DiscoveryHistoryError, isValidAgentAnalysis, isValidXSourceProvenance, normalizeDiscoveryUrl, type DiscoveryHistory, type RecentDiscoveryQuery, type RecentDiscoveryResult } from "./discoveryHistoryCore.js";
 
 interface DiscoveryHistoryData {
@@ -25,6 +25,7 @@ function validDiscovery(value: unknown): value is StoredDiscovery {
     return false;
   }
   if (discovery.sourceProvenance !== undefined && !isValidXSourceProvenance(discovery.sourceProvenance)) return false;
+  if (discovery.batchSelectionProvenance !== undefined && !isValidBatchSelectionProvenance(discovery.batchSelectionProvenance)) return false;
 
   try {
     return discovery.normalizedUrl === normalizeDiscoveryUrl(discovery.analysis.sourceUrl);
@@ -50,7 +51,8 @@ function copyAnalysis(analysis: AgentAnalysis): AgentAnalysis {
 }
 
 function copy(discovery: StoredDiscovery): StoredDiscovery {
-  return { ...discovery, analysis: copyAnalysis(discovery.analysis), sourceProvenance: copyXSourceProvenance(discovery.sourceProvenance) };
+  return { ...discovery, analysis: copyAnalysis(discovery.analysis), sourceProvenance: copyXSourceProvenance(discovery.sourceProvenance),
+    batchSelectionProvenance: copyBatchSelectionProvenance(discovery.batchSelectionProvenance) };
 }
 
 export class JsonDiscoveryHistory implements DiscoveryHistory {
@@ -87,13 +89,14 @@ export class JsonDiscoveryHistory implements DiscoveryHistory {
     return (await this.getDiscovery(url)) !== undefined;
   }
 
-  async recordDiscovery(analysis: AgentAnalysis, seenAt = new Date(), sourceProvenance?: XSourceProvenance): Promise<StoredDiscovery> {
-    return (await this.recordDiscoveryWithOutcome(analysis, seenAt, sourceProvenance)).discovery;
+  async recordDiscovery(analysis: AgentAnalysis, seenAt = new Date(), sourceProvenance?: XSourceProvenance, batchSelectionProvenance?: BatchSelectionProvenance): Promise<StoredDiscovery> {
+    return (await this.recordDiscoveryWithOutcome(analysis, seenAt, sourceProvenance, batchSelectionProvenance)).discovery;
   }
 
-  async recordDiscoveryWithOutcome(analysis: AgentAnalysis, seenAt = new Date(), sourceProvenance?: XSourceProvenance): Promise<DiscoveryRecordOutcome> {
+  async recordDiscoveryWithOutcome(analysis: AgentAnalysis, seenAt = new Date(), sourceProvenance?: XSourceProvenance, batchSelectionProvenance?: BatchSelectionProvenance): Promise<DiscoveryRecordOutcome> {
     if (!isValidAgentAnalysis(analysis)) throw new DiscoveryHistoryError("Discovery analysis is invalid and cannot be recorded.");
     if (sourceProvenance !== undefined && !isValidXSourceProvenance(sourceProvenance)) throw new DiscoveryHistoryError("Discovery source provenance is invalid.");
+    if (batchSelectionProvenance !== undefined && !isValidBatchSelectionProvenance(batchSelectionProvenance)) throw new DiscoveryHistoryError("Discovery batch selection provenance is invalid.");
     if (Number.isNaN(seenAt.getTime())) throw new DiscoveryHistoryError("Discovery timestamp is invalid.");
 
     const normalizedUrl = normalizeDiscoveryUrl(analysis.sourceUrl);
@@ -102,7 +105,8 @@ export class JsonDiscoveryHistory implements DiscoveryHistory {
     if (existing) return { discovery: copy(existing), created: false };
 
     const timestamp = seenAt.toISOString();
-    const discovery: StoredDiscovery = { normalizedUrl, firstSeenAt: timestamp, lastSeenAt: timestamp, analysis: copyAnalysis(analysis), sourceProvenance: copyXSourceProvenance(sourceProvenance) };
+    const discovery: StoredDiscovery = { normalizedUrl, firstSeenAt: timestamp, lastSeenAt: timestamp, analysis: copyAnalysis(analysis),
+      sourceProvenance: copyXSourceProvenance(sourceProvenance), batchSelectionProvenance: copyBatchSelectionProvenance(batchSelectionProvenance) };
     await this.write({ discoveries: [...data.discoveries, discovery] });
     return { discovery: copy(discovery), created: true };
   }
