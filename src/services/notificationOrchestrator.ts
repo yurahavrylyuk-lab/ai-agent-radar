@@ -195,20 +195,21 @@ export async function notifyBatchDeliveryDigest(
   const history = dependencies.history;
   if (!history) throw new Error("Notification history is required.");
   const notifications = new Map<string, NotificationResult>();
-  type Group = { candidate: BatchDeliveryCandidate; index: number; aliases: Set<string>; urls: Set<string> };
+  type Group = { candidate?: BatchDeliveryCandidate; index: number; aliases: Set<string>; urls: Set<string> };
+  type EligibleGroup = Group & { candidate: BatchDeliveryCandidate };
   const groups = new Map<string, Group>();
   for (const [index, candidate] of candidates.entries()) {
     const url = candidate.discovery.analysis.sourceUrl;
     notifications.set(url, { status: "not_eligible" });
     if (!isBatchNewsUrl(url)) continue;
-    if (candidate.origin === "replay" && candidate.discovery.analysis.relevanceScore < 7
-      && candidate.discovery.batchSelectionProvenance?.kind !== "batch") continue;
+    const deliveryEligible = candidate.origin !== "replay" || candidate.discovery.analysis.relevanceScore >= 7
+      || candidate.discovery.batchSelectionProvenance?.kind === "batch";
     const key = batchAliasKey(candidate.discovery.normalizedUrl);
     let group = groups.get(key);
     if (!group) {
-      group = { candidate, index, aliases: new Set(), urls: new Set() };
+      group = { candidate: deliveryEligible ? candidate : undefined, index, aliases: new Set(), urls: new Set() };
       groups.set(key, group);
-    } else if (group.candidate.origin === "replay" && candidate.origin === "fresh") {
+    } else if (deliveryEligible && (!group.candidate || (group.candidate.origin === "replay" && candidate.origin === "fresh"))) {
       group.candidate = candidate;
       group.index = index;
     }
@@ -220,8 +221,8 @@ export async function notifyBatchDeliveryDigest(
     }
   }
 
-  const excludeNotified = async (pool: Group[]): Promise<Group[]> => {
-    const unsent: Group[] = [];
+  const excludeNotified = async (pool: EligibleGroup[]): Promise<EligibleGroup[]> => {
+    const unsent: EligibleGroup[] = [];
     for (const group of pool) {
       let notification: NotificationRecord | undefined;
       try {
@@ -245,7 +246,8 @@ export async function notifyBatchDeliveryDigest(
     return unsent;
   };
 
-  const initiallyUnsent = await excludeNotified([...groups.values()]);
+  const eligibleGroups = [...groups.values()].filter((group): group is EligibleGroup => group.candidate !== undefined);
+  const initiallyUnsent = await excludeNotified(eligibleGroups);
   const ranked = initiallyUnsent.sort((left, right) => {
       const a = left.candidate;
       const b = right.candidate;
