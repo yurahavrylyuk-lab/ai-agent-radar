@@ -12,6 +12,7 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "test": "tsx --test test/**/*.test.ts",
+    "test:rss-workerd": "node test/workerd/rssFetchReceiver.test.mjs",
     "openai:test": "tsx src/openaiTest.ts",
     "gemini:test": "tsx src/geminiTest.ts",
     "analysis:test": "tsx src/analysisAgentTest.ts",
