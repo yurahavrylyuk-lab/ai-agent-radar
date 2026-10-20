@@ -1,5 +1,13 @@
 # Daily Self-Improvement Summary
 
+## 2026-10-20 — Multi-source discovery outage signaling
+
+- Status: REVIEW; branch `codex/multi-source-outage-signaling`, baseline `f53acb06642c7880c62f3c9457562c9d42e61b24`.
+- Added closed scheduled Batch source-health telemetry: Brave reports `healthy | degraded | unavailable | quota_blocked`, RSS reports `healthy | degraded | unavailable`, and `outage` is true only when both operational sources are unavailable.
+- Brave quota denial remains an admission state rather than an outage. Partial RSS or Brave failure is degraded, successful zero-result acquisition remains healthy, and replay remains available during an outage.
+- TDD evidence: seven focused assertions initially failed because no source-health contract existed, then passed 7/7; complete Batch/scheduled-summary coverage passed 52/52. The complete offline suite passed 635/635, followed by build, Worker typecheck, Wrangler dry-run, and `git diff --check`.
+- Discovery requests, retries, quotas, candidate preparation, Gemini dispatch/accounting, replay, low-relevance delivery, and email behavior are unchanged. No provider call, monitoring cycle, deployment, migration, D1 mutation, production action, push, PR, or merge occurred.
+
 ## 2026-10-20 — Bounded Gemini provider-failure observability
 
 - Status: REVIEW; branch `codex/gemini-provider-failure-observability`, baseline `1dec6c32ef587b4722c72c7e1a298d801df3dcac`.

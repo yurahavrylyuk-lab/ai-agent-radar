@@ -194,6 +194,78 @@ test("RSS collector rejection is isolated and Brave still reaches analysis", asy
   assert.equal(result.newDiscoveries, 1);
 });
 
+test("Brave outage is visible while healthy RSS continues normally", async () => {
+  const f = fixture();
+  f.dependencies.searchPage = async () => { throw new Error("Brave unavailable"); };
+  const result = await run(f.dependencies);
+  assert.deepEqual(result.batch?.discoverySourceHealth, {
+    brave: "unavailable", rss: "healthy", outage: false,
+  });
+});
+
+test("RSS outage is visible while healthy Brave continues normally", async () => {
+  const f = fixture();
+  f.dependencies.collectRss = async () => { throw new Error("RSS unavailable"); };
+  const result = await run(f.dependencies);
+  assert.deepEqual(result.batch?.discoverySourceHealth, {
+    brave: "healthy", rss: "unavailable", outage: false,
+  });
+});
+
+test("operational failure of both active discovery sources reports an outage", async () => {
+  const f = fixture();
+  const replay = stored("https://example.test/outage-replay");
+  f.discoveries.set(replay.normalizedUrl, replay);
+  f.dependencies.searchPage = async () => { throw new Error("Brave unavailable"); };
+  f.dependencies.collectRss = async () => { throw new Error("RSS unavailable"); };
+  const result = await run(f.dependencies);
+  assert.deepEqual(result.batch?.discoverySourceHealth, {
+    brave: "unavailable", rss: "unavailable", outage: true,
+  });
+  assert.equal(result.replayStoriesSent, 1);
+  assert.equal(f.sent.length, 1);
+});
+
+test("partial RSS feed failure is degraded rather than unavailable", async () => {
+  const f = fixture();
+  f.dependencies.collectRss = async () => emptyRss({ metrics: {
+    ...emptyRss().metrics,
+    succeededFeeds: 2,
+    failedFeeds: 2,
+    outcomes: [
+      { feedId: "openai_news", reason: "ok", elapsedMs: 1 },
+      { feedId: "github_changelog", reason: "ok", elapsedMs: 1 },
+      { feedId: "cloudflare_ai", reason: "http", httpStatus: 503, elapsedMs: 1 },
+      { feedId: "chrome_developers", reason: "timeout", elapsedMs: 5000 },
+    ],
+  } });
+  const result = await run(f.dependencies);
+  assert.deepEqual(result.batch?.discoverySourceHealth, {
+    brave: "healthy", rss: "degraded", outage: false,
+  });
+});
+
+test("Brave quota denial is admission blocking rather than provider outage", async () => {
+  const f = fixture();
+  f.dependencies.searchPage = async () => { throw new BraveUsageGuardDeniedError(); };
+  f.dependencies.collectRss = async () => { throw new Error("RSS unavailable"); };
+  const result = await run(f.dependencies);
+  assert.deepEqual(result.batch?.discoverySourceHealth, {
+    brave: "quota_blocked", rss: "unavailable", outage: false,
+  });
+  assert.equal(result.searchFailures.length, 0);
+});
+
+test("healthy discovery sources with zero useful candidates are not an outage", async () => {
+  const f = fixture();
+  f.dependencies.searchPage = async () => ({ rawCount: 0, positions: [] });
+  const result = await run(f.dependencies);
+  assert.deepEqual(result.batch?.discoverySourceHealth, {
+    brave: "healthy", rss: "healthy", outage: false,
+  });
+  assert.equal(result.analysesAttempted, 0);
+});
+
 test("blocked Gemini admission still searches first and delivers bounded stored replay", async () => {
   const f = fixture(); const replay = stored("https://example.test/replay"); f.discoveries.set(replay.normalizedUrl, replay);
   f.dependencies.geminiPreflight = async () => { f.events.push("admission"); return { allowed: false, reason: "usage_unknown" }; };
@@ -279,6 +351,7 @@ test("non-quota partial failure preserves successes and later search positions",
   };
   const result = await run(f.dependencies);
   assert.equal(calls, 10); assert.equal(result.searchFailures[0]?.queryOrdinal, 2); assert.equal(result.failures, 1); assert.equal(result.newDiscoveries, 1);
+  assert.equal(result.batch?.discoverySourceHealth.brave, "degraded");
 });
 
 test("all search failures remain visible while replay delivers with zero analysis", async () => {
