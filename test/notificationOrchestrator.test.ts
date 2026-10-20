@@ -223,21 +223,24 @@ test("batch preserves fresh order before higher-scoring replay, caps four, and i
   assert.deepEqual(candidates, original);
 });
 
-test("batch hard gates reject trusted score6 and root URLs despite permissive legacy eligibility", async () => {
+test("batch delivers selected score6 while hard gates still reject root and invalid URLs", async () => {
   const trusted = { ...deliveryCandidate(6, "https://openai.com/news", "fresh", "Codex"), aliases: [] };
   const root = { ...deliveryCandidate(10, "https://openai.com/?news=1#release", "replay"), aliases: [] };
   const invalid = { ...deliveryCandidate(10, "https://example.com/news", "fresh"), aliases: [] };
   invalid.discovery.analysis.sourceUrl = "javascript:alert(1)";
   let sends = 0;
-  for (const candidates of [[], [trusted, root, invalid]]) {
+  for (const [index, candidates] of [[], [trusted, root, invalid]].entries()) {
     const outcome = await orchestrator.notifyBatchDeliveryDigest(candidates, {
       history: openHistory(), isEligible: () => true,
-      sendEmail: async () => { sends++; return { id: "unexpected" }; },
+      sendEmail: async () => { sends++; return { id: "batch" }; },
     });
-    assert.deepEqual(outcome.sentCandidates, []);
-    assert.equal(outcome.mode, undefined);
+    assert.deepEqual(
+      outcome.sentCandidates.map((candidate) => candidate.discovery.analysis.sourceUrl),
+      index === 0 ? [] : ["https://openai.com/news"],
+    );
+    assert.equal(outcome.mode, index === 0 ? undefined : "normal");
   }
-  assert.equal(sends, 0);
+  assert.equal(sends, 1);
 });
 
 test("batch unions normalized fragment aliases and prefers fresh without moving its input position", async () => {
@@ -255,6 +258,39 @@ test("batch unions normalized fragment aliases and prefers fresh without moving 
   ]);
   assert.equal(outcome.sentCandidates[1].origin, "fresh");
   assert.equal(reads.filter(url => url === "https://example.com/same#observed").length, 2);
+});
+
+test("ineligible legacy low-score alias still blocks its notified Batch-marked replay group", async () => {
+  const legacy = batchCandidate(5, "same#old", "replay");
+  const selected = batchCandidate(5, "same#new", "replay");
+  selected.discovery.batchSelectionProvenance = { kind: "batch" };
+  const reads: string[] = [];
+  let sends = 0;
+  const outcome = await orchestrator.notifyBatchDeliveryDigest([legacy, selected], {
+    history: { ...openHistory(),
+      async hasNotificationBeenSent(url) { reads.push(url); return url.endsWith("#old"); },
+      async getNotificationRecord(url) { return record(url); },
+    },
+    sendEmail: async () => { sends += 1; return { id: "unexpected" }; },
+  });
+  assert.equal(sends, 0);
+  assert.ok(reads.includes("https://example.com/same#old"));
+  assert.deepEqual(outcome.sentCandidates, []);
+  assert.equal(outcome.notifications.get(legacy.discovery.analysis.sourceUrl)?.status, "already_sent");
+  assert.equal(outcome.notifications.get(selected.discovery.analysis.sourceUrl)?.status, "already_sent");
+});
+
+test("ineligible legacy evidence never replaces an unrelated eligible Batch representative", async () => {
+  const legacy = batchCandidate(5, "legacy-only#old", "replay");
+  const selected = batchCandidate(5, "selected#new", "replay");
+  selected.discovery.batchSelectionProvenance = { kind: "batch" };
+  const outcome = await orchestrator.notifyBatchDeliveryDigest([legacy, selected], {
+    history: openHistory(), sendEmail: async () => ({ id: "batch" }),
+  });
+  assert.deepEqual(outcome.sentCandidates.map(candidate => candidate.discovery.analysis.sourceUrl), [
+    "https://example.com/selected#new",
+  ]);
+  assert.equal(outcome.notifications.get(legacy.discovery.analysis.sourceUrl)?.status, "not_eligible");
 });
 
 test("RF2 batch initially notified alias excludes its entire fresh/replay group", async () => {

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { tmpdir } from "node:os";
 import { DiscoveryHistoryError, JsonDiscoveryHistory } from "../src/services/discoveryHistory.js";
-import type { AgentAnalysis } from "../src/types/index.js";
+import type { AgentAnalysis, StoredDiscovery } from "../src/types/index.js";
 
 const firstSeen = new Date("2026-09-19T10:00:00.000Z");
 const lastSeen = new Date("2026-09-19T11:00:00.000Z");
@@ -47,6 +47,21 @@ test("records and retrieves a first discovery", async () => {
     assert.deepEqual(retrieved, recorded);
     assert.equal(recorded.firstSeenAt, firstSeen.toISOString());
     assert.equal(recorded.lastSeenAt, firstSeen.toISOString());
+  });
+});
+
+test("JSON history writes and round-trips exact Batch-selection provenance", async () => {
+  await withHistory(async (history, filePath) => {
+    const batchAware = history as JsonDiscoveryHistory & {
+      recordDiscoveryWithOutcome(value: AgentAnalysis, seenAt: Date, source: undefined, batch: { kind: "batch" }): ReturnType<JsonDiscoveryHistory["recordDiscoveryWithOutcome"]>;
+    };
+    const recorded = await batchAware.recordDiscoveryWithOutcome(analysis(), firstSeen, undefined, { kind: "batch" });
+    assert.deepEqual((recorded.discovery as StoredDiscovery & { batchSelectionProvenance?: unknown }).batchSelectionProvenance, { kind: "batch" });
+    const restarted = new JsonDiscoveryHistory(filePath);
+    const retrieved = await restarted.getDiscovery(analysis().sourceUrl);
+    assert.deepEqual((retrieved as StoredDiscovery & { batchSelectionProvenance?: unknown }).batchSelectionProvenance, { kind: "batch" });
+    const touched = await restarted.touchDiscovery(analysis().sourceUrl, lastSeen);
+    assert.deepEqual((touched as StoredDiscovery & { batchSelectionProvenance?: unknown }).batchSelectionProvenance, { kind: "batch" });
   });
 });
 
@@ -119,6 +134,15 @@ test("rejects structurally invalid history", async () => {
 test("rejects stored discoveries with invalid AgentAnalysis", async () => {
   await withHistory(async (history, filePath) => {
     const invalid = { normalizedUrl: "https://example.com/discovery", firstSeenAt: firstSeen.toISOString(), lastSeenAt: firstSeen.toISOString(), analysis: { ...analysis(), relevanceScore: 0 } };
+    await writeFile(filePath, JSON.stringify({ discoveries: [invalid] }), "utf8");
+    await assert.rejects(history.listDiscoveries(), /invalid format/);
+  });
+});
+
+test("JSON history rejects malformed Batch-selection provenance", async () => {
+  await withHistory(async (history, filePath) => {
+    const invalid = { normalizedUrl: "https://example.com/discovery", firstSeenAt: firstSeen.toISOString(), lastSeenAt: firstSeen.toISOString(),
+      analysis: analysis(), batchSelectionProvenance: { kind: "batch", note: "unbounded" } };
     await writeFile(filePath, JSON.stringify({ discoveries: [invalid] }), "utf8");
     await assert.rejects(history.listDiscoveries(), /invalid format/);
   });

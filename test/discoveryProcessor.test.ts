@@ -182,7 +182,18 @@ test("four batch selections persist their supplied analyses without analyzer or 
   });
 });
 
-test("invalid batch analyses, low scores, mismatched sources and unsafe identities reject before history access", async () => {
+test("a low-score Batch selection is persisted without another analysis", async () => {
+  await withHistory(async (history) => {
+    const selection = batchSelection("https://example.test/news/low-score");
+    selection.analysis.relevanceScore = 4;
+    const processed = await discoveryProcessor.recordBatchSelection(selection, { history, seenAt: firstSeen });
+    assert.equal(processed.status, "new");
+    assert.equal(processed.discovery.analysis.relevanceScore, 4);
+    assert.deepEqual(await history.getDiscovery(selection.analysis.sourceUrl), processed.discovery);
+  });
+});
+
+test("invalid batch analyses, mismatched sources and unsafe identities reject before history access", async () => {
   let historyCalls = 0;
   const unreachable = async (): Promise<never> => { historyCalls++; throw new Error("unexpected history access"); };
   const history: DiscoveryHistory = { getDiscovery: unreachable, recordDiscovery: unreachable,
@@ -190,7 +201,6 @@ test("invalid batch analyses, low scores, mismatched sources and unsafe identiti
   const valid = batchSelection();
   const invalidSelections: BatchSelection[] = [
     { ...valid, analysis: { ...valid.analysis, summary: " " } },
-    { ...valid, analysis: { ...valid.analysis, relevanceScore: 6 } },
     { ...valid, analysis: { ...valid.analysis, relevanceScore: NaN } },
     { ...valid, analysis: { ...valid.analysis, sourceTitle: "Replaced title" } },
     { ...valid, analysis: { ...valid.analysis, sourceUrl: "https://example.test/news/other" } },

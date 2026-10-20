@@ -153,6 +153,31 @@ for (const count of [1, 2, 4]) {
   });
 }
 
+test("batch digest marks each selected low-relevance story without marking high scores", () => {
+  const email = formatter.formatBatchDigestEmail([
+    digestStory("high-nine", 9),
+    digestStory("high-eight", 8),
+    digestStory("low-six", 6),
+    digestStory("low-five", 5),
+  ]);
+  for (const body of [email.text, email.html]) {
+    assert.equal((body.match(/It could be relevant/g) ?? []).length, 2);
+    assert.match(body, /low-six[\s\S]*It could be relevant/);
+    assert.match(body, /low-five[\s\S]*It could be relevant/);
+  }
+});
+
+test("batch digest sends and marks an entirely low-relevance selection", () => {
+  const email = formatter.formatBatchDigestEmail([
+    digestStory("low-six", 6),
+    digestStory("low-five", 5),
+    digestStory("low-four", 4),
+  ]);
+  for (const body of [email.text, email.html]) {
+    assert.equal((body.match(/It could be relevant/g) ?? []).length, 3);
+  }
+});
+
 test("batch formatter escapes model and source fields and links only stored safe source URLs", () => {
   const lead = digestStory("lead");
   lead.analysis.name = "<script>bad()</script>";

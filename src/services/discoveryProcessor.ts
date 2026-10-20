@@ -24,8 +24,8 @@ export async function recordBatchSelection(
   dependencies: { history: DiscoveryHistory; seenAt: Date },
 ): Promise<DiscoveryProcessingResult> {
   const { candidate, analysis } = selection;
-  if (!isValidAgentAnalysis(analysis) || analysis.relevanceScore < 7) {
-    throw new Error("Batch discovery analysis is invalid or below the relevance threshold.");
+  if (!isValidAgentAnalysis(analysis)) {
+    throw new Error("Batch discovery analysis is invalid.");
   }
   verifySourceIntegrity(analysis, candidate.source);
   if (!isBatchNewsUrl(analysis.sourceUrl) || normalizeDiscoveryUrl(analysis.sourceUrl) !== candidate.normalizedUrl) {
@@ -43,7 +43,7 @@ export async function recordBatchSelection(
   if (!history.recordDiscoveryWithOutcome) {
     throw new Error("Discovery insert outcome is required for batch persistence.");
   }
-  const { discovery, created } = await history.recordDiscoveryWithOutcome(analysis, seenAt);
+  const { discovery, created } = await history.recordDiscoveryWithOutcome(analysis, seenAt, undefined, { kind: "batch" });
   return { status: created === true ? "new" : "duplicate", discovery };
 }
 

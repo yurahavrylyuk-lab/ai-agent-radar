@@ -126,6 +126,41 @@ test("all fifty observations reach one batch after all ten searches, including a
   assert.equal(result.batch?.submittedCandidates, 50);
 });
 
+test("an all-low Batch selection still produces one marked digest", async () => {
+  const f = fixture();
+  f.dependencies.analyze = async batch => {
+    f.events.push("analysis");
+    const selections = selection(batch, [0, 1, 2]);
+    [6, 5, 4].forEach((score, index) => { selections.selections[index]!.analysis.relevanceScore = score; });
+    return selections;
+  };
+  const result = await run(f.dependencies);
+  assert.equal(f.events.filter(event => event === "analysis").length, 1);
+  assert.equal(result.analysesAttempted, 1);
+  assert.equal(result.newDiscoveries, 3);
+  assert.equal(result.freshStoriesSent, 3);
+  assert.equal(result.batch?.acceptedStories, 3);
+  assert.equal(result.batch?.emailCount, 1);
+  assert.equal(f.sent.length, 1);
+  assert.equal((f.sent[0]!.text.match(/It could be relevant/g) ?? []).length, 3);
+  assert.equal((f.sent[0]!.html.match(/It could be relevant/g) ?? []).length, 3);
+});
+
+test("an empty current Batch does not revive a legacy low-score replay record", async () => {
+  const f = fixture();
+  const legacy = stored("https://example.test/legacy-low", 5);
+  f.discoveries.set(legacy.normalizedUrl, legacy);
+  f.dependencies.analyze = async () => ({ returnedCount: 0, selections: [] });
+  const result = await run(f.dependencies);
+  assert.equal(result.analysesAttempted, 1);
+  assert.equal(result.batch?.acceptedStories, 0);
+  assert.equal(result.replayCandidatesConsidered, 1);
+  assert.equal(result.replayCandidatesEligible, 0);
+  assert.equal(result.replayStoriesSent, 0);
+  assert.equal(result.notificationsSent, 0);
+  assert.equal(f.sent.length, 0);
+});
+
 test("Brave and RSS candidates share one pool and one Gemini analysis", async () => {
   const f = fixture();
   f.dependencies.searchPage = async (_query, _options) => ({ rawCount: 0, positions: [] });
@@ -462,8 +497,8 @@ test("complete Worker D1 batch composition has one provider dispatch for four se
           assert.equal(data.candidates.length, 50);
           const selected = [data.candidates[49], data.candidates[0], data.candidates[1], data.candidates[2]];
           sourceUrls = selected.map(candidate => candidate.url);
-          return new Response(JSON.stringify({ output_text: JSON.stringify({ schemaVersion: 1, stories: selected.map(candidate => ({
-            candidateId: candidate.candidateId, relevanceScore: 8, category: "developer_tool", name: candidate.title,
+          return new Response(JSON.stringify({ output_text: JSON.stringify({ schemaVersion: 1, stories: selected.map((candidate, index) => ({
+            candidateId: candidate.candidateId, relevanceScore: [9, 8, 6, 5][index], category: "developer_tool", name: candidate.title,
             summary: "What changed", whyItMatters: "Practical use", educationalValue: "Learning", technologies: [], projectOpportunities: [],
           })) }), usage: { total_input_tokens: 40, total_output_tokens: 20, total_tokens: 60 } }));
         }
@@ -471,6 +506,8 @@ test("complete Worker D1 batch composition has one provider dispatch for four se
         const email = JSON.parse(String(options?.body));
         assert.equal(email.subject, "AI Agent Radar — Daily Digest");
         assert.ok(email.text.includes("Original query10 source5"));
+        assert.equal((email.text.match(/It could be relevant/g) ?? []).length, 2);
+        assert.equal((email.html.match(/It could be relevant/g) ?? []).length, 2);
         return new Response(JSON.stringify({ id: "one-offline-email" }));
       };
       const dependencies = createWorkerMonitoringDependencies(env, { collectRss: async () => emptyRss() });

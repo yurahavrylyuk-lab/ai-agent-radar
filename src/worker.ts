@@ -133,7 +133,7 @@ function summarizeBatch(batch: BatchCycleMetrics, env: RadarWorkerEnv): BatchCyc
   const approvedFeedIds = new Set(RSS_FEEDS.map(feed => feed.id));
   for (const entry of (Array.isArray(batch.selected) ? batch.selected : []).slice(0, 4)) {
     if (!entry || typeof entry.candidateId !== "string" || !/^c(?:00[1-9]|0[1-4][0-9]|050)$/.test(entry.candidateId)
-      || !Number.isInteger(entry.score) || entry.score < 7 || entry.score > 10) continue;
+      || !Number.isInteger(entry.score) || entry.score < 1 || entry.score > 10) continue;
     const hostname = typeof entry.hostname === "string"
       && entry.hostname.length <= 253 && /^[A-Za-z0-9.:[\]-]+$/.test(entry.hostname)
       && redactScheduledError(entry.hostname, env, 253) === entry.hostname ? entry.hostname : "[redacted]";

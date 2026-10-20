@@ -39,13 +39,14 @@ test("replay policy rejects an invalid cycle timestamp", () => {
   assert.throws(() => getNotificationReplayWindow(new Date("invalid")), /timestamp is invalid/);
 });
 
-function replayCandidate(path: string, score = 8, firstSeenAt = "2026-10-12T12:00:00.000Z") {
+function replayCandidate(path: string, score = 8, firstSeenAt = "2026-10-12T12:00:00.000Z", batchSelected = false) {
   const url = `https://example.com/${path}`;
   const discovery: StoredDiscovery = {
     normalizedUrl: url, firstSeenAt, lastSeenAt: "2026-10-14T08:00:00.000Z",
     analysis: { name: path, category: "developer_tool", summary: `Summary ${path}`, relevanceScore: score,
       whyItMatters: "Useful", educationalValue: "Learn", projectOpportunities: ["Build"], technologies: [],
       sourceTitle: path, sourceUrl: url },
+    ...(batchSelected ? { batchSelectionProvenance: { kind: "batch" } } : {}),
   };
   return { discovery, origin: "replay" as DeliveryCandidate["origin"], aliases: [url] };
 }
@@ -74,6 +75,65 @@ test("batch replay sorts score then immutable firstSeenAt then direct lexical UR
   assert.deepEqual(outcome.sentCandidates.map(c => c.discovery.analysis.sourceUrl), [
     "https://example.com/score", "https://example.com/newer", "https://example.com/Z", "https://example.com/a",
   ]);
+});
+
+test("legacy low-score replay without Batch provenance remains ineligible", async () => {
+  const low = replayCandidate("legacy-low-replay", 5);
+  let sends = 0;
+  const outcome = await orchestrator.notifyBatchDeliveryDigest([low], {
+    history: replayNotificationHistory(),
+    sendEmail: async () => { sends += 1; return { id: "unexpected" }; },
+  });
+  assert.equal(sends, 0);
+  assert.deepEqual(outcome.eligibleCandidates, []);
+  assert.deepEqual(outcome.sentCandidates, []);
+  assert.equal(outcome.notifications.get(low.discovery.analysis.sourceUrl)?.status, "not_eligible");
+});
+
+test("legacy high-score replay without Batch provenance retains replay eligibility", async () => {
+  const high = replayCandidate("legacy-high-replay", 8);
+  const outcome = await orchestrator.notifyBatchDeliveryDigest([high], {
+    history: replayNotificationHistory(), sendEmail: async () => ({ id: "legacy-high" }),
+  });
+  assert.deepEqual(outcome.sentCandidates.map(candidate => candidate.discovery.normalizedUrl), [
+    "https://example.com/legacy-high-replay",
+  ]);
+});
+
+test("batch replay keeps and visibly marks a previously selected low-score story", async () => {
+  const low = replayCandidate("low-replay", 5, "2026-10-12T12:00:00.000Z", true);
+  let sends = 0;
+  const outcome = await orchestrator.notifyBatchDeliveryDigest([low], {
+    history: replayNotificationHistory(),
+    sendEmail: async email => {
+      sends += 1;
+      assert.match(email.text, /It could be relevant/);
+      assert.match(email.html, /It could be relevant/);
+      return { id: "low-replay" };
+    },
+  });
+  assert.equal(sends, 1);
+  assert.deepEqual(outcome.sentCandidates.map(candidate => candidate.discovery.analysis.sourceUrl), [
+    "https://example.com/low-replay",
+  ]);
+});
+
+test("an already-notified low-score Batch story is not resent", async () => {
+  const low = replayCandidate("already-sent-low", 4, "2026-10-12T12:00:00.000Z", true);
+  let sends = 0;
+  const existing = { normalizedUrl: low.discovery.normalizedUrl, channel: "email" as const,
+    providerMessageId: "existing", sentAt: "2026-10-13T08:00:00.000Z" };
+  const outcome = await orchestrator.notifyBatchDeliveryDigest([low], {
+    history: {
+      async hasNotificationBeenSent() { return true; },
+      async getNotificationRecord() { return existing; },
+      async recordNotificationSent() { throw new Error("unexpected notification write"); },
+    },
+    sendEmail: async () => { sends += 1; return { id: "unexpected" }; },
+  });
+  assert.equal(sends, 0);
+  assert.equal(outcome.notifications.get(low.discovery.analysis.sourceUrl)?.status, "already_sent");
+  assert.deepEqual(outcome.sentCandidates, []);
 });
 
 test("batch fresh scores8 and7 precede replay10 without a trusted-source bonus", async () => {
