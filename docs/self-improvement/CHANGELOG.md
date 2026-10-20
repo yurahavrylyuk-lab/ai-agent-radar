@@ -1,5 +1,14 @@
 # Self-improvement changelog
 
+## 2026-10-20 — Production documentation reconciled
+
+- Updated governance/project tracking to the deployed source `f81d6ac0d24baa843e9140a20a1ff00e8f535377` and current scheduled Batch architecture.
+- Marked P5 and RSS production work DONE, recorded the two proven RSS feeds and two bounded `body_limit` follow-ups, and set Threads as the next discovery-source task.
+- Documented Batch-selected 1–10 delivery, the `It could be relevant` label below 7, exact Batch replay provenance, and legacy low-score replay exclusion.
+- Clarified that X is disabled/deprecated with zero production dependency and unapplied migration `0004`, and that `runMonitoringCycle()` is retained but not scheduled in production.
+- Review correction supersedes the historical P6/X Architect plan, distinguishes the pre-deployment `244862...` natural-cycle evidence from the later `f81d6ac...` deployment, and establishes a permanent tracker-actualization checkpoint before the next major roadmap item.
+- Documentation only; no runtime, deployment, migration, D1, provider, monitoring, secret, or production mutation.
+
 ## 2026-10-10 — Gemini timeout admission ready for review
 
 - Raised the end-to-end Gemini provider deadline to 90 seconds and made a timeout stop further Gemini dispatches in its monitoring cycle without retry, fallback, or invented token accounting.

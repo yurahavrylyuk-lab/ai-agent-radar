@@ -95,6 +95,8 @@ Explicitly prioritize:
 **Status:** DONE
 **Priority:** Medium
 
+This remains the fallback policy for the retained legacy per-story `runMonitoringCycle()` path. The scheduled Batch path instead delivers all valid Gemini selections scored 1–10 and labels selected scores below 7.
+
 If no NEW, unsent story reaches the normal relevance threshold:
 
 - select up to four available stories from the human-approved exact-host registry
@@ -115,7 +117,7 @@ alter Gemini relevance scores or the normal threshold of 7.
 
 ## P5 — Discovery Reliability
 
-**Status:** TODO
+**Status:** DONE — implemented, validated, and production-proven
 **Priority:** High
 
 Improve discovery recall without increasing the approved Brave daily quota.
@@ -127,7 +129,7 @@ Goals:
 - add stronger deterministic coverage of important official sources, including OpenAI, Anthropic, Google AI, GitHub, Microsoft, and other high-value official developer/AI sources
 - preserve the existing Brave limit of `10 / day`
 - preserve deduplication
-- preserve the maximum of four fresh Gemini analyses per cycle
+- preserve the scheduled one-dispatch/four-selection ceiling and the legacy maximum of four fresh Gemini analyses
 - preserve P3 priority behavior
 - preserve P4 fallback behavior
 - preserve durable replay behavior
@@ -137,7 +139,7 @@ Concrete acceptance case:
 
 - a major official release such as **GPT-6.1 Sol** published within the configured freshness window should have a materially better chance of entering the analysis pipeline
 
-**Architecture gate:** design this item with Architect before any implementation. Do not implement from this backlog entry alone.
+**Architecture gate:** completed before implementation.
 
 **Done when:** the approved P5 architecture is implemented and tested, discovery recall for major recent official releases is improved, and all existing quota/dedup/ranking/replay safeguards remain intact.
 
@@ -145,7 +147,7 @@ Concrete acceptance case:
 
 ## P6 — X.com Source Integration
 
-**Status:** ✅ DONE — implemented and offline-validated; remains disabled pending separate production activation approval
+**Status:** DONE — historical implementation completed and validated; production activation is abandoned/deprecated
 **Priority:** After P5
 
 Add X.com as an additional bounded discovery source.
@@ -160,9 +162,34 @@ Goals:
 - define trust/spam filtering so X does not become an unrestricted noisy firehose
 - preserve Gemini, Brave, deduplication, replay, and email safety limits
 
-**Architecture gate:** completed by the human-approved selected-account architecture and exact five-ID registry dated 2026-10-08. Production migration, credential, paid credit, configuration, and deployment remain separately protected.
+**Architecture gate:** completed by the human-approved selected-account architecture and exact five-ID registry dated 2026-10-08. X remains disabled with zero production dependency, no production credential is configured, and `0004_x_discovery.sql` is intentionally unapplied. Activation is no longer on the active roadmap.
 
 **Done when:** the approved P6 architecture is implemented and tested with bounded, deduplicated, high-signal X discovery feeding the existing pipeline.
+
+---
+
+## Production Milestone — Batch Gemini Daily Radar
+
+**Status:** DONE — production-proven
+
+- Brave: 10/10 searches completed.
+- Gemini: one batch dispatch completed exactly.
+- Delivery: four fresh stories in one accepted email.
+- Cycle failures: 0.
+- Accounting: `usage_unknown=0` after completion.
+- Scheduled production combines Brave and RSS in one deduplicated candidate pool, submits at most 50 candidates in the current 32 KiB prompt, selects at most four stories, and sends at most one digest.
+- Batch-selected stories may score from 1–10. A score below 7 remains deliverable and is visibly labelled `It could be relevant`.
+- Low-score replay requires explicit persisted `batchSelectionProvenance?: { kind: "batch" }`; legacy low-score records remain ineligible while still contributing alias evidence for no-resend checks.
+
+---
+
+## Replacement Source Roadmap — Brave + RSS + Threads
+
+- **Brave:** ACTIVE — current production discovery source.
+- **RSS:** DONE — implemented and production-proven. The 2026-10-20 natural cycle admitted valid GitHub Changelog and Chrome for Developers RSS candidates to the shared Gemini pool. OpenAI and Cloudflare AI reached `body_limit` and remain bounded reliability follow-up work.
+- **Threads:** TODO — next discovery-source implementation task.
+
+The deprecated X activation path is not part of this replacement roadmap.
 
 ---
 
@@ -195,9 +222,9 @@ Requires design for:
 
 ## Execution Order
 
-`P0 → P1 → P2 → P3 → P4 → P5 → P6 → P7`
+`P0 → P1 → P2 → P3 → P4 → P5 → P6 → RSS → Threads → P7`
 
-Work on a lower-priority item only when the preceding item is complete or explicitly deferred.
+Current next discovery-source task: **Threads**. P7 remains TODO after Threads.
 
 ## Backlog Rules
 
@@ -206,3 +233,12 @@ Work on a lower-priority item only when the preceding item is complete or explic
 - Do not silently invent requirements beyond the approved plan.
 - Preserve existing safety, quota, deduplication, and source-integrity behavior unless a backlog item explicitly changes it.
 - Production deployment/configuration changes require explicit approval.
+
+### Backlog/Plan Actualization Checkpoint
+
+After every major feature or fix that is merged and/or production-validated, before beginning the next major roadmap item:
+
+1. Update `backlog.md` with `DONE`, `TODO`, `DEFERRED`, or `DEPRECATED`, plus current priority and actual execution order.
+2. Update `plan.md` with the current architecture and active implementation rules, explicitly superseding obsolete architecture.
+3. Update `docs/self-improvement/PROJECT_STATE.md` only with verified production or deployment evidence.
+4. Do not begin the next major roadmap item while these authoritative documents materially contradict the shipped state.
