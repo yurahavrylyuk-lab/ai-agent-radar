@@ -1,5 +1,14 @@
 # Daily Self-Improvement Summary
 
+## 2026-10-20 — Production-state documentation reconciliation
+
+- Status: REVIEW; branch `codex/docs-production-state-reconciliation`, exact production/main baseline `f81d6ac0d24baa843e9140a20a1ff00e8f535377`.
+- Reconciled backlog, plan, project state, and README with the deployed scheduled Batch architecture: multi-query Brave plus RSS in one shared pool, 50-candidate/32 KiB prompt bounds, one Gemini dispatch, four selected stories, and one digest maximum.
+- Recorded P5 and RSS as DONE; documented partial RSS production evidence (GitHub Changelog and Chrome succeeded, OpenAI and Cloudflare AI reached `body_limit`); made Threads the next discovery-source task.
+- Recorded deployed low-relevance delivery and exact Batch replay provenance while preserving legacy low-score replay exclusion and alias-based no-resend evidence.
+- Marked X activation deprecated with zero production dependency and migration `0004` intentionally unapplied. The legacy `runMonitoringCycle()` path remains documented but is not the scheduled production path.
+- Validation is documentation-only: consistency review and `git diff --check`; no runtime tests required. No runtime, deployment, migration, D1, provider, monitoring, secret, or production action occurred.
+
 ## 2026-10-17 — Bounded RSS discovery implementation
 
 - Status: REVIEW; branch `codex/rss-discovery`, exact baseline `846489e5c179e4b4391fc8eb702052a734f32dab`.

@@ -4,7 +4,7 @@
 
 This file is the durable source of truth for the production baseline, architecture, limits, safety rules, and approval boundaries. Update it only with verified evidence and the required authorization; distinguish intended changes from deployed facts.
 
-Current verified production state (2026-10-10): Worker Git SHA `366d7ea6370e6297818ec7ae9489a78b99edd3e8`, Worker version `6ad65e76-9728-4a2d-aece-15903028ad01`, migration `0005_gemini_ambiguity_accounting.sql` applied, migration `0004_x_discovery.sql` unapplied, and P6/X not deployed or enabled. The separately authorized legacy recovery left `usage_unknown=0` and row 17 unchanged as `legacy`; row 18 is `confirmed_zero`, and row 19 is durable `transport_ambiguous / timeout` evidence with unknown token usage. The old P5 Worker is not an approved rollback target; this hotfix version or a later compatible version is the minimum rollback target.
+Current verified production source (2026-10-20): `f81d6ac0d24baa843e9140a20a1ff00e8f535377`. The scheduled production path is Batch monitoring with multi-query Brave plus RSS in one shared candidate pool, at most one Gemini dispatch, at most four selected stories, and at most one digest. P5, Batch Gemini, RSS discovery, and Batch low-relevance delivery are deployed. Migration `0004_x_discovery.sql` remains intentionally unapplied and X is disabled/deprecated with zero production dependency. The Gemini accounting incident is resolved: `usage_unknown=0`, rows 19 and 21 remain historical timeout ambiguity evidence, and row 22 is the exact-identity recovered `confirmed_zero` record.
 
 Bootstrap date: 2026-09-20. The human-provided production handoff supplies the verified production checkpoint, deployed Worker version, and controlled-test discovery below. Local read-only inspection confirmed HEAD/history, Worker entry point, configured providers/limits, Cron, pre-analysis discovery deduplication, and relevance threshold. This bootstrap did not query Cloudflare, inspect live D1 data, or repeat the production test; deployment facts remain attributed to the handoff.
 
@@ -20,13 +20,13 @@ Bootstrap date: 2026-09-20. The human-provided production handoff supplies the v
 ```text
 Cloudflare Cron
 → Cloudflare Worker
-→ Brave Search
-→ optional bounded selected-account X polling (disabled by default)
-→ D1 deduplication
-→ Gemini analysis
+→ multi-query Brave Search + bounded RSS discovery
+→ shared canonical URL/history deduplication
+→ bounded pool (maximum 50 candidates / 32 KiB prompt)
+→ at most one Gemini batch dispatch
+→ at most four selected stories
 → D1 discovery persistence
-→ relevance gate
-→ Resend email
+→ at most one Resend digest
 → D1 notification history
 ```
 
@@ -39,33 +39,37 @@ Cloudflare Cron
 - Each cycle performs one bounded recent-discovery lookup so an analyzed but unnotified discovery can re-enter the shared digest without Brave rediscovery or Gemini re-analysis. Replay adds no provider request and does not create a second email.
 - Default multi-query monitoring records isolated non-quota Brave failures by one-based query ordinal and continues sequentially so successful query results still reach normal deduplication, analysis, and notification processing. Each recorded search failure appears in `searchFailures` and increments the aggregate `failures` count. Each query is attempted at most once; there is no query or full-cycle retry. A quota denial still stops further searches without becoming a transient failure. If non-quota failures occur and no usable results were collected, the cycle rejects instead of reporting empty success.
 - No automatic full-cycle retries.
+- The production-proven Batch Gemini path performs at most one provider dispatch for the fresh batch and can return at most four selected stories for the single digest. Scores remain bounded to 1–10; a selected score below 7 is deliverable with the visible label `It could be relevant`.
+- `runMonitoringCycle()` is the retained legacy per-story path. It is not invoked by the production schedule and is not removed by this documentation reconciliation.
 
 ## Providers
 
 - Search: Brave Search.
-- Analysis: Google Gemini through the reviewed ordered pool `gemini-3.8-flash`, `gemini-3.6-flash`, and `gemini-3.5-flash-lite`. Runtime environment input cannot add, remove, or reorder models; `GEMINI_MODEL` is deprecated and ignored. The pool is restricted to approved included Free Tier capacity; paid fallback is disabled.
+- Analysis: Google Gemini through the reviewed ordered pool `gemini-3.8-flash`, `gemini-3.6-flash`, and `gemini-3.5-flash-lite`. Runtime environment input cannot add, remove, or reorder models; `GEMINI_MODEL` is deprecated and ignored. The production scheduled Batch Gemini path uses one `gemini-3.8-flash` dispatch with no retry or model fallback. The pool remains restricted to approved included Free Tier capacity; paid fallback is disabled.
 - Email: Resend.
-- Optional discovery: P6 X selected-account polling is implemented but disabled by default and is not a verified production provider. Its immutable v1 identity registry is source-controlled; handles are display-only.
+- Historical discovery integration: P6 X selected-account polling is implemented but disabled. Production activation is abandoned/deprecated; no X credential or migration activation is planned on the active roadmap.
+- Replacement source roadmap: Brave and RSS are active; Threads is the next discovery-source task. P7 remains TODO after Threads.
 - OpenAI: not used in the cloud production execution path. Local legacy tooling/dependencies do not authorize inclusion in the deployed Worker runtime.
 
-## RSS implementation checkpoint (not deployed)
+## RSS production checkpoint
 
-The `codex/rss-discovery` source checkpoint implements the approved RSS design for independent review; it is not a deployed production fact. The registry contains exactly four approved first-party feeds (OpenAI News, GitHub Changelog, Cloudflare AI, and Chrome for Developers) in fixed order. Collection remains bounded to five configured feeds, five item positions per feed, one request with no retry or redirect, a 5-second request-through-body deadline, and 256 KiB per feed. Failures are isolated from Brave and expose only bounded allowlisted telemetry.
+RSS discovery is implemented and deployed. The registry contains exactly four approved first-party feeds (OpenAI News, GitHub Changelog, Cloudflare AI, and Chrome for Developers) in fixed order. Collection remains bounded to five configured feeds, five item positions per feed, one request with no retry or redirect, a 5-second request-through-body deadline, and 256 KiB per feed. Failures are isolated from Brave and expose only bounded allowlisted telemetry. The Workerd native-fetch receiver issue is fixed by injecting a receiver-safe wrapper.
 
-Brave and RSS observations enter the same canonical URL/history/notification deduplication path before deterministic interleaving into the existing 50-candidate, 32 KiB prompt. The scheduled path retains one Gemini dispatch maximum, score threshold 7, four stories maximum, and one email maximum. The implementation adds no D1 schema or migration, does not use X or migration `0004`, and does not add Threads behavior. Production remains on the verified checkpoint recorded above until a separate review, merge, and deployment authorization.
+Brave and RSS observations enter the same canonical URL/history/notification deduplication path before deterministic interleaving into the 50-candidate, 32 KiB prompt. The scheduled path retains one Gemini dispatch maximum, four selected stories maximum, and one email maximum. The implementation adds no D1 schema or migration, does not use X or migration `0004`, and does not add Threads behavior.
 
-The parser dependency is pinned to `saxes@6.0.0` with `xmlchars@2.2.0`. This is the bounded amendment to the original `sax` selection after Wrangler proved that `sax` retained unused Node stream shims. Offline verification passed 601/601 tests, build, Worker typecheck, whitespace validation, and a Wrangler bundle audit with no Node built-in, dotenv, local JSON, or OpenAI runtime dependency introduced by RSS.
+Production evidence from the natural 2026-10-20 cycle proved that GitHub Changelog and Chrome for Developers succeeded and valid RSS candidates entered the shared Gemini pool. OpenAI and Cloudflare AI reached the bounded `body_limit`; those feeds remain follow-up reliability work. This evidence does not claim all four feeds are fully healthy.
 
 ## Limits
 
 Maximum per autonomous monitoring cycle:
 
 - Brave: up to 10 requests (one per `MONITORING_QUERIES` entry; the quota guard stops the loop early if a daily/weekly/monthly limit is reached).
-- Gemini: up to 4 new analyses (`MAX_NEW_ANALYSES_PER_CYCLE = 4`; known/duplicate URLs consume no analysis slot).
-- Gemini provider attempts: each logical analysis permits at most four attempts per approved model (12 theoretical), but the unchanged global request/token guard runs before every dispatch and the cycle freezes its initial remaining request allowance. With the configured daily request limit of 5, a normal cycle cannot dispatch more than the remaining portion of those five requests.
+- Batch prompt: at most 50 submitted candidates and 32 KiB (`32,768` bytes).
+- Gemini: at most one fresh-batch provider dispatch, returning at most four selected stories; known/duplicate URLs do not enter the submitted batch.
+- Gemini provider attempts: one maximum for the scheduled fresh batch. Historical retry/fallback behavior remains documented for older execution paths but is not used by the production Batch Gemini cycle.
 - Resend: 1 email.
 - OpenAI: 0 calls.
-- X: 0 calls while disabled. A separately activated cycle is bounded to five sequential account-timeline requests and 50 conservatively reserved Post reads, with no retry or pagination; it shares the existing four-analysis/one-email ceilings.
+- X: 0 calls. The implementation remains disabled and its production activation is deprecated.
 
 Approved repository Brave request limits for P2:
 
@@ -73,7 +77,7 @@ Approved repository Brave request limits for P2:
 - Weekly: 100.
 - Monthly: 350.
 
-Cloudflare production variables are not changed by the P2 implementation task. After merge, a separate authorized production update must change `BRAVE_WEEKLY_SEARCH_LIMIT` from 50 to 100 and `BRAVE_MONTHLY_SEARCH_LIMIT` from 200 to 350; `BRAVE_DAILY_SEARCH_LIMIT` remains 10.
+Cloudflare production uses the approved Brave limits: daily 10, weekly 100, monthly 350.
 
 Configured Gemini request limits:
 
@@ -93,18 +97,20 @@ These are ceilings, not consumption targets. Provider quota changes require expl
 
 - Discovery deduplication happens before Gemini.
 - Known discovery: update `lastSeenAt`; no Gemini request.
-- New discovery: may consume one of up to four Gemini analysis slots.
+- New discoveries may enter the single bounded Gemini batch; at most four validated stories are accepted for delivery.
 - Notification identity: normalized URL + notification channel.
 - A previously notified discovery must not generate another email.
-- Normal email eligibility requires all three: a fresh new discovery or approved replay discovery, `relevanceScore >= 7`, and no previously recorded email notification.
+- Scheduled Batch delivery accepts Gemini-selected stories with scores from 1–10. A selected score below 7 is delivered with `It could be relevant`; scores at or above 7 retain normal rendering.
+- Fresh Batch selections persist exact optional provenance `batchSelectionProvenance?: { kind: "batch" }`. Replay permits a low-score story only when this marker is present and valid. Legacy low-score records without the marker remain ineligible, although all bounded aliases still contribute notification-history evidence so an ineligible record can prevent a duplicate resend without becoming a delivery representative.
+- The retained legacy `runMonitoringCycle()` path keeps its existing score-7 normal eligibility and P4 trusted-source fallback behavior; it is not the production scheduled path.
 - Replay candidates use immutable `firstSeenAt` and must be both within 72 hours of the cycle-start instant and on/after the immutable activation cutoff `2026-10-06T16:00:00Z`. Discovery lookup is newest-first with normalized-URL tie-breaking, capped at 100 with no pagination. Fresh and replay candidates deduplicate by normalized URL, use one P3-ranked four-story pool, and produce at most one digest. Stored relevance is unchanged.
-- P4 adds one bounded fallback exception after notification-history filtering: only when zero fresh-or-replay, unsent analyses meet the normal threshold, up to four below-threshold candidates from currently human-approved exact hostnames may be sent in one digest labelled `It could be relevant`. Trust is rechecked at replay time. If no trusted candidate exists, no email is sent. Normal candidates always take precedence and are never padded with fallback stories.
+- In the retained legacy per-story path, P4 adds one bounded fallback exception after notification-history filtering: only when zero fresh-or-replay, unsent analyses meet the normal threshold, up to four below-threshold candidates from currently human-approved exact hostnames may be sent in one digest labelled `It could be relevant`. Trust is rechecked at replay time. This rule does not gate scheduled Batch selections.
 - The versioned fallback trust registry is static and provider-independent. It uses exact HTTP(S) hostname equality only; it infers no parent, subdomain, or `www` trust. Unknown, malformed, unsupported, credentialed, address-based, or non-default-port sources fail closed. Trust does not change stored Gemini relevance or normal eligibility.
-- Before analysis slots are assigned, P3 gives unique unseen Brave candidates with explicit Codex or Claude Code matches a bounded deterministic priority signal. At most two of four positions are reserved by this signal; generic candidates retain stable search order and fill remaining slots, while preferred candidates may use otherwise-empty positions. This selection never changes eligibility or stored relevance.
-- P3 digest ordering gives relevant Codex and Claude Code discoveries a deterministic `+1` priority bonus capped at `10`, with preferred-tool status breaking an otherwise exact tie at the ceiling. This is a post-eligibility ordering signal: it does not mutate the stored Gemini relevance score and never makes a below-threshold story eligible.
+- In the retained legacy per-story path, P3 gives unique unseen Brave candidates with explicit Codex or Claude Code matches a bounded deterministic priority signal before analysis slots are assigned. At most two of four positions are reserved by this signal; generic candidates retain stable search order and fill remaining slots, while preferred candidates may use otherwise-empty positions.
+- P3 digest ordering gives Codex and Claude Code discoveries a deterministic bounded priority signal without mutating stored Gemini relevance. In the scheduled Batch path this ordering does not exclude selected stories below 7.
 - P3 topic coverage includes AI/ML (including Gemini, GPT, and open-source models), IT/infrastructure (cloud, DevOps, Kubernetes, networking, and security advisories), programming releases, and developer tools/workflows (IDEs, CLI, CI/CD, code review, productivity tooling, techniques, and tutorials).
-- P5 keeps the ten-query/ten-request ceiling and applies Brave `freshness: "pw"` to every default and explicit custom monitoring search. The fixed list interleaves five targeted official-source queries (OpenAI, Anthropic, Google AI, GitHub Blog, Microsoft) with five broad queries. At most one recent, exact-host candidate observed through its matching official query may receive an additional bounded pre-analysis opportunity after P3's up-to-two Codex/Claude Code positions; this ephemeral signal is not source trust, relevance, or notification eligibility. Generic stable-order candidates fill available capacity, and all existing quota, partial-failure, deduplication, replay, P4, and four-analysis limits remain authoritative.
-- P6 polls only the five approved X user IDs, sequentially and in fixed order, after usable Brave acquisition. Returned original public text posts are normalized by immutable post ID, strict author/timestamp/entity checks, and at most one safe structured external destination. X candidates append to the existing unified selection pool without P5 official priority or a dedicated slot. Application-owned provenance is not accepted from Gemini, survives persistence/replay, appears as digest attribution, and excludes every X-derived story from below-threshold P4 fallback.
+- P5 is DONE. The implemented multi-query Brave path keeps the ten-query/ten-request ceiling, applies `freshness: "pw"`, and interleaves five targeted official-source queries (OpenAI, Anthropic, Google AI, GitHub Blog, Microsoft) with five broad queries. Its observations join RSS before the shared Batch candidate cap and deduplication rules.
+- P6's historical implementation polls only the five approved X user IDs and retains its reviewed bounds, normalization, provenance, and fallback exclusions. It is disabled, its activation is deprecated, and it is not part of the active production source roadmap.
 
 ## Persistence
 
@@ -115,9 +121,9 @@ Production persistence uses Cloudflare D1 for:
 - Brave usage.
 - Gemini usage.
 - Gemini usage state.
-- Disabled-by-default P6 X poll cursors, pending inbox metadata, and conservative request reservations after migration `0004_x_discovery.sql` is separately applied.
+- Historical P6 X tables would exist only if `0004_x_discovery.sql` were applied; that migration is intentionally unapplied.
 
-Gemini usage migration `0003_gemini_usage_model.sql` adds nullable exact-model attribution. The integrated source contains P6's still-unapplied `0004_x_discovery.sql`, production-applied `0005_gemini_ambiguity_accounting.sql`, and pending `0006_gemini_timeout_admission.sql`. Migration 0006 only replaces the unresolved-owner index so historical timeout rows can coexist with one safe reservation; it adds no table or column. Production's deliberate out-of-filename-order ledger remains `0001`, `0002`, `0003`, `0005` until separate migration approval. Historical Gemini rows remain durable and continue to count globally.
+Gemini usage migration `0003_gemini_usage_model.sql` adds nullable exact-model attribution. Production has applied `0005_gemini_ambiguity_accounting.sql`, `0006_gemini_timeout_admission.sql`, and the exact-identity `0007_row22_exact_recovery.sql`; `0004_x_discovery.sql` remains intentionally unapplied. Migration 0006 permits a safe new reservation after a timeout ambiguity's UTC day without rewriting the ambiguity. Migration 0007 recovered only the proven non-dispatched row 22 to `confirmed_zero` and restored the generic transition protection in the same migration. Historical Gemini rows remain durable and continue to count in their applicable accounting windows.
 
 New dispatches use explicit UTC calendar-day, Monday-start-week, and calendar-month accounting. A D1-atomic conditional insert admits at most one exact-model `reserved` request after rechecking the legacy latch, unresolved ownership, cycle allowance, and all request/token ceilings. Exact provider usage settles `reserved -> exact`; reviewed retry/fallback non-2xx responses settle `reserved -> confirmed_zero`; timeout, network, unreadable usage, and settlement uncertainty remain durably unresolved without guessed tokens. Structured reservations do not toggle the legacy latch.
 
@@ -135,23 +141,27 @@ Secrets are Cloudflare Worker secret bindings. Record binding names only, never 
 - `GEMINI_API_KEY`.
 - `RESEND_API_KEY`.
 - `NOTIFICATION_EMAIL`.
-- `X_BEARER_TOKEN` only after separate P6 activation approval; it is not required while `X_DISCOVERY_ENABLED` is absent/false.
+- No X credential is required or planned while the deprecated X integration remains disabled.
 
 Never commit Brave, Gemini, Resend, or X credentials, the notification email address, temporary authentication secrets, or deployment credentials. Do not copy secrets into plans, reviews, summaries, logs, or validation output.
 
-P6 activation is not part of its implementation checkpoint. It additionally requires human verification of current X terms, endpoint entitlement and price; application of additive migration `0004`; creation of `X_BEARER_TOKEN`; `X_DISCOVERY_ENABLED=true`; prepaid credits with auto-recharge off; and a provider-side spending cap. Rollback disables X first and retains its additive tables/provenance. A pre-P6 Worker rollback is unsafe for replay until provenance containment is reviewed.
+P6/X production activation is abandoned/deprecated. `0004_x_discovery.sql` remains intentionally unapplied, X stays disabled with zero production dependency, and no X credential or paid provider capacity is authorized. The replacement source roadmap is Brave + RSS + Threads.
 
 The production Worker bundle must not include local JSON persistence, Node filesystem modules, dotenv, or an OpenAI cloud dependency. Production must not expose a public/manual monitoring endpoint.
 
 ## Gemini blocked-state recovery
 
-`usage_unknown` remains the fail-closed latch for legacy/unattributed uncertainty and corruption; it is never cleared automatically. Unknown historical usage is not zero usage, and no token amount may be invented. The separately authorized legacy row-17 latch recovery is complete, and row 17 remains unchanged evidence. Non-timeout structured ambiguity continues to require exact operator reconciliation/retirement. Valid timeout ambiguity remains historical evidence and is admitted automatically only after its UTC-day boundary; it is never rewritten or described as zero-token usage. Do not make a provider request merely to test whether the account works.
+`usage_unknown` remains the fail-closed latch for legacy/unattributed uncertainty and corruption; it is never cleared automatically. The accounting incident is resolved and production currently has `usage_unknown=0`. Row 17 remains unchanged legacy evidence. Rows 19 and 21 remain durable timeout ambiguities with unknown token usage, but they do not block admission after their respective `accounting_through` UTC days. Row 22 is `confirmed_zero` only because its exact identity and persisted pre-dispatch evidence were recovered through migration 0007; generic ambiguity clearing remains forbidden. Do not reinterpret historical zero placeholders as proven token usage or make a provider request merely to test availability.
 
 ## Production checkpoints
 
-Latest verified production commit:
+Latest verified deployed source commit:
 
-`be1c03a feat: enable daily AI Agent Radar monitoring`
+`f81d6ac0d24baa843e9140a20a1ff00e8f535377`
+
+The natural `2026-10-16` scheduled cycle proved the Batch Gemini production path end to end: 10 successful Brave searches returned 50 observations, one `gemini-3.8-flash` batch dispatch settled exactly, four fresh stories were persisted and delivered in one digest, and the cycle completed with zero failures.
+
+The natural `2026-10-20` cycle proved deployed RSS discovery reached the shared Batch pool: GitHub Changelog and Chrome for Developers succeeded and produced valid candidates; OpenAI and Cloudflare AI were isolated at `body_limit` without breaking Brave. This checkpoint establishes partial RSS health, not four-feed health.
 
 Important history, oldest first:
 

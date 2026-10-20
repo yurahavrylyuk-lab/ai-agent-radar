@@ -1,10 +1,12 @@
 # AI Agent Radar
 
-AI Agent Radar is a Node.js and TypeScript project for discovering practical AI-agent, AI-product, and developer-tool updates. Each manually started monitoring cycle follows this local pipeline:
+AI Agent Radar is a Node.js and TypeScript project for discovering practical AI-agent, AI-product, and developer-tool updates. Production monitoring follows this scheduled pipeline:
 
 ```text
-Brave Search + optional bounded X polling → deduplication → Gemini analysis → relevance filtering → Resend email notification
+multi-query Brave + bounded RSS → shared deduplication → one Gemini batch → up to four stories → one Resend digest
 ```
+
+The retained `runMonitoringCycle()` per-story path is available for legacy/local use but is not the Cloudflare scheduled production path.
 
 The project is an educational discovery and project-idea radar: its aim is not just to summarize news, but to surface what is worth learning from or building with.
 
@@ -13,7 +15,7 @@ The project is an educational discovery and project-idea radar: its aim is not j
 - Duplicate URLs are stored and are not re-analyzed by Gemini.
 - Notification history prevents duplicate email delivery.
 - Brave and Gemini have persistent API usage guards.
-- A conservative per-cycle analysis cap limits new analyses.
+- Candidate, prompt, selection, dispatch, and delivery caps bound each scheduled Batch cycle.
 - The original source title and URL are preserved through analysis and notification formatting.
 - Local discovery and notification history preserve operational state across runs.
 - Recently analyzed but unnotified discoveries can be replayed from durable history without another Gemini analysis.
@@ -22,17 +24,17 @@ Production runs in Cloudflare Workers with D1-backed persistence. Public HTTP re
 
 ## Cloudflare Worker and D1 foundation
 
-The repository now contains the code foundation for a future Cloudflare Worker with D1-backed persistence. The Worker has a harmless health response only; it does not run monitoring from HTTP requests.
+The repository contains the production Cloudflare Worker with D1-backed persistence. The Worker has a harmless health response only; it does not run monitoring from HTTP requests.
 
 Current:
 
 - Local JSON runtime state remains the default local implementation.
-- D1 adapters exist for discoveries, notifications, Brave/Gemini usage, and the disabled-by-default P6 X inbox/cursor/budget state.
+- D1 adapters exist for discoveries, notifications, Brave/Gemini usage, and the disabled/deprecated P6 X inbox/cursor/budget state.
 - The versioned D1 schema lives in `migrations/`; migration `0003` adds nullable Gemini model attribution, while unapplied migration `0004` adds only P6 X tables.
 
-Production schedule: `0 8 * * *` UTC (daily at 08:00 UTC). Each scheduled event runs one bounded monitoring cycle: up to ten quota-guarded Brave searches, up to four new Gemini analyses, and at most one Resend notification. D1 preserves deduplication, usage, discoveries, and notification history.
+Production schedule: `0 8 * * *` UTC (daily at 08:00 UTC). Each scheduled event runs `runBatchMonitoringCycle()`: up to ten quota-guarded Brave searches plus bounded RSS feed collection enter one shared canonical/history-deduplicated pool; at most 50 candidates enter the current 32 KiB prompt; Gemini is dispatched at most once; at most four stories are selected; and at most one Resend digest is sent. D1 preserves deduplication, usage, discoveries, Batch-selection provenance, and notification history.
 
-Gemini analysis uses a source-controlled, forward-only model pool:
+The retained legacy Gemini analysis path uses a source-controlled, forward-only model pool:
 `gemini-3.8-flash`, `gemini-3.6-flash`, then `gemini-3.5-flash-lite`.
 Each model preserves the existing initial request plus three 503 retries. The
 provider advances only after exhausted verified 503/UNAVAILABLE responses or a
@@ -44,6 +46,8 @@ remain fail-closed and normally stop the theoretical 12-attempt chain early.
 `GEMINI_MODEL` is deprecated and ignored; it cannot alter the reviewed pool.
 The pool uses only the approved included Free Tier capacity; paid fallback is not enabled.
 
+The production scheduled Batch path uses `gemini-3.8-flash` with at most one provider dispatch. It does not perform 503 retries, model fallback, repair, per-story analysis, or a second ranking request.
+
 The Gemini provider deadline is 90 seconds across dispatch, headers, and body
 reading/parsing. A timed-out attempt remains durable, unknown-token accounting,
 stops further Gemini work in that cycle, and blocks new admission only through
@@ -51,13 +55,19 @@ the end of its `accounting_through` UTC day. It remains counted as one request
 in every applicable accounting window; its zero token placeholders are not
 treated as proof of zero use.
 
-### P6 selected-account X discovery
+### Deprecated P6 selected-account X discovery
 
-P6 adds a disabled-by-default, source-controlled selected-account timeline adapter. Its fixed v1 registry contains the immutable decimal-string user IDs approved for OpenAI, Anthropic, Google DeepMind, GitHub, and Microsoft, in that order. Handles are display metadata only; the runtime performs no user lookup, account discovery, search, pagination, redirect resolution, or retry.
+The repository retains a disabled source-controlled selected-account timeline adapter. Its fixed v1 registry contains the immutable decimal-string user IDs approved for OpenAI, Anthropic, Google DeepMind, GitHub, and Microsoft, in that order. Handles are display metadata only; the runtime performs no user lookup, account discovery, search, pagination, redirect resolution, or retry.
 
-When later activated, the adapter reserves worst-case local usage before each request and is bounded to five requests/50 Post reads per cycle, 5/35/155 requests by UTC day/ISO week/calendar month, 1,550 reserved reads/month, and an $8 source-controlled monthly ceiling at the approved price. Price approval expires and fails closed. X candidates share the existing four Gemini analysis positions and one digest; no X-only lane exists. X-owned provenance survives D1/JSON persistence and replay, provides visible digest attribution, and prevents below-threshold P4 fallback.
+The historical adapter retains its reviewed bounds and source-controlled registry, but it has zero production dependency.
 
-`X_DISCOVERY_ENABLED` defaults to false. Production activation is a separate human decision requiring migration `0004`, the `X_BEARER_TOKEN` Worker secret, current X terms/price/endpoint verification, prepaid-credit approval with auto-recharge off, and a provider-side spending cap. This implementation task does not perform any of those actions.
+X is disabled and production activation is abandoned/deprecated. Migration `0004_x_discovery.sql` is intentionally unapplied; no X secret or paid provider capacity is required. X is not active roadmap work.
+
+### RSS discovery
+
+RSS discovery is implemented and deployed for four approved first-party feeds. It is bounded to five configured feeds, five item positions per feed, one request with no retry or redirect, a 5-second request-through-body deadline, and 256 KiB per feed. Feed failures are isolated and do not stop Brave. The Workerd native-fetch receiver issue is fixed.
+
+The natural 2026-10-20 production cycle proved GitHub Changelog and Chrome for Developers succeeded and supplied valid RSS candidates to the shared Gemini pool. OpenAI and Cloudflare AI reached `body_limit` and remain follow-up reliability work; all four feeds are not claimed healthy.
 
 Repository Brave request limits are configured as:
 
@@ -79,13 +89,14 @@ Brave request budget:
 - Developer tools and workflow: IDEs, CLI tools, CI/CD, code review, productivity
   tooling, development techniques, and tutorials.
 
-After the normal relevance threshold is met, Codex and Claude Code each receive
+In the retained legacy per-story path, after its normal relevance threshold is met,
+Codex and Claude Code each receive
 a deterministic `+1` digest-ordering bonus capped at `10`. The original Gemini
 relevance score is not changed, and the bonus is never applied below the normal
 notification threshold, so keyword presence alone cannot make a story eligible.
 At the score ceiling, preferred-tool status breaks an otherwise exact tie.
 
-Before Gemini analysis, unique unseen Brave results with explicit Codex or Claude
+In that legacy path, before Gemini analysis, unique unseen Brave results with explicit Codex or Claude
 Code matches receive the same bounded priority signal when the four analysis
 slots are selected. At most two positions are reserved by this signal; other
 candidates retain their stable search order and fill the remaining slots. If
@@ -100,28 +111,27 @@ GitHub Blog, and Microsoft developer documentation) and five broad topic
 queries. Every monitoring query uses Brave's weekly `freshness: "pw"` filter;
 an explicit/custom cycle still performs one freshness-constrained search.
 
-The four Gemini analysis positions preserve P3's two Codex/Claude Code
-opportunities. At most one additional recent, exact-host result observed by its
-matching targeted official query is given a bounded analysis opportunity; normal
-stable ordering fills the rest. This is neither a relevance bonus nor source
-trust: Gemini, the normal threshold, P4 fallback policy, and notification
-history remain authoritative.
+The implemented P5 multi-query Brave observations now join RSS in the scheduled
+Batch candidate pool. The older four-position pre-analysis behavior remains part
+of `runMonitoringCycle()` only and is not the production scheduled path.
 
-## Fallback digest and source trust
+## Batch low-relevance delivery and legacy fallback
 
-The normal notification threshold remains `7`. If at least one fresh-or-replay,
-unsent analysis reaches that threshold, the normal digest contains only normally
-eligible stories; lower-scored stories never pad it.
+In the production scheduled Batch path, Gemini may select up to four stories with
+scores from 1–10. Every valid selected story is deliverable. A selected story
+below 7 is visibly labelled exactly `It could be relevant`; a story at or above
+7 retains normal rendering. An all-low selected batch can therefore still
+produce one digest without another Gemini request.
 
-Only when zero fresh-or-replay, unsent analyses reach the normal threshold may the radar
-send a fallback digest. Fallback candidates must have an exact hostname match
-in the human-maintained registry in `src/config/trustedSources.ts`. Parent
-domains do not approve subdomains, `www` variants are not inferred, and unknown,
-malformed, or unsupported sources fail closed. Trusted fallback candidates use
-the existing ranking and notification-history behavior, retain their original
-Gemini relevance scores, and are visibly labelled `It could be relevant` in
-both HTML and plain text. If no trusted fallback candidate exists, no email is
-sent. Source trust has no effect on normal eligibility.
+Fresh Batch selections persist optional exact provenance
+`batchSelectionProvenance?: { kind: "batch" }`. A replayed low-score story is
+eligible only when this marker is present and valid. Legacy low-score records
+remain ineligible, but their URL aliases still contribute notification-history
+evidence so they can prevent a resend without becoming delivery candidates.
+
+The exact-host P4 trusted-source fallback and score-7 normal gate remain in the
+legacy `runMonitoringCycle()` path. They are not used to exclude selected stories
+from the scheduled Batch path.
 
 P2 is merged and Cloudflare production is configured with
 `BRAVE_DAILY_SEARCH_LIMIT=10`, `BRAVE_WEEKLY_SEARCH_LIMIT=100`, and
@@ -135,10 +145,11 @@ from its immutable `firstSeenAt`, provided it was first seen on or after
 100 rows. Replay does not require Brave to find the URL again and does not call
 Gemini again.
 
-Fresh and replay candidates deduplicate by normalized URL, share P3 ranking and
-the four-story/one-email limits, and use the ordinary notification-history
-identity. A normal replay story suppresses fallback. Below-threshold replay is
-allowed only when the source still passes the current exact-host P4 registry.
+Fresh and replay candidates deduplicate by normalized URL, share deterministic
+ranking and the four-story/one-email limits, and use the ordinary notification-
+history identity. In the scheduled Batch path, low-score replay requires the
+exact Batch-selection marker described above; legacy low-score replay remains
+ineligible.
 Failed sends create no success record, so a candidate can be considered again
 before expiry; the existing provider-accepted/history-write-failed ambiguity is
 unchanged.
@@ -188,4 +199,4 @@ Create one Git checkpoint per completed logical development step—not on every 
 3. Review `git diff` and `git status`.
 4. Confirm no secrets or runtime data are staged (`.env` and `data/*.json` must remain ignored).
 5. Commit with a descriptive message.
-6. Push the checkpoint to `origin/main`.
+6. Push the feature branch; merging to `main` requires explicit human approval.
