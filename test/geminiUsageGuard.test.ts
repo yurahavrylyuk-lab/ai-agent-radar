@@ -85,8 +85,9 @@ const requestedModel = (init?: RequestInit) => JSON.parse(String(init?.body)).mo
 test("batch single-dispatch policy preserves accounting for every provider outcome", async (t) => {
   const cases = [
     { name: "success", response: () => jsonResponse(successfulBody), status: "exact", settlements: 1 },
-    { name: "verified 503", response: unavailable, status: "confirmed_zero", settlements: 1, error: /HTTP 503/ },
-    { name: "model-specific 429", response: () => modelQuota([quotaFailure(quotaViolation("gemini-3.8-flash"))]), status: "confirmed_zero", settlements: 1, error: /HTTP 429/ },
+    { name: "verified 503", response: unavailable, status: "confirmed_zero", settlements: 1, error: /HTTP 503/, providerFailureClass: "unavailable_503" },
+    { name: "verified 503 without provider status", response: () => jsonResponse({ error: { message: "Unavailable" } }, 503, "Service Unavailable"), status: "confirmed_zero", settlements: 1, error: /HTTP 503/, providerFailureClass: "unavailable_503" },
+    { name: "model-specific 429", response: () => modelQuota([quotaFailure(quotaViolation("gemini-3.8-flash"))]), status: "confirmed_zero", settlements: 1, error: /HTTP 429/, providerFailureClass: "resource_exhausted_429" },
     { name: "ambiguous 429", response: () => modelQuota([]), status: "transport_ambiguous", reason: "response_usage_unavailable", settlements: 0, error: /unconfirmed usage/ },
     { name: "synchronous transport throw", response: (): Response => { throw new Error("network unavailable"); }, status: "transport_ambiguous", reason: "network_error", settlements: 0, error: /network unavailable/ },
     { name: "invalid provider JSON", response: () => new Response("not-json"), status: "transport_ambiguous", reason: "response_usage_unavailable", settlements: 0, error: /not valid JSON/ },
@@ -103,7 +104,11 @@ test("batch single-dispatch policy preserves accounting for every provider outco
       fetchImplementation: ((_url, init) => { models.push(requestedModel(init)); return Promise.resolve(item.response()); }) as typeof fetch };
     const result = geminiBatch.generateBatchWithGemini("batch input", dependencies);
     assert.equal(context.batchStarted, true, "invocation must be consumed before any await");
-    if (item.error) await assert.rejects(result, item.error);
+    if (item.error) await assert.rejects(result, (error: unknown) => {
+      assert.match(error instanceof Error ? error.message : "", item.error!);
+      assert.equal((error as { providerFailureClass?: string }).providerFailureClass, item.providerFailureClass);
+      return true;
+    });
     else {
       const success = await result;
       assert.equal(success.outputText, "GEMINI_OK");
@@ -628,7 +633,11 @@ test("timeout ambiguity preserves the reservation and does not fallback", async 
     const signal = init?.signal as AbortSignal;
     await new Promise<void>((_resolve, reject) => signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true }));
     throw new Error("unreachable");
-  }) as typeof fetch }), /timed out after 90 seconds/);
+  }) as typeof fetch }), (error: unknown) => {
+    assert.match(error instanceof Error ? error.message : "", /timed out after 90 seconds/);
+    assert.equal((error as { providerFailureClass?: string }).providerFailureClass, undefined);
+    return true;
+  });
   assert.equal(calls, 1);
   assert.equal(tracker.data.usageUnknown, false);
   assert.equal(tracker.data.records[0]?.model, "gemini-3.8-flash");

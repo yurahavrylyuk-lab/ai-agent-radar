@@ -446,6 +446,89 @@ async function withD1(action: (database: Database.Database, d1: D1Database) => P
   } finally { database.close(); }
 }
 
+test("provider failures reach scheduled telemetry only through bounded reviewed classes", async (t) => {
+  const cases = [
+    {
+      name: "model-specific 429",
+      response: () => new Response(JSON.stringify({ error: {
+        status: "RESOURCE_EXHAUSTED",
+        message: "UNIQUE_PRIVATE_PROVIDER_TEXT_429",
+        details: [{ "@type": "type.googleapis.com/google.rpc.QuotaFailure", violations: [{
+          quotaMetric: "generativelanguage.googleapis.com/generate_content_free_tier_requests",
+          quotaDimensions: { model: "gemini-3.8-flash" },
+        }] }],
+      } }), { status: 429, statusText: "Too Many Requests" }),
+      providerFailureClass: "resource_exhausted_429",
+      accountingStatus: "confirmed_zero",
+      privateText: "UNIQUE_PRIVATE_PROVIDER_TEXT_429",
+    },
+    {
+      name: "503 UNAVAILABLE",
+      response: () => new Response(JSON.stringify({ error: {
+        status: "UNAVAILABLE", message: "UNIQUE_PRIVATE_PROVIDER_TEXT_503",
+      } }), { status: 503, statusText: "Service Unavailable" }),
+      providerFailureClass: "unavailable_503",
+      accountingStatus: "confirmed_zero",
+      privateText: "UNIQUE_PRIVATE_PROVIDER_TEXT_503",
+    },
+    {
+      name: "503 without provider status",
+      response: () => new Response(JSON.stringify({ error: {
+        message: "UNIQUE_PRIVATE_PROVIDER_TEXT_503_NO_STATUS",
+      } }), { status: 503, statusText: "Service Unavailable" }),
+      providerFailureClass: "unavailable_503",
+      accountingStatus: "confirmed_zero",
+      privateText: "UNIQUE_PRIVATE_PROVIDER_TEXT_503_NO_STATUS",
+    },
+    {
+      name: "malformed untrusted quota payload",
+      response: () => new Response(JSON.stringify({ error: {
+        status: "RESOURCE_EXHAUSTED",
+        message: "UNIQUE_PRIVATE_MALFORMED_PROVIDER_TEXT",
+        details: [{ "@type": "private.example/UntrustedDetail", candidateTitle: "PRIVATE_CANDIDATE_TITLE" }],
+      } }), { status: 429, statusText: "Too Many Requests" }),
+      providerFailureClass: undefined,
+      accountingStatus: "transport_ambiguous",
+      privateText: "UNIQUE_PRIVATE_MALFORMED_PROVIDER_TEXT",
+    },
+  ] as const;
+
+  for (const item of cases) await t.test(item.name, async () => {
+    await withD1(async (_database, d1) => {
+      const f = fixture();
+      const usage = new D1GeminiUsageStore(d1);
+      let fetchCalls = 0;
+      f.dependencies.analyze = batch => analyzeBatch(batch, { generate: input => generateBatchWithGemini(input, {
+        usageTracker: usage,
+        cycleContext: f.dependencies.geminiCycleContext,
+        environment: { GEMINI_API_KEY: "offline-key", GEMINI_DAILY_REQUEST_LIMIT: "5", GEMINI_WEEKLY_REQUEST_LIMIT: "20", GEMINI_MONTHLY_REQUEST_LIMIT: "50", GEMINI_DAILY_TOKEN_LIMIT: "10000", GEMINI_WEEKLY_TOKEN_LIMIT: "30000", GEMINI_MONTHLY_TOKEN_LIMIT: "100000" },
+        fetchImplementation: async () => { fetchCalls++; return item.response(); },
+      }) });
+
+      const result = await run(f.dependencies);
+      const summary = createScheduledCycleSummary(result, {
+        DB: d1, BRAVE_SEARCH_API_KEY: "offline-brave", BRAVE_DAILY_SEARCH_LIMIT: "10", BRAVE_WEEKLY_SEARCH_LIMIT: "100", BRAVE_MONTHLY_SEARCH_LIMIT: "350",
+        GEMINI_API_KEY: "offline-key", GEMINI_DAILY_REQUEST_LIMIT: "5", GEMINI_WEEKLY_REQUEST_LIMIT: "20", GEMINI_MONTHLY_REQUEST_LIMIT: "50",
+        GEMINI_DAILY_TOKEN_LIMIT: "10000", GEMINI_WEEKLY_TOKEN_LIMIT: "30000", GEMINI_MONTHLY_TOKEN_LIMIT: "100000",
+        RESEND_API_KEY: "offline-resend", NOTIFICATION_EMAIL: "offline@example.test",
+      });
+      const data = await usage.getUsageData();
+
+      assert.equal(fetchCalls, 1);
+      assert.equal(result.batch?.status, "provider_failed");
+      assert.equal(result.batch?.providerFailureClass, item.providerFailureClass);
+      assert.equal(summary.batch?.providerFailureClass, item.providerFailureClass);
+      assert.equal(result.geminiProviderAttempts, 1);
+      assert.equal(data.records.length, 1);
+      assert.equal(data.records[0]?.accountingStatus, item.accountingStatus);
+      assert.deepEqual([data.records[0]?.requestCount, data.records[0]?.inputTokens, data.records[0]?.outputTokens, data.records[0]?.totalTokens], [1, 0, 0, 0]);
+      const serialized = JSON.stringify(summary);
+      assert.equal(serialized.includes(item.privateText), false);
+      assert.equal(serialized.includes("PRIVATE_CANDIDATE_TITLE"), false);
+    });
+  });
+});
+
 test("RF3 invalid analysis after exact provider settlement persists zero fresh rows with one dispatch and replay-only delivery", async () => {
   await withD1(async (database, d1) => {
     const f = fixture(); const replay = stored("https://example.test/replay"); f.discoveries.set(replay.normalizedUrl, replay);

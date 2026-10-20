@@ -1,5 +1,13 @@
 # Daily Self-Improvement Summary
 
+## 2026-10-20 — Bounded Gemini provider-failure observability
+
+- Status: REVIEW; branch `codex/gemini-provider-failure-observability`, baseline `1dec6c32ef587b4722c72c7e1a298d801df3dcac`.
+- Added the closed scheduled Batch classification `resource_exhausted_429 | unavailable_503` only after existing structured provider evidence validates confirmed-zero accounting. Scheduled serialization independently allowlists the class and copies no provider body, message, details, prompt, candidate content, headers, or stack.
+- Accounting, retry/fallback, timeout, admission, quota, discovery, replay, selection, and delivery behavior remain unchanged. Ambiguous transport, timeout, malformed, and untrusted responses receive no reviewed HTTP classification.
+- TDD evidence: the reviewed 429 and both accepted 503 forms initially settled `confirmed_zero` but exposed no classification; focused GREEN passed (Gemini/accounting 65/65, Batch 28/28, scheduled summary 17/17), followed by the complete offline suite 628/628, build, Worker typecheck, Wrangler dry-run, and `git diff --check`.
+- No provider call, monitoring cycle, deployment, migration, D1 mutation, production action, push, PR, or merge occurred.
+
 ## 2026-10-20 — Production-state documentation reconciliation
 
 - Status: REVIEW; branch `codex/docs-production-state-reconciliation`, exact production/main baseline `f81d6ac0d24baa843e9140a20a1ff00e8f535377`.

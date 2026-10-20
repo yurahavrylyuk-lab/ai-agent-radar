@@ -157,6 +157,8 @@ function summarizeBatch(batch: BatchCycleMetrics, env: RadarWorkerEnv): BatchCyc
     }
     selected.push({ candidateId: entry.candidateId, hostname, score: entry.score, provenance });
   }
+  const status = allowedString(batch.status, ["empty", "blocked", "preparation_failed", "provider_failed", "timeout", "invalid_output", "validated"]) ?? "preparation_failed";
+  const providerFailureClass = allowedString(batch.providerFailureClass, ["resource_exhausted_429", "unavailable_503"] as const);
   return {
     searchAttempts: boundedCount(batch.searchAttempts, 10), searchSuccesses: boundedCount(batch.searchSuccesses, 10), searchFailures: boundedCount(batch.searchFailures, 10),
     rawObservations: boundedCount(batch.rawObservations, 75), acceptedObservations: boundedCount(batch.acceptedObservations, 75),
@@ -165,7 +167,8 @@ function summarizeBatch(batch: BatchCycleMetrics, env: RadarWorkerEnv): BatchCyc
     sizeExcluded: boundedCount(batch.sizeExcluded, 50), submittedCandidates: boundedCount(batch.submittedCandidates, 50), promptBytes: boundedCount(batch.promptBytes, 32768),
     submittedBySource: { brave: boundedCount(batch.submittedBySource?.brave, 50), rss: boundedCount(batch.submittedBySource?.rss, 25) },
     truncationStage: allowedString(batch.truncationStage, ["initial", "snippet384", "snippet192", "snippet96", "snippet0", "title128", "tail"] as const) ?? null,
-    status: allowedString(batch.status, ["empty", "blocked", "preparation_failed", "provider_failed", "timeout", "invalid_output", "validated"]) ?? "preparation_failed",
+    status,
+    ...(status === "provider_failed" && providerFailureClass !== undefined ? { providerFailureClass } : {}),
     reservationAttempts: boundedCount(batch.reservationAttempts, 1), reservations: boundedCount(batch.reservations, 1), providerDispatches: boundedCount(batch.providerDispatches, 1),
     returnedStories: boundedCount(batch.returnedStories, 4), acceptedStories: boundedCount(batch.acceptedStories, 4), selected,
     freshDelivered: boundedCount(batch.freshDelivered, 4), replayDelivered: boundedCount(batch.replayDelivered, 4), emailCount: boundedCount(batch.emailCount, 1),

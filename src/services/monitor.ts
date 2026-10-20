@@ -9,7 +9,7 @@ import { prepareBatchPrompt } from "./batchPrompt.js";
 import { BatchAnalysisError } from "./analysisAgent.js";
 import { recordBatchSelection } from "./discoveryProcessor.js";
 import { type GeminiAvailability, type GeminiBlockedReason } from "./geminiUsageGuard.js";
-import { createGeminiCycleContext, type GeminiBatchCycleContext, type GeminiCycleContext } from "../tools/llm/gemini.js";
+import { createGeminiCycleContext, getGeminiProviderFailureClass, type GeminiBatchCycleContext, type GeminiCycleContext } from "../tools/llm/gemini.js";
 import { xPostIdFromUrl, type XDiscoveryResult } from "./xDiscovery.js";
 import { BraveUsageGuardDeniedError } from "../tools/webSearch.js";
 import type { BatchAnalysisResult, BatchCycleMetrics, BatchDeliveryCandidate, BatchObservation, BraveSearchPage, DeliveryCandidate, DiscoveryProcessingResult, MonitoringCycleResult, MonitoringSearchFailure, NotificationResult, PreparedBatch, RssDiscoveryResult, SearchResult, StoredDiscovery, XSourceProvenance } from "../types/index.js";
@@ -271,6 +271,10 @@ export async function runBatchMonitoringCycle(dependencies: BatchMonitoringDepen
         }));
       } catch (error) {
         batch.status = geminiCycleContext.dispatchBlockedByTimeout ? "timeout" : error instanceof BatchAnalysisError ? "invalid_output" : "provider_failed";
+        const providerFailureClass = getGeminiProviderFailureClass(error);
+        if (batch.status === "provider_failed" && providerFailureClass !== undefined) {
+          batch.providerFailureClass = providerFailureClass;
+        }
         result.failures += 1;
         const message = batch.status === "timeout"
           ? "Gemini batch timeout"
