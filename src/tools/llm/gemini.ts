@@ -3,6 +3,7 @@ import { checkGeminiUsage } from "../../services/geminiUsageGuard.js";
 import { areGeminiTimestampsInSameUtcWindows } from "../../services/geminiAccountingWindows.js";
 import type { GeminiAmbiguityReason, GeminiUsageReservation, GeminiUsageStore } from "../../services/geminiUsageTracker.js";
 import type { RuntimeEnvironment } from "../../services/radarRuntimeConfiguration.js";
+import type { GeminiProviderFailureClass } from "../../types/index.js";
 import type { LlmResult } from "./types.js";
 
 const GEMINI_INTERACTIONS_URL = "https://generativelanguage.googleapis.com/v1beta/interactions";
@@ -19,6 +20,18 @@ interface GeminiResponse {
 
 interface GeminiErrorBody {
   error?: { message?: unknown; status?: unknown; details?: unknown };
+}
+
+class GeminiReviewedProviderFailureError extends Error {
+  constructor(message: string, readonly providerFailureClass: GeminiProviderFailureClass) {
+    super(message);
+    this.name = "GeminiReviewedProviderFailureError";
+  }
+}
+
+/** Returns only classification attached at the validated provider/accounting boundary. */
+export function getGeminiProviderFailureClass(error: unknown): GeminiProviderFailureClass | undefined {
+  return error instanceof GeminiReviewedProviderFailureError ? error.providerFailureClass : undefined;
 }
 
 export interface GeminiCycleContext {
@@ -296,8 +309,12 @@ async function generateWithGeminiPolicy(
         const body = errorBody ?? "";
         const parsed = parsedErrorBody;
         const message = errorMessage(body, parsed, apiKey);
-        const zeroUsageIsConfirmed = isUnavailable(response.status, parsed) ||
-          (response.status === 429 && isModelSpecificQuotaFailure(parsed, model));
+        const providerFailureClass: GeminiProviderFailureClass | undefined = isUnavailable(response.status, parsed)
+          ? "unavailable_503"
+          : response.status === 429 && isModelSpecificQuotaFailure(parsed, model)
+            ? "resource_exhausted_429"
+            : undefined;
+        const zeroUsageIsConfirmed = providerFailureClass !== undefined;
 
         if (!zeroUsageIsConfirmed) {
           await preserveAmbiguity(tracker, reservation, "response_usage_unavailable");
@@ -306,14 +323,17 @@ async function generateWithGeminiPolicy(
         try { await tracker.confirmZeroRequest(reservation); }
         catch { throw new Error("Gemini request failed, and the confirmed-zero attempt could not be recorded safely."); }
 
-        if (isUnavailable(response.status, parsed)) {
+        if (providerFailureClass === "unavailable_503") {
           if (attempt < maxAttemptsPerModel) { await sleep(retryDelayMs); continue; }
           if (modelIndex < models.length - 1) { context.fallbacks += 1; break; }
-        } else if (response.status === 429 && isModelSpecificQuotaFailure(parsed, model) && modelIndex < models.length - 1) {
+        } else if (providerFailureClass === "resource_exhausted_429" && modelIndex < models.length - 1) {
           context.fallbacks += 1;
           break;
         }
-        throw new Error(`Gemini API request failed: HTTP ${response.status} ${response.statusText}: ${message}`);
+        throw new GeminiReviewedProviderFailureError(
+          `Gemini API request failed: HTTP ${response.status} ${response.statusText}: ${message}`,
+          providerFailureClass,
+        );
       }
 
       if (!geminiResponse) {

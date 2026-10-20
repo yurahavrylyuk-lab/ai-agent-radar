@@ -294,6 +294,24 @@ test("scheduled summary copies every batch counter and distinguishes selected st
   assert.equal(reservedOnly.batch?.reservations, 1); assert.equal(reservedOnly.batch?.providerDispatches, 0);
 });
 
+test("scheduled summary independently allowlists provider failure classification", () => {
+  const classified = createScheduledCycleSummary(monitoringResult({ batch: batchMetrics({
+    status: "provider_failed", providerFailureClass: "resource_exhausted_429",
+  }) }), environment());
+  assert.equal(classified.batch?.providerFailureClass, "resource_exhausted_429");
+
+  const poisoned = monitoringResult({ batch: batchMetrics({ status: "provider_failed" }) });
+  (poisoned.batch as unknown as Record<string, unknown>).providerFailureClass = "UNIQUE_PRIVATE_PROVIDER_TEXT";
+  const serialized = JSON.stringify(createScheduledCycleSummary(poisoned, environment()));
+  assert.equal(serialized.includes("providerFailureClass"), false);
+  assert.equal(serialized.includes("UNIQUE_PRIVATE_PROVIDER_TEXT"), false);
+
+  const inconsistent = createScheduledCycleSummary(monitoringResult({ batch: batchMetrics({
+    status: "validated", providerFailureClass: "unavailable_503",
+  }) }), environment());
+  assert.equal(inconsistent.batch?.providerFailureClass, undefined);
+});
+
 test("scheduled summary allowlists and bounds RSS telemetry without source content", () => {
   const summary = createScheduledCycleSummary(monitoringResult({
     rss: {

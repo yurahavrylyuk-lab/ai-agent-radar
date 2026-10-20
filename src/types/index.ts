@@ -208,6 +208,8 @@ export interface XAccountFailure {
   reason: XAccountFailureReason;
 }
 
+export type GeminiProviderFailureClass = "resource_exhausted_429" | "unavailable_503";
+
 export interface BatchCycleMetrics {
   searchAttempts: number; searchSuccesses: number; searchFailures: number;
   rawObservations: number; acceptedObservations: number;
@@ -216,6 +218,7 @@ export interface BatchCycleMetrics {
   submittedBySource: { brave: number; rss: number };
   truncationStage: BatchTruncationStage | null;
   status: "empty" | "blocked" | "preparation_failed" | "provider_failed" | "timeout" | "invalid_output" | "validated";
+  providerFailureClass?: GeminiProviderFailureClass;
   reservationAttempts: number; reservations: number; providerDispatches: number;
   returnedStories: number; acceptedStories: number;
   selected: Array<{

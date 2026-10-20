@@ -1,5 +1,11 @@
 # Self-improvement changelog
 
+## 2026-10-20 — Bounded Gemini provider-failure observability ready for review
+
+- Added closed Batch telemetry for reviewed confirmed-zero Gemini failures: `resource_exhausted_429` and `unavailable_503`.
+- Classification originates only at the existing structured-evidence/accounting boundary and is independently allowlisted by scheduled serialization; arbitrary provider content is not copied into metrics or logs.
+- Preserved accounting, dispatch, retry/fallback, timeout, quota, Brave/RSS, replay, selection, and email behavior. No deployment, provider call, migration, D1 mutation, push, PR, or merge occurred.
+
 ## 2026-10-20 — Production documentation reconciled
 
 - Updated governance/project tracking to the deployed source `f81d6ac0d24baa843e9140a20a1ff00e8f535377` and current scheduled Batch architecture.
