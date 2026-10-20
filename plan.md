@@ -314,3 +314,12 @@ P0–P6 criteria below record their historical implementation gates. Current sch
 - Brave daily limit must remain at 10; only weekly and monthly limits change.
 - Any future P7 feedback influence must be soft (bounded) and must not allow feedback alone to override large relevance gaps.
 - Any future P7 inspect/reset routes must be access-controlled.
+
+### Backlog/Plan Actualization Checkpoint
+
+After every major feature or fix that is merged and/or production-validated, before beginning the next major roadmap item:
+
+1. Update `backlog.md` with `DONE`, `TODO`, `DEFERRED`, or `DEPRECATED`, plus current priority and actual execution order.
+2. Update `plan.md` with the current architecture and active implementation rules, explicitly superseding obsolete architecture.
+3. Update `docs/self-improvement/PROJECT_STATE.md` only with verified production or deployment evidence.
+4. Do not begin the next major roadmap item while these authoritative documents materially contradict the shipped state.

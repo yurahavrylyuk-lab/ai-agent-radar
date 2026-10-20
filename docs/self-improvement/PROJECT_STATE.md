@@ -4,7 +4,11 @@
 
 This file is the durable source of truth for the production baseline, architecture, limits, safety rules, and approval boundaries. Update it only with verified evidence and the required authorization; distinguish intended changes from deployed facts.
 
-Current verified production source (2026-10-20): `f81d6ac0d24baa843e9140a20a1ff00e8f535377`. The scheduled production path is Batch monitoring with multi-query Brave plus RSS in one shared candidate pool, at most one Gemini dispatch, at most four selected stories, and at most one digest. P5, Batch Gemini, RSS discovery, and Batch low-relevance delivery are deployed. Migration `0004_x_discovery.sql` remains intentionally unapplied and X is disabled/deprecated with zero production dependency. The Gemini accounting incident is resolved: `usage_unknown=0`, rows 19 and 21 remain historical timeout ambiguity evidence, and row 22 is the exact-identity recovered `confirmed_zero` record.
+Current verified production deployment (2026-10-20): source `f81d6ac0d24baa843e9140a20a1ff00e8f535377`, Worker version `dd57f18a-7443-431d-b6bb-ae4d5ece4d8f`, deployment ID `33a93550-71fc-4753-8c2d-d2a1d405d460`, deployed at `2026-10-20T08:27:08.479492Z` with 100% traffic. Cron remains `0 8 * * *`; D1 remains `9fb545e2-2f43-4922-8b21-2d79a8de9556`; health returned `AI Agent Radar worker ready`. This deploy includes Batch low-relevance delivery, but no natural scheduled cycle has yet been observed on `f81d6ac`; that behavior is **DEPLOYED / awaiting natural-cycle validation**.
+
+The latest verified natural cycle ran earlier, from `2026-10-20T08:00:49.466Z` through `2026-10-20T08:01:22.310Z`, on source `244862880eb35300532cf75917d2936668d39409` and Worker version `eec530db-ffea-4a96-9d0e-73439610f923`. It completed 10/10 Brave searches; GitHub Changelog and Chrome for Developers RSS succeeded; OpenAI and Cloudflare AI reached `body_limit`; and five valid RSS candidates entered the shared pool. Gemini ended `provider_failed` with `confirmed_zero`, so no digest/email was produced. This cycle production-proved the RSS native-fetch receiver fix, not the later low-relevance deployment.
+
+P5, Batch Gemini, and RSS discovery are production-proven. Migration `0004_x_discovery.sql` remains intentionally unapplied and X is disabled/deprecated with zero production dependency. The Gemini accounting incident is resolved: `usage_unknown=0`, rows 19 and 21 remain historical timeout ambiguity evidence, and row 22 is the exact-identity recovered `confirmed_zero` record.
 
 Bootstrap date: 2026-09-20. The human-provided production handoff supplies the verified production checkpoint, deployed Worker version, and controlled-test discovery below. Local read-only inspection confirmed HEAD/history, Worker entry point, configured providers/limits, Cron, pre-analysis discovery deduplication, and relevance threshold. This bootstrap did not query Cloudflare, inspect live D1 data, or repeat the production test; deployment facts remain attributed to the handoff.
 
@@ -39,7 +43,7 @@ Cloudflare Cron
 - Each cycle performs one bounded recent-discovery lookup so an analyzed but unnotified discovery can re-enter the shared digest without Brave rediscovery or Gemini re-analysis. Replay adds no provider request and does not create a second email.
 - Default multi-query monitoring records isolated non-quota Brave failures by one-based query ordinal and continues sequentially so successful query results still reach normal deduplication, analysis, and notification processing. Each recorded search failure appears in `searchFailures` and increments the aggregate `failures` count. Each query is attempted at most once; there is no query or full-cycle retry. A quota denial still stops further searches without becoming a transient failure. If non-quota failures occur and no usable results were collected, the cycle rejects instead of reporting empty success.
 - No automatic full-cycle retries.
-- The production-proven Batch Gemini path performs at most one provider dispatch for the fresh batch and can return at most four selected stories for the single digest. Scores remain bounded to 1–10; a selected score below 7 is deliverable with the visible label `It could be relevant`.
+- The production-proven Batch Gemini path performs at most one provider dispatch for the fresh batch and can return at most four selected stories for the single digest. The currently deployed `f81d6ac` source permits scores 1–10 and labels a selected score below 7 with `It could be relevant`; that low-relevance behavior is awaiting its first observed natural cycle.
 - `runMonitoringCycle()` is the retained legacy per-story path. It is not invoked by the production schedule and is not removed by this documentation reconciliation.
 
 ## Providers
@@ -155,13 +159,31 @@ The production Worker bundle must not include local JSON persistence, Node files
 
 ## Production checkpoints
 
-Latest verified deployed source commit:
+### Latest verified deployment
 
-`f81d6ac0d24baa843e9140a20a1ff00e8f535377`
+- Source: `f81d6ac0d24baa843e9140a20a1ff00e8f535377`.
+- Worker version: `dd57f18a-7443-431d-b6bb-ae4d5ece4d8f`.
+- Deployment ID: `33a93550-71fc-4753-8c2d-d2a1d405d460`.
+- Deployment timestamp: `2026-10-20T08:27:08.479492Z`.
+- Traffic: 100%.
+- Cron: `0 8 * * *`.
+- D1 database ID: `9fb545e2-2f43-4922-8b21-2d79a8de9556`.
+- Health: `AI Agent Radar worker ready`.
+- Low-relevance Batch behavior: **DEPLOYED / awaiting natural-cycle validation**. No natural Cron completion is attributed to this source yet.
+
+### Latest verified natural cycle before that deployment
+
+- Source: `244862880eb35300532cf75917d2936668d39409`.
+- Worker version: `eec530db-ffea-4a96-9d0e-73439610f923`.
+- Invocation: `2026-10-20T08:00:49.466Z` through `2026-10-20T08:01:22.310Z`.
+- Brave: 10/10.
+- RSS: GitHub Changelog and Chrome for Developers succeeded; OpenAI and Cloudflare AI reached `body_limit`; five valid RSS candidates entered the shared pool.
+- Gemini/delivery: `provider_failed` / `confirmed_zero`; no digest and no email.
+- Verdict: the RSS native-fetch receiver fix was production-proven. This cycle did not exercise the later `f81d6ac` low-relevance deployment.
+
+### Earlier Batch proof
 
 The natural `2026-10-16` scheduled cycle proved the Batch Gemini production path end to end: 10 successful Brave searches returned 50 observations, one `gemini-3.8-flash` batch dispatch settled exactly, four fresh stories were persisted and delivered in one digest, and the cycle completed with zero failures.
-
-The natural `2026-10-20` cycle proved deployed RSS discovery reached the shared Batch pool: GitHub Changelog and Chrome for Developers succeeded and produced valid candidates; OpenAI and Cloudflare AI were isolated at `body_limit` without breaking Brave. This checkpoint establishes partial RSS health, not four-feed health.
 
 Important history, oldest first:
 

@@ -233,3 +233,12 @@ Current next discovery-source task: **Threads**. P7 remains TODO after Threads.
 - Do not silently invent requirements beyond the approved plan.
 - Preserve existing safety, quota, deduplication, and source-integrity behavior unless a backlog item explicitly changes it.
 - Production deployment/configuration changes require explicit approval.
+
+### Backlog/Plan Actualization Checkpoint
+
+After every major feature or fix that is merged and/or production-validated, before beginning the next major roadmap item:
+
+1. Update `backlog.md` with `DONE`, `TODO`, `DEFERRED`, or `DEPRECATED`, plus current priority and actual execution order.
+2. Update `plan.md` with the current architecture and active implementation rules, explicitly superseding obsolete architecture.
+3. Update `docs/self-improvement/PROJECT_STATE.md` only with verified production or deployment evidence.
+4. Do not begin the next major roadmap item while these authoritative documents materially contradict the shipped state.

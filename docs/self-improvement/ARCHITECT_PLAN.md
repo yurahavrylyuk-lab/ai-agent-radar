@@ -1,5 +1,11 @@
 # Architect Plan
 
+> **Status: SUPERSEDED / HISTORICAL**
+>
+> This file preserves the reviewed P6/X architecture as historical context only. It must not be used as current implementation or activation authority. P6/X production activation is deprecated, X is disabled with zero production dependency, and `0004_x_discovery.sql` intentionally remains unapplied. The active discovery-source roadmap is **Brave → RSS → Threads**.
+>
+> Current status, architecture, and roadmap authority lives in [`backlog.md`](../../backlog.md), [`plan.md`](../../plan.md), and [`PROJECT_STATE.md`](PROJECT_STATE.md). Any imperative language below belongs to the superseded historical plan.
+
 ## Gemini hotfix integration into P6 main — 2026-10-09
 
 This integration branch converges the accepted P6 source lineage at `313a21319f0252e29651a477d3e9584512696692` with the accepted and already deployed Gemini hotfix at `366d7ea6370e6297818ec7ae9489a78b99edd3e8`. Both migrations remain source-controlled under their approved names: `0004_x_discovery.sql` and `0005_gemini_ambiguity_accounting.sql`.

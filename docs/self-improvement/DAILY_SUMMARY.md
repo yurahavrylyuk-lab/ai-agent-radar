@@ -7,6 +7,7 @@
 - Recorded P5 and RSS as DONE; documented partial RSS production evidence (GitHub Changelog and Chrome succeeded, OpenAI and Cloudflare AI reached `body_limit`); made Threads the next discovery-source task.
 - Recorded deployed low-relevance delivery and exact Batch replay provenance while preserving legacy low-score replay exclusion and alias-based no-resend evidence.
 - Marked X activation deprecated with zero production dependency and migration `0004` intentionally unapplied. The legacy `runMonitoringCycle()` path remains documented but is not the scheduled production path.
+- Analyst correction marks the old P6/X Architect plan unmistakably superseded, separates the `244862...` natural-cycle evidence from the later `f81d6ac...` deployment, and adds the permanent Backlog/Plan Actualization Checkpoint to both trackers.
 - Validation is documentation-only: consistency review and `git diff --check`; no runtime tests required. No runtime, deployment, migration, D1, provider, monitoring, secret, or production action occurred.
 
 ## 2026-10-17 — Bounded RSS discovery implementation
