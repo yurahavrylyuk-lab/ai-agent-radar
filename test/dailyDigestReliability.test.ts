@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { prepareDailyDigest } from "../src/services/notificationOrchestrator.js";
-import type { BatchCandidate, BatchDeliveryCandidate, StoredDiscovery } from "../src/types/index.js";
+import { createDailyEmailContext, finalizeDailyDigest, prepareDailyDigest } from "../src/services/notificationOrchestrator.js";
+import { formatDailyDigestEmail } from "../src/services/discoveryEmailFormatter.js";
+import type { BatchCandidate, BatchDeliveryCandidate, PreparedDailyDigest, StoredDiscovery } from "../src/types/index.js";
 import type { NotificationHistory } from "../src/services/notificationHistoryCore.js";
 
 const cycleDate = "2026-10-21T08:00:00.000Z";
@@ -68,4 +69,55 @@ test("history failure suppresses every story and disabled raw fallback never res
     observedAliases: new Map(), allowRawFallback: false, reason: "persistence_unavailable" }, history());
   assert.equal(disabled.mode, "status_only");
   assert.deepEqual(disabled.items, []);
+});
+
+test("daily renderer preserves analyzed low-score labels and safely renders degraded and status modes", () => {
+  const normal: PreparedDailyDigest = { mode: "normal", reason: "selected", cycleDate,
+    items: [{ kind: "analyzed", candidate: analyzed("low", "fresh", 1) }, { kind: "analyzed", candidate: analyzed("high", "fresh", 10) }] };
+  const normalEmail = formatDailyDigestEmail(normal);
+  assert.match(normalEmail.text, /It could be relevant/);
+  assert.match(normalEmail.text, /Relevance: 10\/10/);
+
+  const unsafe = raw("raw", "https://example.test/story");
+  unsafe.source.title = `<script>alert("x")</script>`;
+  unsafe.source.snippet = "é".repeat(800);
+  const degraded = formatDailyDigestEmail({ mode: "degraded", reason: "ai_unavailable", cycleDate, items: [{ kind: "raw", candidate: unsafe }] });
+  assert.match(degraded.subject, /Daily digest — AI analysis unavailable/);
+  assert.match(degraded.text, /selected directly from today's discovery results/);
+  assert.doesNotMatch(degraded.html, /<script>/);
+  assert.doesNotMatch(degraded.text, /Relevance:|WHY IT MATTERS/);
+  assert.ok(new TextEncoder().encode(degraded.text.match(/é+/)?.[0] ?? "").byteLength <= 768);
+
+  const status = formatDailyDigestEmail({ mode: "status_only", reason: "no_eligible_stories", cycleDate, items: [] });
+  assert.match(status.subject, /Daily digest — status update/);
+  assert.match(status.text, /2026-10-21/);
+});
+
+test("daily finalizer consumes one email attempt and records raw aliases only after acceptance", async () => {
+  const candidate = raw("raw", "https://example.test/story#one");
+  candidate.aliases = [candidate.normalizedUrl, "https://example.test/story#two"];
+  const digest: PreparedDailyDigest = { mode: "degraded", reason: "ai_unavailable", cycleDate, items: [{ kind: "raw", candidate }] };
+  const writes: string[] = [];
+  const context = createDailyEmailContext();
+  let sends = 0;
+  const dependencies = { context, history: {
+    async hasNotificationBeenSent() { return false; }, async getNotificationRecord() { return undefined; },
+    async recordNotificationSent(url: string, channel: "email") { writes.push(url); return { normalizedUrl: url, channel, sentAt: cycleDate }; },
+  }, sendEmail: async () => { sends += 1; return { id: "mail-1" }; } };
+  const [first, second] = await Promise.all([finalizeDailyDigest(digest, dependencies), finalizeDailyDigest(digest, dependencies)]);
+  assert.equal(sends, 1);
+  assert.equal(first.emailOutcome === "accepted" || second.emailOutcome === "accepted", true);
+  assert.equal(first.emailAttempts + second.emailAttempts, 1);
+  assert.deepEqual(writes.sort(), [...candidate.aliases].sort());
+});
+
+test("failed daily transport is not retried and status delivery writes no story history", async () => {
+  const context = createDailyEmailContext();
+  let sends = 0;
+  const digest: PreparedDailyDigest = { mode: "status_only", reason: "no_eligible_stories", cycleDate, items: [] };
+  const outcome = await finalizeDailyDigest(digest, { context, sendEmail: async () => { sends += 1; throw new Error("provider rejected"); } });
+  const repeated = await finalizeDailyDigest(digest, { context, sendEmail: async () => { sends += 1; return { id: "wrong" }; } });
+  assert.equal(sends, 1);
+  assert.equal(outcome.emailOutcome, "failed");
+  assert.equal(repeated.emailAttempts, 0);
 });

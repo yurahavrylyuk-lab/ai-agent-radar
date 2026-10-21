@@ -162,6 +162,15 @@ export interface PreparedDailyDigest {
   cycleDate: string;
   items: DailyDigestItem[];
 }
+export interface DailyEmailContext { emailAttempted: boolean }
+export type DailyEmailOutcomeValue = "accepted" | "failed" | "unknown" | "not_attempted";
+export type DailyHistoryOutcome = "not_required" | "recorded" | "unavailable" | "persistence_failed";
+export interface DailyEmailOutcome {
+  emailAttempts: 0 | 1;
+  emailOutcome: DailyEmailOutcomeValue;
+  historyOutcome: DailyHistoryOutcome;
+  finalizationReached: boolean;
+}
 
 /** Provider-neutral content ready for a future email transport. */
 export interface DiscoveryEmailContent {

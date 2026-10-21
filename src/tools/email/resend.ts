@@ -46,9 +46,10 @@ export async function sendWithResend(
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), dependencies.timeoutMs ?? RESEND_TIMEOUT_MS);
   let response: Response;
+  const abortPromise = new Promise<never>((_resolve, reject) => controller.signal.addEventListener("abort", () => reject(new Error("Resend email request timed out after 30 seconds.")), { once: true }));
 
   try {
-    response = await fetchImplementation(RESEND_EMAILS_URL, {
+    response = await Promise.race([fetchImplementation(RESEND_EMAILS_URL, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -62,30 +63,25 @@ export async function sendWithResend(
         html: content.html,
       }),
       signal: controller.signal,
-    });
+    }), abortPromise]);
+    if (!response.ok) {
+      const message = await Promise.race([safeErrorMessage(response, secrets), abortPromise]);
+      throw new Error(`Resend email request failed: HTTP ${response.status} ${response.statusText}: ${message}`);
+    }
+    let data: unknown;
+    try {
+      data = await Promise.race([response.json(), abortPromise]);
+    } catch (error) {
+      if (controller.signal.aborted) throw error;
+      throw new Error("Resend API returned invalid JSON.");
+    }
+    const emailId = data && typeof data === "object" ? (data as Record<string, unknown>).id : undefined;
+    if (typeof emailId !== "string" || !emailId.trim()) throw new Error("Resend API returned an unexpected success response.");
+    return { id: emailId };
   } catch (error) {
     if (controller.signal.aborted) throw new Error("Resend email request timed out after 30 seconds.");
     throw new Error(`Resend email request failed: ${safeMessage(error, secrets)}`);
   } finally {
     clearTimeout(timeout);
   }
-
-  if (!response.ok) {
-    const message = await safeErrorMessage(response, secrets);
-    throw new Error(`Resend email request failed: HTTP ${response.status} ${response.statusText}: ${message}`);
-  }
-
-  let data: unknown;
-  try {
-    data = await response.json();
-  } catch {
-    throw new Error("Resend API returned invalid JSON.");
-  }
-
-  const emailId = data && typeof data === "object" ? (data as Record<string, unknown>).id : undefined;
-  if (typeof emailId !== "string" || !emailId.trim()) {
-    throw new Error("Resend API returned an unexpected success response.");
-  }
-
-  return { id: emailId };
 }

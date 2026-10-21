@@ -1,4 +1,4 @@
-import { formatDiscoveryEmail, formatDigestEmail, formatBatchDigestEmail, type DigestEmailOptions } from "./discoveryEmailFormatter.js";
+import { formatDiscoveryEmail, formatDigestEmail, formatBatchDigestEmail, formatDailyDigestEmail, type DigestEmailOptions } from "./discoveryEmailFormatter.js";
 import { batchAliasKey, isBatchNewsUrl } from "./batchCandidates.js";
 import { normalizeDiscoveryUrl } from "./discoveryHistoryCore.js";
 import { compareDiscoveryPriority } from "./discoveryPriority.js";
@@ -6,7 +6,7 @@ import { isNotificationEligible } from "./notificationEligibility.js";
 import { isTrustedFallbackSource } from "./sourceTrust.js";
 import { NotificationHistoryError, type NotificationHistory } from "./notificationHistoryCore.js";
 import { sendWithResend } from "../tools/email/resend.js";
-import type { BatchCandidate, BatchDeliveryCandidate, DailyDigestInput, DailyDigestItem, DeliveryCandidate, DiscoveryEmailContent, DiscoveryProcessingResult, EmailSendResult, NotificationRecord, NotificationResult, PreparedDailyDigest, StoredDiscovery } from "../types/index.js";
+import type { BatchCandidate, BatchDeliveryCandidate, DailyDigestInput, DailyDigestItem, DailyEmailContext, DailyEmailOutcome, DeliveryCandidate, DiscoveryEmailContent, DiscoveryProcessingResult, EmailSendResult, NotificationRecord, NotificationResult, PreparedDailyDigest, StoredDiscovery } from "../types/index.js";
 
 type EligibilityCheck = (result: DiscoveryProcessingResult) => boolean;
 type DiscoveryEmailFormatter = (discovery: StoredDiscovery) => DiscoveryEmailContent;
@@ -49,10 +49,9 @@ export async function prepareDailyDigest(input: DailyDigestInput, history: Notif
   const makeGroups = (items: readonly DailyDigestItem[]): PreparedGroup[] => {
     const groups = new Map<string, PreparedGroup>();
     for (const [index, item] of items.entries()) {
-      const candidate = item.candidate;
-      const url = item.kind === "raw" ? candidate.normalizedUrl : candidate.discovery.normalizedUrl;
+      const url = item.kind === "raw" ? item.candidate.normalizedUrl : item.candidate.discovery.normalizedUrl;
       const key = batchAliasKey(url);
-      const eligible = item.kind === "raw" || replayDeliveryEligible(candidate);
+      const eligible = item.kind === "raw" ? true : replayDeliveryEligible(item.candidate);
       let group = groups.get(key);
       if (!group) {
         group = { item: eligible ? item : undefined, index, aliases: new Set() };
@@ -61,7 +60,7 @@ export async function prepareDailyDigest(input: DailyDigestInput, history: Notif
         group.item = item;
         group.index = index;
       }
-      const aliases = item.kind === "raw" ? candidate.aliases : candidate.aliases;
+      const aliases = item.candidate.aliases;
       for (const alias of [url, ...aliases, ...(input.observedAliases.get(key) ?? [])]) {
         group.aliases.add(normalizeDiscoveryUrl(alias));
       }
@@ -114,6 +113,47 @@ export async function prepareDailyDigest(input: DailyDigestInput, history: Notif
     return items.length > 0 ? { mode, reason: input.reason, cycleDate: input.cycleDate, items } : status("no_eligible_stories");
   } catch {
     return status("history_unavailable");
+  }
+}
+
+export function createDailyEmailContext(): DailyEmailContext { return { emailAttempted: false }; }
+
+/** Owns the single mail-transport attempt for one scheduled invocation. */
+export async function finalizeDailyDigest(
+  digest: PreparedDailyDigest,
+  dependencies: { context: DailyEmailContext; history?: NotificationHistory; sendEmail: EmailSender; onAccepted?: () => void },
+): Promise<DailyEmailOutcome> {
+  if (dependencies.context.emailAttempted) {
+    return { emailAttempts: 0, emailOutcome: "not_attempted", historyOutcome: "not_required", finalizationReached: true };
+  }
+  dependencies.context.emailAttempted = true;
+  let content: DiscoveryEmailContent;
+  try {
+    content = formatDailyDigestEmail(digest);
+  } catch {
+    content = formatDailyDigestEmail({ mode: "status_only", reason: "preparation_unavailable", cycleDate: digest.cycleDate, items: [] });
+  }
+  let accepted: EmailSendResult;
+  try {
+    accepted = await dependencies.sendEmail(content);
+  } catch {
+    return { emailAttempts: 1, emailOutcome: "failed", historyOutcome: "not_required", finalizationReached: true };
+  }
+  dependencies.onAccepted?.();
+  if (digest.items.length === 0) {
+    return { emailAttempts: 1, emailOutcome: "accepted", historyOutcome: "not_required", finalizationReached: true };
+  }
+  if (!dependencies.history) {
+    return { emailAttempts: 1, emailOutcome: "accepted", historyOutcome: "unavailable", finalizationReached: true };
+  }
+  try {
+    for (const item of digest.items) {
+      const aliases = item.candidate.aliases;
+      for (const alias of new Set(aliases)) await dependencies.history.recordNotificationSent(alias, "email", accepted.id);
+    }
+    return { emailAttempts: 1, emailOutcome: "accepted", historyOutcome: "recorded", finalizationReached: true };
+  } catch {
+    return { emailAttempts: 1, emailOutcome: "accepted", historyOutcome: "persistence_failed", finalizationReached: true };
   }
 }
 
