@@ -157,8 +157,10 @@ test("an empty current Batch does not revive a legacy low-score replay record", 
   assert.equal(result.replayCandidatesConsidered, 1);
   assert.equal(result.replayCandidatesEligible, 0);
   assert.equal(result.replayStoriesSent, 0);
-  assert.equal(result.notificationsSent, 0);
-  assert.equal(f.sent.length, 0);
+  assert.equal(result.notificationsSent, 1);
+  assert.equal(f.sent.length, 1);
+  assert.match(f.sent[0]!.text, /discovery highlights/i);
+  assert.doesNotMatch(f.sent[0]!.text, /legacy-low/);
 });
 
 test("Brave and RSS candidates share one pool and one Gemini analysis", async () => {
@@ -273,7 +275,8 @@ test("blocked Gemini admission still searches first and delivers bounded stored 
   assert.equal(f.searchCalls(), 10); assert.equal(f.analyzeCalls(), 0);
   assert.ok(f.events.indexOf("admission") > f.events.lastIndexOf("search:10"));
   assert.equal(result.batch?.status, "blocked"); assert.equal(result.geminiBlockedReason, "usage_unknown");
-  assert.equal(result.replayStoriesSent, 1); assert.equal(f.sent.length, 1);
+  assert.equal(result.replayStoriesSent, 0); assert.equal(f.sent.length, 1);
+  assert.match(f.sent[0]!.text, /AI analysis unavailable/i);
 });
 
 test("accepted email reports its exact fresh/replay inclusion even when notification recording then fails", async () => {
@@ -286,7 +289,7 @@ test("accepted email reports its exact fresh/replay inclusion even when notifica
   assert.equal(result.notificationsSent, 1); assert.equal(result.batch?.emailCount, 1);
   assert.equal(result.freshStoriesSent, 2); assert.equal(result.batch?.freshDelivered, 2);
   assert.equal(result.replayStoriesSent, 1); assert.equal(result.batch?.replayDelivered, 1);
-  assert.equal(result.failures, 1); assert.match(result.outcomes.at(-1)!.error!, /accepted.*could not be persisted/);
+  assert.equal(result.failures, 1);
 });
 
 test("failed sender reports zero accepted emails and delivered stories without retry or recording", async () => {
@@ -370,7 +373,8 @@ test("empty and entirely known pools invoke no batch analysis", async () => {
     }
     f.dependencies.searchPage = async () => ({ rawCount: known ? 1 : 0, positions: known ? [{ resultOrdinal: 1, result: { title: "Known", url: "https://example.test/known" } }] : [] });
     const result = await run(f.dependencies);
-    assert.equal(f.analyzeCalls(), 0); assert.equal(result.analysesAttempted, 0); assert.equal(result.batch?.status, "empty"); assert.equal(f.sent.length, 0);
+    assert.equal(f.analyzeCalls(), 0); assert.equal(result.analysesAttempted, 0); assert.equal(result.batch?.status, "empty"); assert.equal(f.sent.length, 1);
+    assert.match(f.sent[0]!.text, /status update/i);
     if (known) assert.equal(f.discoveries.get("https://example.test/known")?.firstSeenAt, "2026-10-01T00:00:00.000Z");
   }
 });
@@ -384,17 +388,21 @@ test("oversupply accepts only first five source positions and homepages cannot r
   f.dependencies.analyze = async batch => { assert.equal(batch.candidates.length, 3); assert.equal(batch.candidates[2]?.source.url, "https://example.test/article2"); return { returnedCount: 0, selections: [] }; };
   const result = await run(f.dependencies);
   assert.equal(result.searchResultsReceived, 100); assert.equal(result.batch?.acceptedObservations, 50); assert.equal(result.batch?.homepages, 10); assert.equal(result.batch?.invalid, 10);
-  assert.equal(f.sent.length, 0);
+  assert.equal(f.sent.length, 1);
+  assert.match(f.sent[0]!.text, /discovery highlights/i);
+  assert.doesNotMatch(f.sent[0]!.text, /https:\/\/openai\.com\/?/);
 });
 
-test("history uncertainty aborts without analysis or delivery", async () => {
+test("history uncertainty produces one status-only delivery without analysis", async () => {
   for (const phase of ["replay", "candidate", "notification"]) {
     const f = fixture();
     if (phase === "replay") f.history.listRecentDiscoveries = async () => { throw new DiscoveryHistoryError("unavailable"); };
     if (phase === "candidate") f.history.getDiscovery = async () => { throw new DiscoveryHistoryError("unavailable"); };
     if (phase === "notification") f.notificationHistory.getNotificationRecord = async () => { throw new NotificationHistoryError("unavailable"); };
-    await assert.rejects(run(f.dependencies), /history|unavailable/i);
-    assert.equal(f.analyzeCalls(), 0); assert.equal(f.sent.length, 0);
+    const result = await run(f.dependencies);
+    assert.equal(f.analyzeCalls(), 0); assert.equal(f.sent.length, 1);
+    assert.equal(result.failures, 1);
+    assert.match(f.sent[0]!.text, /status update/i);
   }
 });
 
@@ -481,7 +489,8 @@ test("existing-row race outside immutable replay window is not a fresh delivery"
   const f = fixture(); f.dependencies.analyze = async batch => selection(batch, [0]);
   f.history.recordDiscoveryWithOutcome = async value => ({ created: false, discovery: stored(value.sourceUrl, 10, "2026-10-01T00:00:00.000Z") });
   const result = await run(f.dependencies);
-  assert.equal(result.newDiscoveries, 0); assert.equal(result.duplicates, 1); assert.equal(f.sent.length, 0);
+  assert.equal(result.newDiscoveries, 0); assert.equal(result.duplicates, 1); assert.equal(f.sent.length, 1);
+  assert.match(f.sent[0]!.text, /discovery highlights/i);
 });
 
 test("racing replay joins only the bounded original scan and shares observed alias notification evidence", async () => {
@@ -492,7 +501,8 @@ test("racing replay joins only the bounded original scan and shares observed ali
     { resultOrdinal: 2, result: { title: "article", url: "https://example.test/article#b" } },
   ] });
   const result = await run(f.dependencies);
-  assert.equal(result.analysesAttempted, 0); assert.equal(f.sent.length, 0); assert.equal(old.firstSeenAt, "2026-10-13T08:00:00.000Z");
+  assert.equal(result.analysesAttempted, 0); assert.equal(f.sent.length, 1); assert.equal(old.firstSeenAt, "2026-10-13T08:00:00.000Z");
+  assert.match(f.sent[0]!.text, /status update/i);
 });
 
 class D1Statement {
@@ -613,7 +623,8 @@ test("RF3 invalid analysis after exact provider settlement persists zero fresh r
     }) });
     const result = await run(f.dependencies);
     assert.equal(fetchCalls, 1); assert.equal(result.analysesAttempted, 1); assert.equal(result.batch?.status, "invalid_output");
-    assert.equal(result.newDiscoveries, 0); assert.equal(f.discoveries.size, 1); assert.equal(f.sent.length, 1); assert.equal(result.replayStoriesSent, 1);
+    assert.equal(result.newDiscoveries, 0); assert.equal(f.discoveries.size, 1); assert.equal(f.sent.length, 1); assert.equal(result.replayStoriesSent, 0);
+    assert.match(f.sent[0]!.text, /AI analysis unavailable/i);
     assert.equal(result.geminiProviderAttempts, 1); assert.equal(result.batch?.providerDispatches, 1);
     assert.equal(result.batch?.reservations, 1); assert.equal(result.batch?.returnedStories, 0);
     assert.equal(result.batch?.acceptedStories, 0); assert.deepEqual(result.batch?.selected, []);

@@ -8,7 +8,8 @@ import { createMonitoringRuntimeConfiguration } from "./services/radarRuntimeCon
 import { createGeminiBatchCycleContext, generateBatchWithGemini } from "./tools/llm/gemini.js";
 import { sendWithResend } from "./tools/email/resend.js";
 import { searchWebPage } from "./tools/webSearch.js";
-import { runBatchMonitoringCycle, type BatchMonitoringDependencies } from "./services/monitor.js";
+import { finalizeStatusOnlyMonitoringCycle, runBatchMonitoringCycle, type BatchMonitoringDependencies } from "./services/monitor.js";
+import { createDailyEmailContext } from "./services/notificationOrchestrator.js";
 import { collectRss } from "./services/rssDiscovery.js";
 import { RSS_FEEDS } from "./config/rssSources.js";
 import type { BatchCycleMetrics, MonitoringCycleResult, RssCycleMetrics } from "./types/index.js";
@@ -88,6 +89,17 @@ export interface ScheduledCycleSummary {
     failed: boolean;
     error?: string;
   }>;
+  delivery: {
+    deliveryMode: "normal" | "degraded" | "status_only";
+    deliveryReason: "selected" | "no_eligible_stories" | "ai_unavailable" | "ai_no_selections" | "discovery_unavailable" | "history_unavailable" | "preparation_unavailable" | "persistence_unavailable";
+    analyzedStories: number;
+    rawStories: number;
+    replayStories: number;
+    emailAttempts: 0 | 1;
+    emailOutcome: "accepted" | "failed" | "unknown" | "not_attempted";
+    historyOutcome: "not_required" | "recorded" | "unavailable" | "persistence_failed";
+    finalizationReached: boolean;
+  };
 }
 
 export interface ScheduledMonitoringDependencies {
@@ -220,6 +232,11 @@ export function createScheduledCycleSummary(
       failed: outcome.error !== undefined,
       ...(outcome.error === undefined ? {} : { error: redactScheduledError(outcome.error, env) }),
     }));
+  const delivery = result.delivery;
+  const deliveryMode = allowedString(delivery?.deliveryMode, ["normal", "degraded", "status_only"] as const) ?? "status_only";
+  const deliveryReason = allowedString(delivery?.deliveryReason, ["selected", "no_eligible_stories", "ai_unavailable", "ai_no_selections", "discovery_unavailable", "history_unavailable", "preparation_unavailable", "persistence_unavailable"] as const) ?? "preparation_unavailable";
+  const emailOutcome = allowedString(delivery?.emailOutcome, ["accepted", "failed", "unknown", "not_attempted"] as const) ?? "unknown";
+  const historyOutcome = allowedString(delivery?.historyOutcome, ["not_required", "recorded", "unavailable", "persistence_failed"] as const) ?? "unavailable";
 
   return {
     event: "scheduled_monitoring_cycle_completed",
@@ -273,6 +290,15 @@ export function createScheduledCycleSummary(
     outcomesTotal: result.outcomes.length,
     outcomesOmitted: Math.max(0, result.outcomes.length - outcomes.length),
     outcomes,
+    delivery: {
+      deliveryMode, deliveryReason,
+      analyzedStories: boundedCount(delivery?.analyzedStories, 4),
+      rawStories: boundedCount(delivery?.rawStories, 4),
+      replayStories: boundedCount(delivery?.replayStories, 4),
+      emailAttempts: boundedCount(delivery?.emailAttempts, 1) as 0 | 1,
+      emailOutcome, historyOutcome,
+      finalizationReached: delivery?.finalizationReached === true,
+    },
   };
 }
 
@@ -334,8 +360,18 @@ export async function runScheduledMonitoring(
   env: RadarWorkerEnv,
   dependencies: ScheduledMonitoringDependencies = {},
 ): Promise<MonitoringCycleResult> {
-  const runCycle = dependencies.runCycle
-    ?? (() => runBatchMonitoringCycle(createWorkerMonitoringDependencies(env)));
+  const runCycle = dependencies.runCycle ?? (async () => {
+    const context = createDailyEmailContext();
+    try {
+      return await runBatchMonitoringCycle({ ...createWorkerMonitoringDependencies(env), dailyEmailContext: context });
+    } catch {
+      return finalizeStatusOnlyMonitoringCycle(
+        context,
+        content => sendWithResend(content, { environment: env as unknown as Record<string, string | undefined> }),
+        new Date().toISOString(),
+      );
+    }
+  });
   const result = await runCycle();
   (dependencies.logInfo ?? ((summary) => console.info(summary)))(createScheduledCycleSummary(result, env));
   return result;

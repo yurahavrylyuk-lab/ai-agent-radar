@@ -146,15 +146,23 @@ export async function finalizeDailyDigest(
   if (!dependencies.history) {
     return { emailAttempts: 1, emailOutcome: "accepted", historyOutcome: "unavailable", finalizationReached: true };
   }
-  try {
-    for (const item of digest.items) {
-      const aliases = item.candidate.aliases;
-      for (const alias of new Set(aliases)) await dependencies.history.recordNotificationSent(alias, "email", accepted.id);
+  let persistenceFailed = false;
+  for (const item of digest.items) {
+    const aliases = item.candidate.aliases;
+    for (const alias of new Set(aliases)) {
+      try {
+        await dependencies.history.recordNotificationSent(alias, "email", accepted.id);
+      } catch {
+        persistenceFailed = true;
+      }
     }
-    return { emailAttempts: 1, emailOutcome: "accepted", historyOutcome: "recorded", finalizationReached: true };
-  } catch {
-    return { emailAttempts: 1, emailOutcome: "accepted", historyOutcome: "persistence_failed", finalizationReached: true };
   }
+  return {
+    emailAttempts: 1,
+    emailOutcome: "accepted",
+    historyOutcome: persistenceFailed ? "persistence_failed" : "recorded",
+    finalizationReached: true,
+  };
 }
 
 export async function notifyDiscovery(

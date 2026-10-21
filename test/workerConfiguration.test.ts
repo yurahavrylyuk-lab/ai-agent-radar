@@ -70,6 +70,10 @@ function monitoringResult(overrides: Partial<MonitoringCycleResult> = {}): Monit
     xTruncated: true,
     xFailures: [{ accountOrdinal: 2, reason: "provider_error" }],
     xBlockedReason: "rate_limit",
+    delivery: {
+      deliveryMode: "normal", deliveryReason: "selected", analyzedStories: 3, rawStories: 0, replayStories: 2,
+      emailAttempts: 1, emailOutcome: "accepted", historyOutcome: "recorded", finalizationReached: true,
+    },
     outcomes: [
       {
         sourceTitle: "Secret title should never be logged",
@@ -152,6 +156,7 @@ test("default scheduled Worker uses batch entry with no X tables and HTTP method
       providerUrls.push(String(input));
       const hostname = new URL(String(input)).hostname;
       if (hostname === "api.search.brave.com") return new Response(JSON.stringify({ web: { results: [] } }));
+      if (hostname === "api.resend.com") return new Response(JSON.stringify({ id: "status-message" }));
       assert.ok(["openai.com", "github.blog", "blog.cloudflare.com", "developer.chrome.com"].includes(hostname));
       return new Response(`<rss version="2.0"><channel><title>Empty</title></channel></rss>`, { headers: { "content-type": "application/rss+xml" } });
     };
@@ -159,7 +164,7 @@ test("default scheduled Worker uses batch entry with no X tables and HTTP method
     const result = await runScheduledMonitoring(env);
     assert.equal(result.batch?.status, "empty");
     assert.equal(result.analysesAttempted, 0);
-    assert.equal(providerUrls.length, 14);
+    assert.equal(providerUrls.length, 15);
     assert.equal(summaries.length, 1);
     assert.equal(result.xRequestsAttempted, 0);
     assert.equal(result.xBlockedReason, "disabled");
@@ -240,7 +245,33 @@ test("scheduled monitoring runs one cycle and emits one structured summary with 
         error: "Provider failed",
       },
     ],
+    delivery: {
+      deliveryMode: "normal",
+      deliveryReason: "selected",
+      analyzedStories: 3,
+      rawStories: 0,
+      replayStories: 2,
+      emailAttempts: 1,
+      emailOutcome: "accepted",
+      historyOutcome: "recorded",
+      finalizationReached: true,
+    },
   });
+});
+
+test("scheduled summary independently allowlists and bounds daily delivery telemetry", () => {
+  const result = monitoringResult();
+  result.delivery = {
+    deliveryMode: "degraded", deliveryReason: "ai_unavailable", analyzedStories: 99, rawStories: 99, replayStories: 99,
+    emailAttempts: 1, emailOutcome: "accepted", historyOutcome: "persistence_failed", finalizationReached: true,
+  };
+  assert.deepEqual(createScheduledCycleSummary(result, environment()).delivery, {
+    deliveryMode: "degraded", deliveryReason: "ai_unavailable", analyzedStories: 4, rawStories: 4, replayStories: 4,
+    emailAttempts: 1, emailOutcome: "accepted", historyOutcome: "persistence_failed", finalizationReached: true,
+  });
+  (result.delivery as unknown as Record<string, unknown>).deliveryMode = "PRIVATE_PROVIDER_BODY";
+  (result.delivery as unknown as Record<string, unknown>).deliveryReason = "PRIVATE_CANDIDATE_TEXT";
+  assert.doesNotMatch(JSON.stringify(createScheduledCycleSummary(result, environment())), /PRIVATE_PROVIDER_BODY|PRIVATE_CANDIDATE_TEXT/);
 });
 
 test("scheduled summary exposes only the exact bounded Gemini blocked reason", async () => {

@@ -172,6 +172,14 @@ export interface DailyEmailOutcome {
   finalizationReached: boolean;
 }
 
+export interface DailyDeliveryTelemetry extends DailyEmailOutcome {
+  deliveryMode: DailyDigestMode;
+  deliveryReason: DailyDigestReason;
+  analyzedStories: number;
+  rawStories: number;
+  replayStories: number;
+}
+
 /** Provider-neutral content ready for a future email transport. */
 export interface DiscoveryEmailContent {
   subject: string;
@@ -306,4 +314,6 @@ export interface MonitoringCycleResult {
   /** Counts timeout records whose token usage remains unknown in active accounting windows. */
   geminiTimeoutIncompleteAccounting?: GeminiTimeoutAccountingDiagnostic;
   outcomes: MonitoringCycleOutcome[];
+  /** Closed, bounded final-delivery evidence for the scheduled Batch path. */
+  delivery?: DailyDeliveryTelemetry;
 }
