@@ -1,5 +1,13 @@
 # Self-improvement changelog
 
+
+## 2026-10-21 — Daily digest reliability architecture
+
+- Documentation/design only; baseline `4fad7003c6619aa1fdee2b27c0f9cae219a9aa60`, branch `codex/daily-digest-reliability-design`.
+- Designed one final normal/degraded/status email attempt; deterministic raw fallback preserves source/history safety and does not fabricate analysis. Proposed a later one-retry exception only after proven durable confirmed-zero 429/503, with separate accounting and a shared 90-second budget.
+- Reordered backlog/plan to reliability first and retained the permanent actualization checkpoint. Current source/Worker facts come from the human handoff; new outage telemetry is deployed, not naturally validated. Earlier tracker priorities below are historical.
+- Checks: documentation consistency/whitespace and scoped diff inspection; runtime tests not run (no runtime change). Preserved unrelated untracked files. No provider, monitoring, deployment, D1, migration, push or merge action. Design awaits human review; implementation and release are not performed.
+
 ## 2026-10-20 — Multi-source discovery outage signaling ready for review
 
 - Added bounded scheduled Batch health states for Brave and RSS plus an explicit outage flag only when both operational sources are unavailable.

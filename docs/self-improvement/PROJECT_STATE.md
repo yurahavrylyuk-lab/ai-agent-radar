@@ -4,9 +4,11 @@
 
 This file is the durable source of truth for the production baseline, architecture, limits, safety rules, and approval boundaries. Update it only with verified evidence and the required authorization; distinguish intended changes from deployed facts.
 
-Current verified production deployment (2026-10-20): source `f81d6ac0d24baa843e9140a20a1ff00e8f535377`, Worker version `dd57f18a-7443-431d-b6bb-ae4d5ece4d8f`, deployment ID `33a93550-71fc-4753-8c2d-d2a1d405d460`, deployed at `2026-10-20T08:27:08.479492Z` with 100% traffic. Cron remains `0 8 * * *`; D1 remains `9fb545e2-2f43-4922-8b21-2d79a8de9556`; health returned `AI Agent Radar worker ready`. This deploy includes Batch low-relevance delivery, but no natural scheduled cycle has yet been observed on `f81d6ac`; that behavior is **DEPLOYED / awaiting natural-cycle validation**.
+Current production deployment, confirmed by the human handoff on 2026-10-21: source `4fad7003c6619aa1fdee2b27c0f9cae219a9aa60`, Worker version `fb6b4691-938e-4c17-8dbd-5cb62d865d35`. Local main matched that SHA before this documentation branch. No Cloudflare verification was performed in this task. Multi-source outage signaling is **DEPLOYED / awaiting natural-cycle validation**; do not attribute the preceding source's cycle to this deployment.
 
-The latest verified natural cycle ran earlier, from `2026-10-20T08:00:49.466Z` through `2026-10-20T08:01:22.310Z`, on source `244862880eb35300532cf75917d2936668d39409` and Worker version `eec530db-ffea-4a96-9d0e-73439610f923`. It completed 10/10 Brave searches; GitHub Changelog and Chrome for Developers RSS succeeded; OpenAI and Cloudflare AI reached `body_limit`; and five valid RSS candidates entered the shared pool. Gemini ended `provider_failed` with `confirmed_zero`, so no digest/email was produced. This cycle production-proved the RSS native-fetch receiver fix, not the later low-relevance deployment.
+Latest human-supplied natural incident: `2026-10-21T08:00:49.466Z`, source `f53acb06642c7880c62f3c9457562c9d42e61b24`, gemini-3.8-flash, 42 candidates, approximately 22,367 prompt bytes, one dispatch ending at the 90-second timeout. Row 28 remains `transport_ambiguous / timeout`; zero selections and zero eligible replay produced no email. No retry or recovery was performed by this design task.
+
+The previously verified 2026-10-20 natural cycle ran earlier, from `2026-10-20T08:00:49.466Z` through `2026-10-20T08:01:22.310Z`, on source `244862880eb35300532cf75917d2936668d39409` and Worker version `eec530db-ffea-4a96-9d0e-73439610f923`. It completed 10/10 Brave searches; GitHub Changelog and Chrome for Developers RSS succeeded; OpenAI and Cloudflare AI reached `body_limit`; and five valid RSS candidates entered the shared pool. Gemini ended `provider_failed` with `confirmed_zero`, so no digest/email was produced. This cycle production-proved the RSS native-fetch receiver fix, not the later low-relevance deployment.
 
 P5, Batch Gemini, and RSS discovery are production-proven. Migration `0004_x_discovery.sql` remains intentionally unapplied and X is disabled/deprecated with zero production dependency. The Gemini accounting incident is resolved: `usage_unknown=0`, rows 19 and 21 remain historical timeout ambiguity evidence, and row 22 is the exact-identity recovered `confirmed_zero` record.
 
@@ -39,11 +41,11 @@ Cloudflare Cron
 - Public HTTP fetch returns only `AI Agent Radar worker ready`.
 - HTTP requests must never trigger monitoring. There is no manual monitoring endpoint.
 - Each successful scheduled run emits exactly one structured, secret-free cycle summary with aggregate counts and bounded outcome status details. It excludes source URLs and content, redacts configured secret values and email addresses, and truncates error text.
-- Before new discovery, a scheduled cycle performs one read-only Gemini availability preflight after bounded replay lookup. If Gemini is locally blocked, the summary records a bounded `geminiBlockedReason`; Brave and fresh analysis are skipped, while eligible stored replay can still use the ordinary one-digest delivery path. A completed replay-only cycle is not proof that Gemini is available.
+- The current scheduled Batch path collects Brave/RSS and prepares the bounded shared pool before Gemini availability checking. Admission failure prevents Gemini dispatch; eligible replay remains available. The older pre-discovery preflight description belongs to the retained legacy path.
 - Each cycle performs one bounded recent-discovery lookup so an analyzed but unnotified discovery can re-enter the shared digest without Brave rediscovery or Gemini re-analysis. Replay adds no provider request and does not create a second email.
-- Default multi-query monitoring records isolated non-quota Brave failures by one-based query ordinal and continues sequentially so successful query results still reach normal deduplication, analysis, and notification processing. Each recorded search failure appears in `searchFailures` and increments the aggregate `failures` count. Each query is attempted at most once; there is no query or full-cycle retry. A quota denial still stops further searches without becoming a transient failure. If non-quota failures occur and no usable results were collected, the cycle rejects instead of reporting empty success.
+- The scheduled Batch path records isolated Brave/RSS acquisition failures and preserves successful results; Brave quota denial stops further Brave requests. All-source failure is observable through source-health telemetry. Legacy all-search-failed exception behavior is not the scheduled Batch policy.
 - No automatic full-cycle retries.
-- The production-proven Batch Gemini path performs at most one provider dispatch for the fresh batch and can return at most four selected stories for the single digest. The currently deployed `f81d6ac` source permits scores 1–10 and labels a selected score below 7 with `It could be relevant`; that low-relevance behavior is awaiting its first observed natural cycle.
+- The production-proven Batch Gemini path performs at most one provider dispatch for the fresh batch and can return at most four selected stories for the single digest. The current deployed source retains the low-relevance behavior introduced at `f81d6ac` and permits scores 1–10 and labels a selected score below 7 with `It could be relevant`; natural low-score delivery has not yet been demonstrated by the supplied evidence.
 - `runMonitoringCycle()` is the retained legacy per-story path. It is not invoked by the production schedule and is not removed by this documentation reconciliation.
 
 ## Providers
@@ -52,7 +54,7 @@ Cloudflare Cron
 - Analysis: Google Gemini through the reviewed ordered pool `gemini-3.8-flash`, `gemini-3.6-flash`, and `gemini-3.5-flash-lite`. Runtime environment input cannot add, remove, or reorder models; `GEMINI_MODEL` is deprecated and ignored. The production scheduled Batch Gemini path uses one `gemini-3.8-flash` dispatch with no retry or model fallback. The pool remains restricted to approved included Free Tier capacity; paid fallback is disabled.
 - Email: Resend.
 - Historical discovery integration: P6 X selected-account polling is implemented but disabled. Production activation is abandoned/deprecated; no X credential or migration activation is planned on the active roadmap.
-- Replacement source roadmap: Brave and RSS are active; Threads is the next discovery-source task. P7 remains TODO after Threads.
+- Replacement source roadmap: Brave and RSS are active. The human-approved roadmap prioritizes daily delivery reliability, bounded Gemini retry and natural validation before RSS body_limit work and Threads; see backlog.md. These reliability changes are planned, not deployed.
 - OpenAI: not used in the cloud production execution path. Local legacy tooling/dependencies do not authorize inclusion in the deployed Worker runtime.
 
 ## RSS production checkpoint
@@ -159,7 +161,7 @@ The production Worker bundle must not include local JSON persistence, Node files
 
 ## Production checkpoints
 
-### Latest verified deployment
+### Historical verified deployment — 2026-10-20 (superseded by current handoff above)
 
 - Source: `f81d6ac0d24baa843e9140a20a1ff00e8f535377`.
 - Worker version: `dd57f18a-7443-431d-b6bb-ae4d5ece4d8f`.
@@ -171,7 +173,7 @@ The production Worker bundle must not include local JSON persistence, Node files
 - Health: `AI Agent Radar worker ready`.
 - Low-relevance Batch behavior: **DEPLOYED / awaiting natural-cycle validation**. No natural Cron completion is attributed to this source yet.
 
-### Latest verified natural cycle before that deployment
+### Historical verified natural cycle before that deployment
 
 - Source: `244862880eb35300532cf75917d2936668d39409`.
 - Worker version: `eec530db-ffea-4a96-9d0e-73439610f923`.
