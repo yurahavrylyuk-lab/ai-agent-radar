@@ -214,7 +214,7 @@ export async function generateBatchWithGemini(
   return generateWithGeminiPolicy(input, dependencies, context);
 }
 
-/** Share the accounting state machine; batch policy permits only one primary-model attempt. */
+/** Share the accounting state machine; Batch permits one same-model retry only after reviewed confirmed-zero evidence. */
 async function generateWithGeminiPolicy(
   input: string,
   dependencies: GeminiDependencies,
