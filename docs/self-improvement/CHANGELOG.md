@@ -1,5 +1,12 @@
 # Self-improvement changelog
 
+## 2026-10-21 — Daily digest reliability ready for review
+
+- Added one final scheduled digest attempt across normal analyzed stories, deterministic degraded raw highlights and truthful status-only outcomes, retaining replay/no-resend and low-relevance behavior.
+- Added one same-model retry only after reviewed 429/503 evidence durably settles `confirmed_zero`; the retry uses a separate reservation, 1000–1500 ms bounded backoff and the original shared 90-second deadline. Timeout and uncertain outcomes never retry.
+- Added bounded allowlisted delivery/retry telemetry and preserved one-email, four-story, source, quota, accounting and privacy invariants.
+- No deployment, provider call, monitoring cycle, migration, D1 mutation, push, PR or merge occurred.
+
 
 ## 2026-10-21 — Daily digest reliability architecture
 

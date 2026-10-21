@@ -8,6 +8,8 @@ Current production deployment, confirmed by the human handoff on 2026-10-21: sou
 
 Latest human-supplied natural incident: `2026-10-21T08:00:49.466Z`, source `f53acb06642c7880c62f3c9457562c9d42e61b24`, gemini-3.8-flash, 42 candidates, approximately 22,367 prompt bytes, one dispatch ending at the 90-second timeout. Row 28 remains `transport_ambiguous / timeout`; zero selections and zero eligible replay produced no email. No retry or recovery was performed by this design task.
 
+Implementation-only checkpoint: branch `codex/daily-digest-reliability-implementation` now converges the scheduled Batch path on one normal, degraded, or status-only email attempt and permits one same-model retry only after reviewed 429/503 evidence has durably settled `confirmed_zero`. Both dispatches share the original 90-second deadline and timeout/transport ambiguity remains non-retryable. This is offline implementation evidence awaiting independent review; it is **not deployed or naturally validated** and does not change the production facts below.
+
 The previously verified 2026-10-20 natural cycle ran earlier, from `2026-10-20T08:00:49.466Z` through `2026-10-20T08:01:22.310Z`, on source `244862880eb35300532cf75917d2936668d39409` and Worker version `eec530db-ffea-4a96-9d0e-73439610f923`. It completed 10/10 Brave searches; GitHub Changelog and Chrome for Developers RSS succeeded; OpenAI and Cloudflare AI reached `body_limit`; and five valid RSS candidates entered the shared pool. Gemini ended `provider_failed` with `confirmed_zero`, so no digest/email was produced. This cycle production-proved the RSS native-fetch receiver fix, not the later low-relevance deployment.
 
 P5, Batch Gemini, and RSS discovery are production-proven. Migration `0004_x_discovery.sql` remains intentionally unapplied and X is disabled/deprecated with zero production dependency. The Gemini accounting incident is resolved: `usage_unknown=0`, rows 19 and 21 remain historical timeout ambiguity evidence, and row 22 is the exact-identity recovered `confirmed_zero` record.
@@ -54,7 +56,7 @@ Cloudflare Cron
 - Analysis: Google Gemini through the reviewed ordered pool `gemini-3.8-flash`, `gemini-3.6-flash`, and `gemini-3.5-flash-lite`. Runtime environment input cannot add, remove, or reorder models; `GEMINI_MODEL` is deprecated and ignored. The production scheduled Batch Gemini path uses one `gemini-3.8-flash` dispatch with no retry or model fallback. The pool remains restricted to approved included Free Tier capacity; paid fallback is disabled.
 - Email: Resend.
 - Historical discovery integration: P6 X selected-account polling is implemented but disabled. Production activation is abandoned/deprecated; no X credential or migration activation is planned on the active roadmap.
-- Replacement source roadmap: Brave and RSS are active. The human-approved roadmap prioritizes daily delivery reliability, bounded Gemini retry and natural validation before RSS body_limit work and Threads; see backlog.md. These reliability changes are planned, not deployed.
+- Replacement source roadmap: Brave and RSS are active. The human-approved roadmap prioritizes review/release and natural validation of the implemented daily delivery reliability and bounded Gemini retry before RSS body_limit work and Threads; see backlog.md. These reliability changes are not deployed.
 - OpenAI: not used in the cloud production execution path. Local legacy tooling/dependencies do not authorize inclusion in the deployed Worker runtime.
 
 ## RSS production checkpoint

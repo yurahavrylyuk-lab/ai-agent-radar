@@ -19,8 +19,8 @@ Main/deployed source `4fad7003c6619aa1fdee2b27c0f9cae219a9aa60`, Worker `fb6b469
 
 ## Active work and completion criteria
 
-1. **TODO — design ready:** one final attempt from normal analyzed, deterministic degraded, or status-only digest. Preserve replay/no-resend, low-score labelling and four slots. No second AI request for fallback.
-2. **TODO — design ready:** same-model second dispatch only after proven confirmed-zero 429/503 and durable settlement; bounded jitter and shared 90-second deadline. No retry on timeout or transport ambiguity; no quota increase.
+1. **IMPLEMENTED / REVIEW PENDING:** one final attempt from normal analyzed, deterministic degraded, or status-only digest. Replay/no-resend, low-score labelling and the four-story cap remain intact; fallback adds no AI request.
+2. **IMPLEMENTED / REVIEW PENDING:** same-model second dispatch only after proven confirmed-zero 429/503 and durable settlement, with 1000–1500 ms bounded jitter and the original shared 90-second deadline. Timeout and transport ambiguity remain non-retryable; quotas are unchanged.
 3. **TODO:** naturally validate daily fallback, retry when genuinely exercised, multi-source outage telemetry and accounting safety. Track each as DEPLOYED versus NATURALLY VALIDATED; do not trigger monitoring for proof.
 4. **TODO:** diagnose OpenAI/Cloudflare AI RSS body_limit, then smallest safe correction; do not blindly raise limits.
 5. **TODO:** Threads through official Meta API only, same shared pool, no per-source Gemini call. No Threads implementation in this phase.

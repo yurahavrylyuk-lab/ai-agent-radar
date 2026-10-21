@@ -12,7 +12,7 @@ Gemini currently has no scheduled retry/model fallback. A 90-second timeout rema
 
 RSS bounds stay max 5 feeds, 5 positions/feed, 5 seconds/feed, 256 KiB/feed, no retry/redirect. Four feeds are approved; only GitHub/Chrome have supplied successful natural RSS admission proof. Brave quotas stay 10/day, 100/week, 350/month. X is disabled/deprecated; 0004 remains unapplied. HTTP is health-only; no manual monitoring endpoint.
 
-## Target — not implemented
+## Implemented on review branch — not deployed
 
 All paths converge into one finalizer:
 
@@ -22,7 +22,7 @@ All paths converge into one finalizer:
 
 One final mail attempt per executing natural invocation; no independent failure/status sends. Consume the attempt before transport. Provider ambiguity or post-acceptance history failure never causes a replacement send. Inbox delivery and survival of platform termination cannot be guaranteed. Raw delivery records ordinary notification identity after acceptance, never fake analysis. Existing replay and low-score rules stay intact.
 
-Implement delivery reliability first while keeping one Gemini dispatch. Then add at most one same-model retry ONLY for the existing proven confirmed-zero resource_exhausted_429/unavailable_503 classifier after successful durable zero settlement. Use separate reservations/request counts, unchanged quota guards and one shared cycle context. Delay 1000–1500 ms; both attempts and backoff share the existing total 90-second budget. No retry for timeout, uncertain transport/usage, failed accounting, semantic errors or arbitrary 429. Max dispatches becomes 2 only through this reviewed exception; normal remains 1. Do not clear row 28 or the legacy latch. No arbitrary timeout increase, model/provider fallback, extra ranker or second email.
+The review branch implements delivery reliability first and then at most one same-model retry ONLY for the existing proven confirmed-zero `resource_exhausted_429` / `unavailable_503` classifier after successful durable zero settlement. Separate reservations/request counts, unchanged quota guards and one shared cycle context are retained. Delay is 1000–1500 ms; both attempts and backoff share the existing total 90-second budget. Timeout, uncertain transport/usage, failed accounting, semantic errors and arbitrary 429 receive no retry. Max dispatches becomes 2 only through this reviewed exception; normal remains 1. Row 28 and the legacy latch are untouched. No timeout increase, model/provider fallback, extra ranker or second email is added.
 
 The detailed state machine, acceptance tests, privacy rules and rollout gates are in [the design spec](docs/superpowers/specs/2026-10-21-daily-digest-reliability-design.md). No runtime change is authorized by writing this document.
 
@@ -39,7 +39,7 @@ The detailed state machine, acceptance tests, privacy rules and rollout gates ar
 9. **P7 / RELEVANCE + FEEDBACK**
 10. **FINAL STABILIZATION / V1.0**
 
-Priorities 1–2 are the current design phase. Priority 3 observes natural cycles after reviewed, human-approved releases; validation is per path and must not claim unexercised retry/fallback success. Priorities 4–10 remain separate bounded work, not implementation scope here.
+Priorities 1–2 are implemented offline and await independent review and human-controlled release. Priority 3 observes natural cycles only after an approved release; validation is per path and must not claim unexercised retry/fallback success. Priorities 4–10 remain separate bounded work.
 
 ## Superseded historical policies
 

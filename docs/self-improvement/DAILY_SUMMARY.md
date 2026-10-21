@@ -1,5 +1,13 @@
 # Daily Self-Improvement Summary
 
+## 2026-10-21 — Daily digest reliability implementation
+
+- Status: REVIEW; branch `codex/daily-digest-reliability-implementation`, approved production baseline `4fad7003c6619aa1fdee2b27c0f9cae219a9aa60`.
+- Implemented one guarded final email attempt in `normal`, `degraded`, or `status_only` mode. Deterministic raw fallback preserves pool order, URL/history evidence, replay safety and the four-story cap without fabricating analysis.
+- Added one same-model retry only after reviewed `resource_exhausted_429` or `unavailable_503` evidence is durably settled `confirmed_zero`. Attempts use separate accounting rows, 1000–1500 ms bounded jitter, unchanged admission/quota guards and one shared 90-second deadline. Timeout/network/usage ambiguity remains terminal.
+- Added closed delivery and two-attempt telemetry with independent scheduled-summary allowlisting. Provider bodies, prompts, story content and secret values are not copied into telemetry.
+- Offline implementation only: no provider call, monitoring cycle, deployment, migration, D1 mutation, push, PR or merge. Production/natural validation remains pending.
+
 
 ## 2026-10-21 — Daily digest reliability architecture
 
