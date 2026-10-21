@@ -280,11 +280,27 @@ function batchMetrics(overrides: Partial<BatchCycleMetrics> = {}): BatchCycleMet
     searchAttempts: 10, searchSuccesses: 9, searchFailures: 1, rawObservations: 55, acceptedObservations: 45,
     invalid: 1, homepages: 1, duplicates: 2, known: 3, poolCapExcluded: 0, sizeExcluded: 2, submittedCandidates: 36, promptBytes: 32000,
     submittedBySource: { brave: 36, rss: 0 },
+    discoverySourceHealth: { brave: "degraded", rss: "healthy", outage: false },
     truncationStage: "tail", status: "validated", reservationAttempts: 1, reservations: 1, providerDispatches: 1,
     returnedStories: 4, acceptedStories: 4, selected: [{ candidateId: "c050", hostname: "example.test", score: 8, provenance: [{ kind: "brave", queryOrdinal: 10, resultOrdinal: 5 }] }],
     freshDelivered: 2, replayDelivered: 1, emailCount: 1, ...overrides,
   };
 }
+
+test("scheduled summary independently allowlists discovery source health", () => {
+  const summary = createScheduledCycleSummary(monitoringResult({ batch: batchMetrics({
+    discoverySourceHealth: { brave: "unavailable", rss: "unavailable", outage: true },
+  }) }), environment());
+  assert.deepEqual(summary.batch?.discoverySourceHealth, {
+    brave: "unavailable", rss: "unavailable", outage: true,
+  });
+
+  const poisoned = monitoringResult({ batch: batchMetrics() });
+  (poisoned.batch?.discoverySourceHealth as unknown as Record<string, unknown>).brave = "PRIVATE_PROVIDER_BODY";
+  (poisoned.batch?.discoverySourceHealth as unknown as Record<string, unknown>).rss = "PRIVATE_PROVIDER_BODY";
+  const serialized = JSON.stringify(createScheduledCycleSummary(poisoned, environment()));
+  assert.equal(serialized.includes("PRIVATE_PROVIDER_BODY"), false);
+});
 
 test("scheduled summary copies every batch counter and distinguishes selected stories from one dispatch", () => {
   const summary = createScheduledCycleSummary(monitoringResult({ batch: batchMetrics() }), environment());

@@ -210,12 +210,22 @@ export interface XAccountFailure {
 
 export type GeminiProviderFailureClass = "resource_exhausted_429" | "unavailable_503";
 
+export type BraveDiscoverySourceHealth = "healthy" | "degraded" | "unavailable" | "quota_blocked";
+export type RssDiscoverySourceHealth = "healthy" | "degraded" | "unavailable";
+
+export interface DiscoverySourceHealthMetrics {
+  brave: BraveDiscoverySourceHealth;
+  rss: RssDiscoverySourceHealth;
+  outage: boolean;
+}
+
 export interface BatchCycleMetrics {
   searchAttempts: number; searchSuccesses: number; searchFailures: number;
   rawObservations: number; acceptedObservations: number;
   invalid: number; homepages: number; duplicates: number; known: number;
   poolCapExcluded: number; sizeExcluded: number; submittedCandidates: number; promptBytes: number;
   submittedBySource: { brave: number; rss: number };
+  discoverySourceHealth: DiscoverySourceHealthMetrics;
   truncationStage: BatchTruncationStage | null;
   status: "empty" | "blocked" | "preparation_failed" | "provider_failed" | "timeout" | "invalid_output" | "validated";
   providerFailureClass?: GeminiProviderFailureClass;

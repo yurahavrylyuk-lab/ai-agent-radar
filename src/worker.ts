@@ -159,6 +159,8 @@ function summarizeBatch(batch: BatchCycleMetrics, env: RadarWorkerEnv): BatchCyc
   }
   const status = allowedString(batch.status, ["empty", "blocked", "preparation_failed", "provider_failed", "timeout", "invalid_output", "validated"]) ?? "preparation_failed";
   const providerFailureClass = allowedString(batch.providerFailureClass, ["resource_exhausted_429", "unavailable_503"] as const);
+  const braveHealth = allowedString(batch.discoverySourceHealth?.brave, ["healthy", "degraded", "unavailable", "quota_blocked"] as const) ?? "unavailable";
+  const rssHealth = allowedString(batch.discoverySourceHealth?.rss, ["healthy", "degraded", "unavailable"] as const) ?? "unavailable";
   return {
     searchAttempts: boundedCount(batch.searchAttempts, 10), searchSuccesses: boundedCount(batch.searchSuccesses, 10), searchFailures: boundedCount(batch.searchFailures, 10),
     rawObservations: boundedCount(batch.rawObservations, 75), acceptedObservations: boundedCount(batch.acceptedObservations, 75),
@@ -166,6 +168,11 @@ function summarizeBatch(batch: BatchCycleMetrics, env: RadarWorkerEnv): BatchCyc
     poolCapExcluded: boundedCount(batch.poolCapExcluded, 75),
     sizeExcluded: boundedCount(batch.sizeExcluded, 50), submittedCandidates: boundedCount(batch.submittedCandidates, 50), promptBytes: boundedCount(batch.promptBytes, 32768),
     submittedBySource: { brave: boundedCount(batch.submittedBySource?.brave, 50), rss: boundedCount(batch.submittedBySource?.rss, 25) },
+    discoverySourceHealth: {
+      brave: braveHealth,
+      rss: rssHealth,
+      outage: braveHealth === "unavailable" && rssHealth === "unavailable",
+    },
     truncationStage: allowedString(batch.truncationStage, ["initial", "snippet384", "snippet192", "snippet96", "snippet0", "title128", "tail"] as const) ?? null,
     status,
     ...(status === "provider_failed" && providerFailureClass !== undefined ? { providerFailureClass } : {}),

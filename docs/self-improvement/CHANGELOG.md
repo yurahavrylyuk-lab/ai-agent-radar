@@ -1,5 +1,11 @@
 # Self-improvement changelog
 
+## 2026-10-20 — Multi-source discovery outage signaling ready for review
+
+- Added bounded scheduled Batch health states for Brave and RSS plus an explicit outage flag only when both operational sources are unavailable.
+- Kept Brave quota denial distinct as `quota_blocked`; partial source failures are degraded, and successful empty acquisition is healthy rather than an outage.
+- Preserved shared discovery, replay, Gemini/accounting, selection, and delivery behavior. No deployment, provider call, migration, D1 mutation, push, PR, or merge occurred.
+
 ## 2026-10-20 — Bounded Gemini provider-failure observability ready for review
 
 - Added closed Batch telemetry for reviewed confirmed-zero Gemini failures: `resource_exhausted_429` and `unavailable_503`.

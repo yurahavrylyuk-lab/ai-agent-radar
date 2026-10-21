@@ -167,6 +167,7 @@ export async function runBatchMonitoringCycle(dependencies: BatchMonitoringDepen
     searchAttempts: 0, searchSuccesses: 0, searchFailures: 0, rawObservations: 0, acceptedObservations: 0,
     invalid: 0, homepages: 0, duplicates: 0, known: 0, poolCapExcluded: 0, sizeExcluded: 0, submittedCandidates: 0, promptBytes: 0,
     submittedBySource: { brave: 0, rss: 0 },
+    discoverySourceHealth: { brave: "healthy", rss: "healthy", outage: false },
     truncationStage: null, status: "empty", reservationAttempts: 0, reservations: 0, providerDispatches: 0,
     returnedStories: 0, acceptedStories: 0, selected: [], freshDelivered: 0, replayDelivered: 0, emailCount: 0,
   };
@@ -191,6 +192,7 @@ export async function runBatchMonitoringCycle(dependencies: BatchMonitoringDepen
   }
 
   const observations: BatchObservation[] = [];
+  let braveQuotaBlocked = false;
   for (const [index, descriptor] of DISCOVERY_QUERY_DESCRIPTORS.entries()) {
     batch.searchAttempts += 1;
     try {
@@ -202,7 +204,10 @@ export async function runBatchMonitoringCycle(dependencies: BatchMonitoringDepen
         provenance: { kind: "brave" as const, queryOrdinal: index + 1, resultOrdinal: position.resultOrdinal },
       })));
     } catch (error) {
-      if (error instanceof BraveUsageGuardDeniedError) break;
+      if (error instanceof BraveUsageGuardDeniedError) {
+        braveQuotaBlocked = true;
+        break;
+      }
       batch.searchFailures += 1;
       result.searchFailures.push({ queryOrdinal: index + 1, error: searchFailureMessage(error) });
       result.failures += 1;
@@ -224,6 +229,23 @@ export async function runBatchMonitoringCycle(dependencies: BatchMonitoringDepen
   batch.rawObservations += rss.metrics.observedPositions;
   result.failures += rss.metrics.failedFeeds;
   if (rss.metrics.status === "configuration") result.failures += 1;
+  const braveHealth = braveQuotaBlocked
+    ? "quota_blocked" as const
+    : batch.searchFailures === 0
+      ? "healthy" as const
+      : batch.searchSuccesses === 0
+        ? "unavailable" as const
+        : "degraded" as const;
+  const rssHealth = rss.metrics.status !== "collected" || rss.metrics.succeededFeeds === 0
+    ? "unavailable" as const
+    : rss.metrics.failedFeeds > 0
+      ? "degraded" as const
+      : "healthy" as const;
+  batch.discoverySourceHealth = {
+    brave: braveHealth,
+    rss: rssHealth,
+    outage: braveHealth === "unavailable" && rssHealth === "unavailable",
+  };
   result.searchResultsReceived = braveResultsReceived;
   // Any required history read/touch failure rejects before analysis or delivery.
   const pool = await prepareBatchCandidates(observations, { history, notificationHistory: notification.history, seenAt: cycleStartedAt });
