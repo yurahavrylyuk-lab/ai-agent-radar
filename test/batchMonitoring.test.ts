@@ -228,6 +228,22 @@ test("operational failure of both active discovery sources reports an outage", a
   assert.equal(f.sent.length, 1);
 });
 
+test("full discovery outage without eligible replay sends one truthful status digest", async () => {
+  const f = fixture();
+  f.dependencies.searchPage = async () => { throw new Error("Brave unavailable"); };
+  f.dependencies.collectRss = async () => { throw new Error("RSS unavailable"); };
+
+  const result = await run(f.dependencies);
+
+  assert.equal(result.batch?.discoverySourceHealth.outage, true);
+  assert.equal(result.delivery?.deliveryMode, "status_only");
+  assert.equal(result.delivery?.deliveryReason, "discovery_unavailable");
+  assert.equal(result.delivery?.emailAttempts, 1);
+  assert.equal(f.sent.length, 1);
+  assert.match(f.sent[0]!.text, /Discovery sources were unavailable/);
+  assert.doesNotMatch(f.sent[0]!.text, /No new eligible stories/);
+});
+
 test("partial RSS feed failure is degraded rather than unavailable", async () => {
   const f = fixture();
   f.dependencies.collectRss = async () => emptyRss({ metrics: {
@@ -245,6 +261,7 @@ test("partial RSS feed failure is degraded rather than unavailable", async () =>
   assert.deepEqual(result.batch?.discoverySourceHealth, {
     brave: "healthy", rss: "degraded", outage: false,
   });
+  assert.notEqual(result.delivery?.deliveryReason, "discovery_unavailable");
 });
 
 test("Brave quota denial is admission blocking rather than provider outage", async () => {
@@ -256,6 +273,7 @@ test("Brave quota denial is admission blocking rather than provider outage", asy
     brave: "quota_blocked", rss: "unavailable", outage: false,
   });
   assert.equal(result.searchFailures.length, 0);
+  assert.equal(result.delivery?.deliveryReason, "no_eligible_stories");
 });
 
 test("healthy discovery sources with zero useful candidates are not an outage", async () => {
@@ -266,6 +284,7 @@ test("healthy discovery sources with zero useful candidates are not an outage", 
     brave: "healthy", rss: "healthy", outage: false,
   });
   assert.equal(result.analysesAttempted, 0);
+  assert.equal(result.delivery?.deliveryReason, "no_eligible_stories");
 });
 
 test("blocked Gemini admission still searches first and delivers bounded stored replay", async () => {
@@ -437,7 +456,11 @@ test("provider failures and invalid content are terminal for fresh analysis but 
     assert.equal(result.newDiscoveries, 0); assert.equal(result.failures, 1); assert.equal(f.sent.length, 1);
   }
   const f = fixture(); f.dependencies.analyze = async () => { f.dependencies.geminiCycleContext.dispatchBlockedByTimeout = true; throw new Error("opaque"); };
-  assert.equal((await run(f.dependencies)).batch?.status, "timeout");
+  const timeoutResult = await run(f.dependencies);
+  assert.equal(timeoutResult.batch?.status, "timeout");
+  assert.equal(timeoutResult.delivery?.deliveryMode, "degraded");
+  assert.equal(timeoutResult.delivery?.deliveryReason, "ai_unavailable");
+  assert.equal(timeoutResult.delivery?.emailAttempts, 1);
 });
 
 test("Gemini provider response text cannot enter the scheduled cycle summary", async () => {

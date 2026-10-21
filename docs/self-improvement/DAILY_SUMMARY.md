@@ -1,5 +1,13 @@
 # Daily Self-Improvement Summary
 
+## 2026-10-21 — Daily digest reliability review blockers
+
+- Status: REVIEW; corrected two independently verified finalization defects on `codex/daily-digest-reliability-implementation` without changing the approved feature scope.
+- Replay preparation now retains every valid record as alias/history evidence while allowing only delivery-eligible records to represent a group. A notified legacy low-score alias therefore blocks its eligible Batch-marked alias without making the legacy record deliverable.
+- A full operational Brave/RSS outage with no usable story payload now emits `status_only / discovery_unavailable`; healthy-empty, partial degradation, quota-blocked and timeout paths retain their existing truthful classifications.
+- Evidence: blocker RED reproduced 2/43 failures; blocker GREEN 43/43; focused replay/finalization/Batch/scheduled regression 119/119; full suite 649/649; build, Worker typecheck, Wrangler dry-run and `git diff --check` passed.
+- Offline correction only: no provider call, monitoring cycle, deployment, migration, D1 mutation, push, PR or merge occurred.
+
 ## 2026-10-21 — Daily digest reliability implementation
 
 - Status: REVIEW; branch `codex/daily-digest-reliability-implementation`, approved production baseline `4fad7003c6619aa1fdee2b27c0f9cae219a9aa60`.

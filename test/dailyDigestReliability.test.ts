@@ -58,6 +58,24 @@ test("delivery_precedence keeps normal fresh plus replay, otherwise raw then eli
   assert.deepEqual(degraded.items.map(item => item.kind === "raw" ? item.candidate.candidateId : item.candidate.discovery.analysis.name), ["r1", "r2", "batch-low"]);
 });
 
+test("ineligible notified legacy replay alias blocks its eligible Batch-marked group", async () => {
+  const legacy = analyzed("legacy", "replay", 5, false);
+  const selected = analyzed("selected", "replay", 5, true);
+  const legacyUrl = "https://example.test/same-story#old";
+  const selectedUrl = "https://example.test/same-story#new";
+  legacy.discovery.normalizedUrl = legacy.discovery.analysis.sourceUrl = legacyUrl;
+  legacy.aliases = [legacyUrl];
+  selected.discovery.normalizedUrl = selected.discovery.analysis.sourceUrl = selectedUrl;
+  selected.aliases = [selectedUrl];
+
+  const digest = await prepareDailyDigest({ cycleDate, fresh: [], replay: [legacy, selected], rawCandidates: [],
+    observedAliases: new Map(), allowRawFallback: false, reason: "selected" }, history(new Set([legacyUrl])));
+
+  assert.equal(digest.mode, "status_only");
+  assert.equal(digest.reason, "no_eligible_stories");
+  assert.deepEqual(digest.items, []);
+});
+
 test("history failure suppresses every story and disabled raw fallback never resurrects candidates", async () => {
   const failed = await prepareDailyDigest({ cycleDate, fresh: [], replay: [analyzed("replay", "replay")], rawCandidates: [raw("raw")],
     observedAliases: new Map(), allowRawFallback: true, reason: "ai_unavailable" }, history(new Set(), 1));

@@ -1,5 +1,12 @@
 # Self-improvement changelog
 
+## 2026-10-21 — Daily digest reliability review corrections
+
+- Preserved ineligible replay records as grouped alias/history evidence while excluding them from delivery representation, closing the notified-alias resend gap.
+- Relabelled an otherwise-empty status digest as `discovery_unavailable` only when the existing Brave/RSS source-health contract reports a full operational outage.
+- Added focused regressions for both Analyst blockers; provider, quota, retry, acquisition, replay eligibility and one-email behavior remain unchanged.
+- No deployment, provider call, monitoring cycle, migration, D1 mutation, push, PR or merge occurred.
+
 ## 2026-10-21 — Daily digest reliability ready for review
 
 - Added one final scheduled digest attempt across normal analyzed stories, deterministic degraded raw highlights and truthful status-only outcomes, retaining replay/no-resend and low-relevance behavior.

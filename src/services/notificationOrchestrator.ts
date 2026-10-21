@@ -83,20 +83,19 @@ export async function prepareDailyDigest(input: DailyDigestInput, history: Notif
     return result;
   };
 
-  const eligibleReplay = input.replay.filter(replayDeliveryEligible);
   let ordered: DailyDigestItem[];
   let mode: PreparedDailyDigest["mode"];
   if (input.fresh.length > 0) {
-    ordered = [...input.fresh, ...eligibleReplay].map(candidate => ({ kind: "analyzed" as const, candidate }));
+    ordered = [...input.fresh, ...input.replay].map(candidate => ({ kind: "analyzed" as const, candidate }));
     mode = "normal";
   } else if (input.allowRawFallback && input.rawCandidates.length > 0) {
     ordered = [
       ...input.rawCandidates.map(candidate => ({ kind: "raw" as const, candidate })),
-      ...eligibleReplay.map(candidate => ({ kind: "analyzed" as const, candidate })),
+      ...input.replay.map(candidate => ({ kind: "analyzed" as const, candidate })),
     ];
     mode = "degraded";
   } else {
-    ordered = eligibleReplay.map(candidate => ({ kind: "analyzed" as const, candidate }));
+    ordered = input.replay.map(candidate => ({ kind: "analyzed" as const, candidate }));
     mode = ordered.length > 0 ? "normal" : "status_only";
   }
   if (mode === "status_only") return status(input.reason === "selected" ? "no_eligible_stories" : input.reason);

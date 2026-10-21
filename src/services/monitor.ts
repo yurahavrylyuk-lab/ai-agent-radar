@@ -357,11 +357,15 @@ async function runBatchMonitoringCycleInternal(dependencies: BatchMonitoringDepe
     : batch.status === "validated" ? "ai_no_selections" as const
       : batch.status === "provider_failed" || batch.status === "timeout" || batch.status === "invalid_output" || batch.status === "blocked" ? "ai_unavailable" as const
         : batch.status === "preparation_failed" ? "preparation_unavailable" as const : "no_eligible_stories" as const;
-  const digest = await prepareDailyDigest({ cycleDate: cycleStartedAt.toISOString(),
+  const preparedDigest = await prepareDailyDigest({ cycleDate: cycleStartedAt.toISOString(),
     fresh: candidates.filter(candidate => candidate.origin === "fresh"),
     replay: candidates.filter(candidate => candidate.origin === "replay"),
     rawCandidates: pool.candidates, observedAliases: pool.observedAliases,
     allowRawFallback: !selectionPersistenceFailed, reason: selectionPersistenceFailed ? "persistence_unavailable" : deliveryReason }, notification.history);
+  const digest = batch.discoverySourceHealth.outage && preparedDigest.mode === "status_only"
+      && preparedDigest.reason === "no_eligible_stories"
+    ? { ...preparedDigest, reason: "discovery_unavailable" as const }
+    : preparedDigest;
   result.replayCandidatesEligible = digest.items.filter(item => item.kind === "analyzed" && item.candidate.origin === "replay").length;
   const acceptedItems = digest.items;
   const email = await finalizeDailyDigest(digest, {
