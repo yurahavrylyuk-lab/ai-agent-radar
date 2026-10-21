@@ -70,6 +70,10 @@ function monitoringResult(overrides: Partial<MonitoringCycleResult> = {}): Monit
     xTruncated: true,
     xFailures: [{ accountOrdinal: 2, reason: "provider_error" }],
     xBlockedReason: "rate_limit",
+    delivery: {
+      deliveryMode: "normal", deliveryReason: "selected", analyzedStories: 3, rawStories: 0, replayStories: 2,
+      emailAttempts: 1, emailOutcome: "accepted", historyOutcome: "recorded", finalizationReached: true,
+    },
     outcomes: [
       {
         sourceTitle: "Secret title should never be logged",
@@ -152,6 +156,7 @@ test("default scheduled Worker uses batch entry with no X tables and HTTP method
       providerUrls.push(String(input));
       const hostname = new URL(String(input)).hostname;
       if (hostname === "api.search.brave.com") return new Response(JSON.stringify({ web: { results: [] } }));
+      if (hostname === "api.resend.com") return new Response(JSON.stringify({ id: "status-message" }));
       assert.ok(["openai.com", "github.blog", "blog.cloudflare.com", "developer.chrome.com"].includes(hostname));
       return new Response(`<rss version="2.0"><channel><title>Empty</title></channel></rss>`, { headers: { "content-type": "application/rss+xml" } });
     };
@@ -159,7 +164,7 @@ test("default scheduled Worker uses batch entry with no X tables and HTTP method
     const result = await runScheduledMonitoring(env);
     assert.equal(result.batch?.status, "empty");
     assert.equal(result.analysesAttempted, 0);
-    assert.equal(providerUrls.length, 14);
+    assert.equal(providerUrls.length, 15);
     assert.equal(summaries.length, 1);
     assert.equal(result.xRequestsAttempted, 0);
     assert.equal(result.xBlockedReason, "disabled");
@@ -240,7 +245,33 @@ test("scheduled monitoring runs one cycle and emits one structured summary with 
         error: "Provider failed",
       },
     ],
+    delivery: {
+      deliveryMode: "normal",
+      deliveryReason: "selected",
+      analyzedStories: 3,
+      rawStories: 0,
+      replayStories: 2,
+      emailAttempts: 1,
+      emailOutcome: "accepted",
+      historyOutcome: "recorded",
+      finalizationReached: true,
+    },
   });
+});
+
+test("scheduled summary independently allowlists and bounds daily delivery telemetry", () => {
+  const result = monitoringResult();
+  result.delivery = {
+    deliveryMode: "degraded", deliveryReason: "ai_unavailable", analyzedStories: 99, rawStories: 99, replayStories: 99,
+    emailAttempts: 1, emailOutcome: "accepted", historyOutcome: "persistence_failed", finalizationReached: true,
+  };
+  assert.deepEqual(createScheduledCycleSummary(result, environment()).delivery, {
+    deliveryMode: "degraded", deliveryReason: "ai_unavailable", analyzedStories: 4, rawStories: 4, replayStories: 4,
+    emailAttempts: 1, emailOutcome: "accepted", historyOutcome: "persistence_failed", finalizationReached: true,
+  });
+  (result.delivery as unknown as Record<string, unknown>).deliveryMode = "PRIVATE_PROVIDER_BODY";
+  (result.delivery as unknown as Record<string, unknown>).deliveryReason = "PRIVATE_CANDIDATE_TEXT";
+  assert.doesNotMatch(JSON.stringify(createScheduledCycleSummary(result, environment())), /PRIVATE_PROVIDER_BODY|PRIVATE_CANDIDATE_TEXT/);
 });
 
 test("scheduled summary exposes only the exact bounded Gemini blocked reason", async () => {
@@ -283,7 +314,8 @@ function batchMetrics(overrides: Partial<BatchCycleMetrics> = {}): BatchCycleMet
     discoverySourceHealth: { brave: "degraded", rss: "healthy", outage: false },
     truncationStage: "tail", status: "validated", reservationAttempts: 1, reservations: 1, providerDispatches: 1,
     returnedStories: 4, acceptedStories: 4, selected: [{ candidateId: "c050", hostname: "example.test", score: 8, provenance: [{ kind: "brave", queryOrdinal: 10, resultOrdinal: 5 }] }],
-    freshDelivered: 2, replayDelivered: 1, emailCount: 1, ...overrides,
+    freshDelivered: 2, replayDelivered: 1, emailCount: 1,
+    attempts: [], retryEligible: false, retryAttempted: false, retrySkipReason: "none", ...overrides,
   };
 }
 
@@ -308,6 +340,27 @@ test("scheduled summary copies every batch counter and distinguishes selected st
   assert.equal(summary.batch?.providerDispatches, 1); assert.equal(summary.batch?.acceptedStories, 4);
   const reservedOnly = createScheduledCycleSummary(monitoringResult({ batch: batchMetrics({ reservations: 1, providerDispatches: 0, status: "provider_failed", selected: [], acceptedStories: 0 }) }), environment());
   assert.equal(reservedOnly.batch?.reservations, 1); assert.equal(reservedOnly.batch?.providerDispatches, 0);
+});
+
+test("scheduled summary bounds and allowlists two Gemini Batch attempts", () => {
+  const summary = createScheduledCycleSummary(monitoringResult({ batch: batchMetrics({
+    reservationAttempts: 9, reservations: 9, providerDispatches: 9,
+    attempts: [
+      { ordinal: 1, providerFailureClass: "unavailable_503", accountingOutcome: "confirmed_zero", elapsedMs: 99_999 },
+      { ordinal: 2, accountingOutcome: "exact", elapsedMs: 1_200 },
+      { ordinal: 2, accountingOutcome: "exact", elapsedMs: 1 },
+    ],
+    retryEligible: true, retryAttempted: true, retrySkipReason: "exhausted",
+  }) }), environment());
+  assert.equal(summary.batch?.providerDispatches, 2);
+  assert.deepEqual(summary.batch?.attempts, [
+    { ordinal: 1, accountingOutcome: "confirmed_zero", elapsedMs: 90_000, providerFailureClass: "unavailable_503" },
+    { ordinal: 2, accountingOutcome: "exact", elapsedMs: 1_200 },
+  ]);
+  const poisoned = monitoringResult({ batch: batchMetrics() });
+  (poisoned.batch as unknown as Record<string, unknown>).attempts = [{ ordinal: 1, accountingOutcome: "PRIVATE_BODY", elapsedMs: 1 }];
+  (poisoned.batch as unknown as Record<string, unknown>).retrySkipReason = "PRIVATE_BODY";
+  assert.doesNotMatch(JSON.stringify(createScheduledCycleSummary(poisoned, environment())), /PRIVATE_BODY/);
 });
 
 test("scheduled summary independently allowlists provider failure classification", () => {

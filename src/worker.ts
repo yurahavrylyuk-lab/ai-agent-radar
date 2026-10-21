@@ -8,7 +8,8 @@ import { createMonitoringRuntimeConfiguration } from "./services/radarRuntimeCon
 import { createGeminiBatchCycleContext, generateBatchWithGemini } from "./tools/llm/gemini.js";
 import { sendWithResend } from "./tools/email/resend.js";
 import { searchWebPage } from "./tools/webSearch.js";
-import { runBatchMonitoringCycle, type BatchMonitoringDependencies } from "./services/monitor.js";
+import { finalizeStatusOnlyMonitoringCycle, runBatchMonitoringCycle, type BatchMonitoringDependencies } from "./services/monitor.js";
+import { createDailyEmailContext } from "./services/notificationOrchestrator.js";
 import { collectRss } from "./services/rssDiscovery.js";
 import { RSS_FEEDS } from "./config/rssSources.js";
 import type { BatchCycleMetrics, MonitoringCycleResult, RssCycleMetrics } from "./types/index.js";
@@ -88,6 +89,17 @@ export interface ScheduledCycleSummary {
     failed: boolean;
     error?: string;
   }>;
+  delivery: {
+    deliveryMode: "normal" | "degraded" | "status_only";
+    deliveryReason: "selected" | "no_eligible_stories" | "ai_unavailable" | "ai_no_selections" | "discovery_unavailable" | "history_unavailable" | "preparation_unavailable" | "persistence_unavailable";
+    analyzedStories: number;
+    rawStories: number;
+    replayStories: number;
+    emailAttempts: 0 | 1;
+    emailOutcome: "accepted" | "failed" | "unknown" | "not_attempted";
+    historyOutcome: "not_required" | "recorded" | "unavailable" | "persistence_failed";
+    finalizationReached: boolean;
+  };
 }
 
 export interface ScheduledMonitoringDependencies {
@@ -161,6 +173,13 @@ function summarizeBatch(batch: BatchCycleMetrics, env: RadarWorkerEnv): BatchCyc
   const providerFailureClass = allowedString(batch.providerFailureClass, ["resource_exhausted_429", "unavailable_503"] as const);
   const braveHealth = allowedString(batch.discoverySourceHealth?.brave, ["healthy", "degraded", "unavailable", "quota_blocked"] as const) ?? "unavailable";
   const rssHealth = allowedString(batch.discoverySourceHealth?.rss, ["healthy", "degraded", "unavailable"] as const) ?? "unavailable";
+  const attempts = (Array.isArray(batch.attempts) ? batch.attempts : []).slice(0, 2).flatMap(attempt => {
+    const ordinal = attempt?.ordinal === 1 || attempt?.ordinal === 2 ? attempt.ordinal : undefined;
+    const accountingOutcome = allowedString(attempt?.accountingOutcome, ["exact", "confirmed_zero", "transport_ambiguous", "pre_dispatch_zero"] as const);
+    const providerClass = allowedString(attempt?.providerFailureClass, ["resource_exhausted_429", "unavailable_503"] as const);
+    return ordinal === undefined || accountingOutcome === undefined ? [] : [{ ordinal, accountingOutcome,
+      elapsedMs: boundedCount(attempt.elapsedMs, 90_000), ...(providerClass === undefined ? {} : { providerFailureClass: providerClass }) }];
+  });
   return {
     searchAttempts: boundedCount(batch.searchAttempts, 10), searchSuccesses: boundedCount(batch.searchSuccesses, 10), searchFailures: boundedCount(batch.searchFailures, 10),
     rawObservations: boundedCount(batch.rawObservations, 75), acceptedObservations: boundedCount(batch.acceptedObservations, 75),
@@ -176,9 +195,13 @@ function summarizeBatch(batch: BatchCycleMetrics, env: RadarWorkerEnv): BatchCyc
     truncationStage: allowedString(batch.truncationStage, ["initial", "snippet384", "snippet192", "snippet96", "snippet0", "title128", "tail"] as const) ?? null,
     status,
     ...(status === "provider_failed" && providerFailureClass !== undefined ? { providerFailureClass } : {}),
-    reservationAttempts: boundedCount(batch.reservationAttempts, 1), reservations: boundedCount(batch.reservations, 1), providerDispatches: boundedCount(batch.providerDispatches, 1),
+    reservationAttempts: boundedCount(batch.reservationAttempts, 2), reservations: boundedCount(batch.reservations, 2), providerDispatches: boundedCount(batch.providerDispatches, 2),
     returnedStories: boundedCount(batch.returnedStories, 4), acceptedStories: boundedCount(batch.acceptedStories, 4), selected,
     freshDelivered: boundedCount(batch.freshDelivered, 4), replayDelivered: boundedCount(batch.replayDelivered, 4), emailCount: boundedCount(batch.emailCount, 1),
+    attempts,
+    retryEligible: batch.retryEligible === true,
+    retryAttempted: batch.retryAttempted === true,
+    retrySkipReason: allowedString(batch.retrySkipReason, ["none", "not_eligible", "accounting", "admission", "budget", "exhausted"] as const) ?? "not_eligible",
   };
 }
 
@@ -220,6 +243,11 @@ export function createScheduledCycleSummary(
       failed: outcome.error !== undefined,
       ...(outcome.error === undefined ? {} : { error: redactScheduledError(outcome.error, env) }),
     }));
+  const delivery = result.delivery;
+  const deliveryMode = allowedString(delivery?.deliveryMode, ["normal", "degraded", "status_only"] as const) ?? "status_only";
+  const deliveryReason = allowedString(delivery?.deliveryReason, ["selected", "no_eligible_stories", "ai_unavailable", "ai_no_selections", "discovery_unavailable", "history_unavailable", "preparation_unavailable", "persistence_unavailable"] as const) ?? "preparation_unavailable";
+  const emailOutcome = allowedString(delivery?.emailOutcome, ["accepted", "failed", "unknown", "not_attempted"] as const) ?? "unknown";
+  const historyOutcome = allowedString(delivery?.historyOutcome, ["not_required", "recorded", "unavailable", "persistence_failed"] as const) ?? "unavailable";
 
   return {
     event: "scheduled_monitoring_cycle_completed",
@@ -273,6 +301,15 @@ export function createScheduledCycleSummary(
     outcomesTotal: result.outcomes.length,
     outcomesOmitted: Math.max(0, result.outcomes.length - outcomes.length),
     outcomes,
+    delivery: {
+      deliveryMode, deliveryReason,
+      analyzedStories: boundedCount(delivery?.analyzedStories, 4),
+      rawStories: boundedCount(delivery?.rawStories, 4),
+      replayStories: boundedCount(delivery?.replayStories, 4),
+      emailAttempts: boundedCount(delivery?.emailAttempts, 1) as 0 | 1,
+      emailOutcome, historyOutcome,
+      finalizationReached: delivery?.finalizationReached === true,
+    },
   };
 }
 
@@ -334,8 +371,18 @@ export async function runScheduledMonitoring(
   env: RadarWorkerEnv,
   dependencies: ScheduledMonitoringDependencies = {},
 ): Promise<MonitoringCycleResult> {
-  const runCycle = dependencies.runCycle
-    ?? (() => runBatchMonitoringCycle(createWorkerMonitoringDependencies(env)));
+  const runCycle = dependencies.runCycle ?? (async () => {
+    const context = createDailyEmailContext();
+    try {
+      return await runBatchMonitoringCycle({ ...createWorkerMonitoringDependencies(env), dailyEmailContext: context });
+    } catch {
+      return finalizeStatusOnlyMonitoringCycle(
+        context,
+        content => sendWithResend(content, { environment: env as unknown as Record<string, string | undefined> }),
+        new Date().toISOString(),
+      );
+    }
+  });
   const result = await runCycle();
   (dependencies.logInfo ?? ((summary) => console.info(summary)))(createScheduledCycleSummary(result, env));
   return result;

@@ -141,6 +141,45 @@ export interface BatchDeliveryCandidate extends DeliveryCandidate {
   aliases: readonly string[];
 }
 
+export type DailyDigestMode = "normal" | "degraded" | "status_only";
+export type DailyDigestReason = "selected" | "no_eligible_stories" | "ai_unavailable" | "ai_no_selections"
+  | "discovery_unavailable" | "history_unavailable" | "preparation_unavailable" | "persistence_unavailable";
+export type DailyDigestItem =
+  | { kind: "analyzed"; candidate: BatchDeliveryCandidate }
+  | { kind: "raw"; candidate: BatchCandidate };
+export interface DailyDigestInput {
+  cycleDate: string;
+  fresh: readonly BatchDeliveryCandidate[];
+  replay: readonly BatchDeliveryCandidate[];
+  rawCandidates: readonly BatchCandidate[];
+  observedAliases: ReadonlyMap<string, readonly string[]>;
+  allowRawFallback: boolean;
+  reason: DailyDigestReason;
+}
+export interface PreparedDailyDigest {
+  mode: DailyDigestMode;
+  reason: DailyDigestReason;
+  cycleDate: string;
+  items: DailyDigestItem[];
+}
+export interface DailyEmailContext { emailAttempted: boolean }
+export type DailyEmailOutcomeValue = "accepted" | "failed" | "unknown" | "not_attempted";
+export type DailyHistoryOutcome = "not_required" | "recorded" | "unavailable" | "persistence_failed";
+export interface DailyEmailOutcome {
+  emailAttempts: 0 | 1;
+  emailOutcome: DailyEmailOutcomeValue;
+  historyOutcome: DailyHistoryOutcome;
+  finalizationReached: boolean;
+}
+
+export interface DailyDeliveryTelemetry extends DailyEmailOutcome {
+  deliveryMode: DailyDigestMode;
+  deliveryReason: DailyDigestReason;
+  analyzedStories: number;
+  rawStories: number;
+  replayStories: number;
+}
+
 /** Provider-neutral content ready for a future email transport. */
 export interface DiscoveryEmailContent {
   subject: string;
@@ -209,6 +248,14 @@ export interface XAccountFailure {
 }
 
 export type GeminiProviderFailureClass = "resource_exhausted_429" | "unavailable_503";
+export type GeminiBatchAccountingOutcome = "exact" | "confirmed_zero" | "transport_ambiguous" | "pre_dispatch_zero";
+export type GeminiBatchRetrySkipReason = "none" | "not_eligible" | "accounting" | "admission" | "budget" | "exhausted";
+export interface GeminiBatchAttemptSummary {
+  ordinal: 1 | 2;
+  providerFailureClass?: GeminiProviderFailureClass;
+  accountingOutcome: GeminiBatchAccountingOutcome;
+  elapsedMs: number;
+}
 
 export type BraveDiscoverySourceHealth = "healthy" | "degraded" | "unavailable" | "quota_blocked";
 export type RssDiscoverySourceHealth = "healthy" | "degraded" | "unavailable";
@@ -236,6 +283,10 @@ export interface BatchCycleMetrics {
     provenance: DiscoveryProvenance[];
   }>;
   freshDelivered: number; replayDelivered: number; emailCount: number;
+  attempts?: GeminiBatchAttemptSummary[];
+  retryEligible?: boolean;
+  retryAttempted?: boolean;
+  retrySkipReason?: GeminiBatchRetrySkipReason;
 }
 
 export interface MonitoringCycleResult {
@@ -275,4 +326,6 @@ export interface MonitoringCycleResult {
   /** Counts timeout records whose token usage remains unknown in active accounting windows. */
   geminiTimeoutIncompleteAccounting?: GeminiTimeoutAccountingDiagnostic;
   outcomes: MonitoringCycleOutcome[];
+  /** Closed, bounded final-delivery evidence for the scheduled Batch path. */
+  delivery?: DailyDeliveryTelemetry;
 }

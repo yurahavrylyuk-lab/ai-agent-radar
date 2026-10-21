@@ -1,5 +1,29 @@
 # Daily Self-Improvement Summary
 
+## 2026-10-21 — Daily digest reliability review blockers
+
+- Status: REVIEW; corrected two independently verified finalization defects on `codex/daily-digest-reliability-implementation` without changing the approved feature scope.
+- Replay preparation now retains every valid record as alias/history evidence while allowing only delivery-eligible records to represent a group. A notified legacy low-score alias therefore blocks its eligible Batch-marked alias without making the legacy record deliverable.
+- A full operational Brave/RSS outage with no usable story payload now emits `status_only / discovery_unavailable`; healthy-empty, partial degradation, quota-blocked and timeout paths retain their existing truthful classifications.
+- Evidence: blocker RED reproduced 2/43 failures; blocker GREEN 43/43; focused replay/finalization/Batch/scheduled regression 119/119; full suite 649/649; build, Worker typecheck, Wrangler dry-run and `git diff --check` passed.
+- Offline correction only: no provider call, monitoring cycle, deployment, migration, D1 mutation, push, PR or merge occurred.
+
+## 2026-10-21 — Daily digest reliability implementation
+
+- Status: REVIEW; branch `codex/daily-digest-reliability-implementation`, approved production baseline `4fad7003c6619aa1fdee2b27c0f9cae219a9aa60`.
+- Implemented one guarded final email attempt in `normal`, `degraded`, or `status_only` mode. Deterministic raw fallback preserves pool order, URL/history evidence, replay safety and the four-story cap without fabricating analysis.
+- Added one same-model retry only after reviewed `resource_exhausted_429` or `unavailable_503` evidence is durably settled `confirmed_zero`. Attempts use separate accounting rows, 1000–1500 ms bounded jitter, unchanged admission/quota guards and one shared 90-second deadline. Timeout/network/usage ambiguity remains terminal.
+- Added closed delivery and two-attempt telemetry with independent scheduled-summary allowlisting. Provider bodies, prompts, story content and secret values are not copied into telemetry.
+- Offline implementation only: no provider call, monitoring cycle, deployment, migration, D1 mutation, push, PR or merge. Production/natural validation remains pending.
+
+
+## 2026-10-21 — Daily digest reliability architecture
+
+- Documentation/design only; baseline `4fad7003c6619aa1fdee2b27c0f9cae219a9aa60`, branch `codex/daily-digest-reliability-design`.
+- Designed one final normal/degraded/status email attempt; deterministic raw fallback preserves source/history safety and does not fabricate analysis. Proposed a later one-retry exception only after proven durable confirmed-zero 429/503, with separate accounting and a shared 90-second budget.
+- Reordered backlog/plan to reliability first and retained the permanent actualization checkpoint. Current source/Worker facts come from the human handoff; new outage telemetry is deployed, not naturally validated. Earlier tracker priorities below are historical.
+- Checks: documentation consistency/whitespace and scoped diff inspection; runtime tests not run (no runtime change). Preserved unrelated untracked files. No provider, monitoring, deployment, D1, migration, push or merge action. Design awaits human review; implementation and release are not performed.
+
 ## 2026-10-20 — Multi-source discovery outage signaling
 
 - Status: REVIEW; branch `codex/multi-source-outage-signaling`, baseline `f53acb06642c7880c62f3c9457562c9d42e61b24`.

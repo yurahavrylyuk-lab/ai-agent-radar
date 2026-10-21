@@ -1,4 +1,4 @@
-import { formatDiscoveryEmail, formatDigestEmail, formatBatchDigestEmail, type DigestEmailOptions } from "./discoveryEmailFormatter.js";
+import { formatDiscoveryEmail, formatDigestEmail, formatBatchDigestEmail, formatDailyDigestEmail, type DigestEmailOptions } from "./discoveryEmailFormatter.js";
 import { batchAliasKey, isBatchNewsUrl } from "./batchCandidates.js";
 import { normalizeDiscoveryUrl } from "./discoveryHistoryCore.js";
 import { compareDiscoveryPriority } from "./discoveryPriority.js";
@@ -6,7 +6,7 @@ import { isNotificationEligible } from "./notificationEligibility.js";
 import { isTrustedFallbackSource } from "./sourceTrust.js";
 import { NotificationHistoryError, type NotificationHistory } from "./notificationHistoryCore.js";
 import { sendWithResend } from "../tools/email/resend.js";
-import type { BatchDeliveryCandidate, DeliveryCandidate, DiscoveryEmailContent, DiscoveryProcessingResult, EmailSendResult, NotificationRecord, NotificationResult, StoredDiscovery } from "../types/index.js";
+import type { BatchCandidate, BatchDeliveryCandidate, DailyDigestInput, DailyDigestItem, DailyEmailContext, DailyEmailOutcome, DeliveryCandidate, DiscoveryEmailContent, DiscoveryProcessingResult, EmailSendResult, NotificationRecord, NotificationResult, PreparedDailyDigest, StoredDiscovery } from "../types/index.js";
 
 type EligibilityCheck = (result: DiscoveryProcessingResult) => boolean;
 type DiscoveryEmailFormatter = (discovery: StoredDiscovery) => DiscoveryEmailContent;
@@ -32,6 +32,136 @@ export interface DigestDeliveryResult {
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : "Unknown error";
+}
+
+function replayDeliveryEligible(candidate: BatchDeliveryCandidate): boolean {
+  return candidate.origin !== "replay" || candidate.discovery.analysis.relevanceScore >= 7
+    || candidate.discovery.batchSelectionProvenance?.kind === "batch";
+}
+
+type PreparedGroup = { item?: DailyDigestItem; index: number; aliases: Set<string> };
+
+/** Selects one bounded daily payload without formatting, sending, or persistence. */
+export async function prepareDailyDigest(input: DailyDigestInput, history: NotificationHistory): Promise<PreparedDailyDigest> {
+  const status = (reason: DailyDigestInput["reason"]): PreparedDailyDigest => ({
+    mode: "status_only", reason, cycleDate: input.cycleDate, items: [],
+  });
+  const makeGroups = (items: readonly DailyDigestItem[]): PreparedGroup[] => {
+    const groups = new Map<string, PreparedGroup>();
+    for (const [index, item] of items.entries()) {
+      const url = item.kind === "raw" ? item.candidate.normalizedUrl : item.candidate.discovery.normalizedUrl;
+      const key = batchAliasKey(url);
+      const eligible = item.kind === "raw" ? true : replayDeliveryEligible(item.candidate);
+      let group = groups.get(key);
+      if (!group) {
+        group = { item: eligible ? item : undefined, index, aliases: new Set() };
+        groups.set(key, group);
+      } else if (eligible && !group.item) {
+        group.item = item;
+        group.index = index;
+      }
+      const aliases = item.candidate.aliases;
+      for (const alias of [url, ...aliases, ...(input.observedAliases.get(key) ?? [])]) {
+        group.aliases.add(normalizeDiscoveryUrl(alias));
+      }
+    }
+    return [...groups.values()];
+  };
+  const excludeNotified = async (groups: readonly PreparedGroup[]): Promise<PreparedGroup[]> => {
+    const result: PreparedGroup[] = [];
+    for (const group of groups) {
+      let notified = false;
+      for (const alias of group.aliases) {
+        if (await history.hasNotificationBeenSent(alias, "email")) {
+          const record = await history.getNotificationRecord(alias, "email");
+          if (!record) throw new NotificationHistoryError("Known notification could not be retrieved safely.");
+          notified = true;
+        }
+      }
+      if (!notified && group.item) result.push(group);
+    }
+    return result;
+  };
+
+  let ordered: DailyDigestItem[];
+  let mode: PreparedDailyDigest["mode"];
+  if (input.fresh.length > 0) {
+    ordered = [...input.fresh, ...input.replay].map(candidate => ({ kind: "analyzed" as const, candidate }));
+    mode = "normal";
+  } else if (input.allowRawFallback && input.rawCandidates.length > 0) {
+    ordered = [
+      ...input.rawCandidates.map(candidate => ({ kind: "raw" as const, candidate })),
+      ...input.replay.map(candidate => ({ kind: "analyzed" as const, candidate })),
+    ];
+    mode = "degraded";
+  } else {
+    ordered = input.replay.map(candidate => ({ kind: "analyzed" as const, candidate }));
+    mode = ordered.length > 0 ? "normal" : "status_only";
+  }
+  if (mode === "status_only") return status(input.reason === "selected" ? "no_eligible_stories" : input.reason);
+  try {
+    const first = await excludeNotified(makeGroups(ordered));
+    const second = await excludeNotified(first);
+    const items = second.sort((left, right) => left.index - right.index).slice(0, 4).map(group => {
+      const item = group.item!;
+      const aliases = [...group.aliases];
+      return item.kind === "raw"
+        ? { kind: "raw" as const, candidate: { ...item.candidate, aliases } satisfies BatchCandidate }
+        : { kind: "analyzed" as const, candidate: { ...item.candidate, aliases } satisfies BatchDeliveryCandidate };
+    });
+    return items.length > 0 ? { mode, reason: input.reason, cycleDate: input.cycleDate, items } : status("no_eligible_stories");
+  } catch {
+    return status("history_unavailable");
+  }
+}
+
+export function createDailyEmailContext(): DailyEmailContext { return { emailAttempted: false }; }
+
+/** Owns the single mail-transport attempt for one scheduled invocation. */
+export async function finalizeDailyDigest(
+  digest: PreparedDailyDigest,
+  dependencies: { context: DailyEmailContext; history?: NotificationHistory; sendEmail: EmailSender; onAccepted?: () => void },
+): Promise<DailyEmailOutcome> {
+  if (dependencies.context.emailAttempted) {
+    return { emailAttempts: 0, emailOutcome: "not_attempted", historyOutcome: "not_required", finalizationReached: true };
+  }
+  dependencies.context.emailAttempted = true;
+  let content: DiscoveryEmailContent;
+  try {
+    content = formatDailyDigestEmail(digest);
+  } catch {
+    content = formatDailyDigestEmail({ mode: "status_only", reason: "preparation_unavailable", cycleDate: digest.cycleDate, items: [] });
+  }
+  let accepted: EmailSendResult;
+  try {
+    accepted = await dependencies.sendEmail(content);
+  } catch {
+    return { emailAttempts: 1, emailOutcome: "failed", historyOutcome: "not_required", finalizationReached: true };
+  }
+  dependencies.onAccepted?.();
+  if (digest.items.length === 0) {
+    return { emailAttempts: 1, emailOutcome: "accepted", historyOutcome: "not_required", finalizationReached: true };
+  }
+  if (!dependencies.history) {
+    return { emailAttempts: 1, emailOutcome: "accepted", historyOutcome: "unavailable", finalizationReached: true };
+  }
+  let persistenceFailed = false;
+  for (const item of digest.items) {
+    const aliases = item.candidate.aliases;
+    for (const alias of new Set(aliases)) {
+      try {
+        await dependencies.history.recordNotificationSent(alias, "email", accepted.id);
+      } catch {
+        persistenceFailed = true;
+      }
+    }
+  }
+  return {
+    emailAttempts: 1,
+    emailOutcome: "accepted",
+    historyOutcome: persistenceFailed ? "persistence_failed" : "recorded",
+    finalizationReached: true,
+  };
 }
 
 export async function notifyDiscovery(
@@ -202,8 +332,7 @@ export async function notifyBatchDeliveryDigest(
     const url = candidate.discovery.analysis.sourceUrl;
     notifications.set(url, { status: "not_eligible" });
     if (!isBatchNewsUrl(url)) continue;
-    const deliveryEligible = candidate.origin !== "replay" || candidate.discovery.analysis.relevanceScore >= 7
-      || candidate.discovery.batchSelectionProvenance?.kind === "batch";
+    const deliveryEligible = replayDeliveryEligible(candidate);
     const key = batchAliasKey(candidate.discovery.normalizedUrl);
     let group = groups.get(key);
     if (!group) {

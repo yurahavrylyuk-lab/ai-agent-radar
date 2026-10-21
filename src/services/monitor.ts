@@ -3,8 +3,8 @@ import { getNotificationReplayWindow } from "../config/notificationReplay.js";
 import { DISCOVERY_QUERY_DESCRIPTORS, MONITORING_FRESHNESS, MONITORING_QUERIES, type DiscoveryQueryDescriptor } from "../config/discoveryQueries.js";
 import { getPreAnalysisCandidatePriority, hasOfficialPreAnalysisPriority, selectPreAnalysisCandidates } from "./discoveryPriority.js";
 import { NotificationHistoryError, type NotificationHistory } from "./notificationHistoryCore.js";
-import { notifyBatchDeliveryDigest, notifyDeliveryDigest, type DigestDeliveryResult, type NotificationOrchestratorDependencies } from "./notificationOrchestrator.js";
-import { batchAliasKey, prepareBatchCandidates } from "./batchCandidates.js";
+import { createDailyEmailContext, finalizeDailyDigest, prepareDailyDigest, notifyDeliveryDigest, type DigestDeliveryResult, type NotificationOrchestratorDependencies } from "./notificationOrchestrator.js";
+import { batchAliasKey, isBatchNewsUrl, prepareBatchCandidates } from "./batchCandidates.js";
 import { prepareBatchPrompt } from "./batchPrompt.js";
 import { BatchAnalysisError } from "./analysisAgent.js";
 import { recordBatchSelection } from "./discoveryProcessor.js";
@@ -12,7 +12,8 @@ import { type GeminiAvailability, type GeminiBlockedReason } from "./geminiUsage
 import { createGeminiCycleContext, getGeminiProviderFailureClass, type GeminiBatchCycleContext, type GeminiCycleContext } from "../tools/llm/gemini.js";
 import { xPostIdFromUrl, type XDiscoveryResult } from "./xDiscovery.js";
 import { BraveUsageGuardDeniedError } from "../tools/webSearch.js";
-import type { BatchAnalysisResult, BatchCycleMetrics, BatchDeliveryCandidate, BatchObservation, BraveSearchPage, DeliveryCandidate, DiscoveryProcessingResult, MonitoringCycleResult, MonitoringSearchFailure, NotificationResult, PreparedBatch, RssDiscoveryResult, SearchResult, StoredDiscovery, XSourceProvenance } from "../types/index.js";
+import { sendWithResend } from "../tools/email/resend.js";
+import type { BatchAnalysisResult, BatchCycleMetrics, BatchDeliveryCandidate, BatchObservation, BraveSearchPage, DailyEmailContext, DeliveryCandidate, DiscoveryProcessingResult, MonitoringCycleResult, MonitoringSearchFailure, NotificationResult, PreparedBatch, RssDiscoveryResult, SearchResult, StoredDiscovery, XSourceProvenance } from "../types/index.js";
 
 export const MONITORING_QUERY = "new AI agent developer tool framework release";
 export { MONITORING_QUERIES };
@@ -55,6 +56,8 @@ export interface BatchMonitoringDependencies {
   geminiCycleContext: GeminiBatchCycleContext;
   collectRss: (now: Date) => Promise<RssDiscoveryResult>;
   now?: () => Date;
+  /** Shared by the Worker so initialization failures use the same one-shot finalizer guard. */
+  dailyEmailContext?: DailyEmailContext;
 }
 
 const geminiBlockedReasons = new Set<GeminiBlockedReason>([
@@ -157,7 +160,7 @@ function recordNotification(result: MonitoringCycleResult, notification: Notific
 }
 
 /** The scheduled policy: collect the whole bounded pool, analyze once, then deliver persisted stories. */
-export async function runBatchMonitoringCycle(dependencies: BatchMonitoringDependencies): Promise<MonitoringCycleResult> {
+async function runBatchMonitoringCycleInternal(dependencies: BatchMonitoringDependencies, emailContext: DailyEmailContext): Promise<MonitoringCycleResult> {
   const now = dependencies.now ?? (() => new Date());
   const cycleStartedAt = now();
   if (Number.isNaN(cycleStartedAt.getTime())) throw new Error("Monitoring cycle timestamp is invalid.");
@@ -252,6 +255,7 @@ export async function runBatchMonitoringCycle(dependencies: BatchMonitoringDepen
   Object.assign(batch, pool.counts);
   result.duplicates = pool.counts.duplicates + pool.counts.known;
   const fresh: BatchDeliveryCandidate[] = [];
+  let selectionPersistenceFailed = false;
   let prepared: PreparedBatch | undefined;
   if (pool.candidates.length > 0) {
     try {
@@ -321,6 +325,7 @@ export async function runBatchMonitoringCycle(dependencies: BatchMonitoringDepen
               }
             }
           } catch (error) {
+            selectionPersistenceFailed = true;
             result.failures += 1;
             result.outcomes.push({ sourceTitle: selection.candidate.source.title, sourceUrl: selection.candidate.source.url, error: errorMessage(error) });
           }
@@ -332,49 +337,84 @@ export async function runBatchMonitoringCycle(dependencies: BatchMonitoringDepen
   batch.reservationAttempts = geminiCycleContext.reservationAttempts;
   batch.reservations = geminiCycleContext.reservations;
   batch.providerDispatches = geminiCycleContext.providerDispatches;
+  batch.attempts = geminiCycleContext.attempts.map(attempt => ({ ...attempt }));
+  batch.retryEligible = geminiCycleContext.retryEligible;
+  batch.retryAttempted = geminiCycleContext.retryAttempted;
+  batch.retrySkipReason = geminiCycleContext.retrySkipReason;
   result.geminiProviderAttempts = geminiCycleContext.providerDispatches;
   result.geminiRequestsByModel["gemini-3.8-flash"] = geminiCycleContext.providerDispatches;
+  const replayCandidates: BatchDeliveryCandidate[] = [...replay.values()]
+    .filter(discovery => isBatchNewsUrl(discovery.normalizedUrl))
+    .map(discovery => ({ discovery, origin: "replay" as const, aliases: [] as readonly string[] }));
   const candidates: BatchDeliveryCandidate[] = [
     ...fresh,
-    ...[...replay.values()].map(discovery => ({ discovery, origin: "replay" as const, aliases: [] as readonly string[] })),
+    ...replayCandidates,
   ].map(candidate => ({
     ...candidate,
     aliases: [...new Set([...candidate.aliases, ...(pool.observedAliases.get(batchAliasKey(candidate.discovery.normalizedUrl)) ?? [])])],
   }));
-  if (candidates.length > 0) {
-    const sendEmail = notification.sendEmail;
-    try {
-      const delivery = await notifyBatchDeliveryDigest(candidates, {
-        ...notification,
-        onAccepted: accepted => {
-          result.notificationsSent = batch.emailCount = 1;
-          result.freshStoriesSent = batch.freshDelivered = accepted.filter(candidate => candidate.origin === "fresh").length;
-          result.replayStoriesSent = batch.replayDelivered = accepted.filter(candidate => candidate.origin === "replay").length;
-        },
-        ...(sendEmail ? { sendEmail: async content => {
-          const accepted = await sendEmail(content);
-          result.notificationsSent = batch.emailCount = 1;
-          return accepted;
-        } } : {}),
-      });
-      result.replayCandidatesEligible = delivery.eligibleCandidates.filter(candidate => candidate.origin === "replay").length;
-      result.freshStoriesSent = batch.freshDelivered = delivery.sentCandidates.filter(candidate => candidate.origin === "fresh").length;
-      result.replayStoriesSent = batch.replayDelivered = delivery.sentCandidates.filter(candidate => candidate.origin === "replay").length;
-      if (delivery.sentCandidates.length > 0) result.notificationsSent = batch.emailCount = 1;
-      for (const candidate of candidates) {
-        const status = delivery.notifications.get(candidate.discovery.analysis.sourceUrl)?.status ?? "not_eligible";
-        if (status === "already_sent") result.notificationsAlreadySent += 1;
-        if (status === "not_eligible") result.notificationsNotEligible += 1;
-        const outcome = result.outcomes.find(entry => entry.sourceUrl === candidate.discovery.analysis.sourceUrl && entry.error === undefined);
-        if (outcome) outcome.notificationStatus = status;
-      }
-    } catch (error) {
-      if (error instanceof NotificationHistoryError) throw error;
-      result.failures += 1;
-      result.outcomes.push({ sourceTitle: "", sourceUrl: "", error: errorMessage(error) });
-    }
-  }
+  const deliveryReason = fresh.length > 0 ? "selected" as const
+    : batch.status === "validated" ? "ai_no_selections" as const
+      : batch.status === "provider_failed" || batch.status === "timeout" || batch.status === "invalid_output" || batch.status === "blocked" ? "ai_unavailable" as const
+        : batch.status === "preparation_failed" ? "preparation_unavailable" as const : "no_eligible_stories" as const;
+  const preparedDigest = await prepareDailyDigest({ cycleDate: cycleStartedAt.toISOString(),
+    fresh: candidates.filter(candidate => candidate.origin === "fresh"),
+    replay: candidates.filter(candidate => candidate.origin === "replay"),
+    rawCandidates: pool.candidates, observedAliases: pool.observedAliases,
+    allowRawFallback: !selectionPersistenceFailed, reason: selectionPersistenceFailed ? "persistence_unavailable" : deliveryReason }, notification.history);
+  const digest = batch.discoverySourceHealth.outage && preparedDigest.mode === "status_only"
+      && preparedDigest.reason === "no_eligible_stories"
+    ? { ...preparedDigest, reason: "discovery_unavailable" as const }
+    : preparedDigest;
+  result.replayCandidatesEligible = digest.items.filter(item => item.kind === "analyzed" && item.candidate.origin === "replay").length;
+  const acceptedItems = digest.items;
+  const email = await finalizeDailyDigest(digest, {
+    context: emailContext, history: notification.history, sendEmail: notification.sendEmail ?? sendWithResend,
+    onAccepted: () => {
+      result.notificationsSent = batch.emailCount = 1;
+      result.freshStoriesSent = batch.freshDelivered = acceptedItems.filter(item => item.kind === "analyzed" && item.candidate.origin === "fresh").length;
+      result.replayStoriesSent = batch.replayDelivered = acceptedItems.filter(item => item.kind === "analyzed" && item.candidate.origin === "replay").length;
+    },
+  });
+  result.delivery = {
+    deliveryMode: digest.mode,
+    deliveryReason: digest.reason,
+    analyzedStories: digest.items.filter(item => item.kind === "analyzed").length,
+    rawStories: digest.items.filter(item => item.kind === "raw").length,
+    replayStories: digest.items.filter(item => item.kind === "analyzed" && item.candidate.origin === "replay").length,
+    ...email,
+  };
+  if (email.emailOutcome === "failed" || email.historyOutcome === "persistence_failed") result.failures += 1;
   return result;
+}
+
+export async function finalizeStatusOnlyMonitoringCycle(
+  context: DailyEmailContext,
+  sendEmail: NonNullable<NotificationOrchestratorDependencies["sendEmail"]>,
+  cycleDate: string,
+  reason: "history_unavailable" | "discovery_unavailable" | "preparation_unavailable" = "discovery_unavailable",
+): Promise<MonitoringCycleResult> {
+  const result = emptyResult(MONITORING_QUERIES.join(" | "), 0);
+  result.failures = 1;
+  const digest = { mode: "status_only" as const, reason, cycleDate, items: [] };
+  const outcome = await finalizeDailyDigest(digest, { context, sendEmail });
+  if (outcome.emailOutcome === "accepted") result.notificationsSent = 1;
+  result.delivery = {
+    deliveryMode: digest.mode, deliveryReason: digest.reason,
+    analyzedStories: 0, rawStories: 0, replayStories: 0, ...outcome,
+  };
+  return result;
+}
+
+/** The scheduled Batch cycle always converges on one guarded final email attempt. */
+export async function runBatchMonitoringCycle(dependencies: BatchMonitoringDependencies): Promise<MonitoringCycleResult> {
+  const context = dependencies.dailyEmailContext ?? createDailyEmailContext();
+  try {
+    return await runBatchMonitoringCycleInternal(dependencies, context);
+  } catch {
+    const cycleDate = (dependencies.now ?? (() => new Date()))().toISOString();
+    return finalizeStatusOnlyMonitoringCycle(context, dependencies.notification.sendEmail ?? sendWithResend, cycleDate, "history_unavailable");
+  }
 }
 
 /** Runs one sequential discovery, analysis, and digest-notification cycle. */

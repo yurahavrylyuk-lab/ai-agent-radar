@@ -1,5 +1,27 @@
 # Self-improvement changelog
 
+## 2026-10-21 — Daily digest reliability review corrections
+
+- Preserved ineligible replay records as grouped alias/history evidence while excluding them from delivery representation, closing the notified-alias resend gap.
+- Relabelled an otherwise-empty status digest as `discovery_unavailable` only when the existing Brave/RSS source-health contract reports a full operational outage.
+- Added focused regressions for both Analyst blockers; provider, quota, retry, acquisition, replay eligibility and one-email behavior remain unchanged.
+- No deployment, provider call, monitoring cycle, migration, D1 mutation, push, PR or merge occurred.
+
+## 2026-10-21 — Daily digest reliability ready for review
+
+- Added one final scheduled digest attempt across normal analyzed stories, deterministic degraded raw highlights and truthful status-only outcomes, retaining replay/no-resend and low-relevance behavior.
+- Added one same-model retry only after reviewed 429/503 evidence durably settles `confirmed_zero`; the retry uses a separate reservation, 1000–1500 ms bounded backoff and the original shared 90-second deadline. Timeout and uncertain outcomes never retry.
+- Added bounded allowlisted delivery/retry telemetry and preserved one-email, four-story, source, quota, accounting and privacy invariants.
+- No deployment, provider call, monitoring cycle, migration, D1 mutation, push, PR or merge occurred.
+
+
+## 2026-10-21 — Daily digest reliability architecture
+
+- Documentation/design only; baseline `4fad7003c6619aa1fdee2b27c0f9cae219a9aa60`, branch `codex/daily-digest-reliability-design`.
+- Designed one final normal/degraded/status email attempt; deterministic raw fallback preserves source/history safety and does not fabricate analysis. Proposed a later one-retry exception only after proven durable confirmed-zero 429/503, with separate accounting and a shared 90-second budget.
+- Reordered backlog/plan to reliability first and retained the permanent actualization checkpoint. Current source/Worker facts come from the human handoff; new outage telemetry is deployed, not naturally validated. Earlier tracker priorities below are historical.
+- Checks: documentation consistency/whitespace and scoped diff inspection; runtime tests not run (no runtime change). Preserved unrelated untracked files. No provider, monitoring, deployment, D1, migration, push or merge action. Design awaits human review; implementation and release are not performed.
+
 ## 2026-10-20 — Multi-source discovery outage signaling ready for review
 
 - Added bounded scheduled Batch health states for Brave and RSS plus an explicit outage flag only when both operational sources are unavailable.

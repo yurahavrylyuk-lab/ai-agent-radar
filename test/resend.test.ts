@@ -93,3 +93,10 @@ test("malformed or unexpected success responses are rejected", async () => {
     fetchImplementation: (async () => new Response(JSON.stringify({}), { status: 200 })) as typeof fetch,
   }), /unexpected success response/);
 });
+
+test("the 30-second deadline covers response-body parsing", async () => {
+  await assert.rejects(sendWithResend(content, {
+    environment, timeoutMs: 5,
+    fetchImplementation: (async () => ({ ok: true, status: 200, statusText: "OK", json: () => new Promise(() => {}) }) as Response) as typeof fetch,
+  }), /timed out after 30 seconds/);
+});

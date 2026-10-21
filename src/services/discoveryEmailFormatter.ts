@@ -1,4 +1,4 @@
-import type { DiscoveryEmailContent, StoredDiscovery } from "../types/index.js";
+import type { DiscoveryEmailContent, PreparedDailyDigest, StoredDiscovery } from "../types/index.js";
 
 export type DigestEmailMode = "normal" | "fallback";
 
@@ -246,6 +246,69 @@ export function formatDigestEmail(
 /** Batch layout uses stored source fields and requires no further analysis. */
 export function formatBatchDigestEmail(stories: StoredDiscovery[]): DiscoveryEmailContent {
   return formatDigest(stories, {}, true);
+}
+
+function truncateUtf8(value: string, limit: number): string {
+  const encoder = new TextEncoder();
+  if (encoder.encode(value).byteLength <= limit) return value;
+  let result = "";
+  for (const character of value) {
+    if (encoder.encode(result + character).byteLength > limit) break;
+    result += character;
+  }
+  return result;
+}
+
+const dailyReasonText: Record<PreparedDailyDigest["reason"], string> = {
+  selected: "Selected stories are ready.",
+  no_eligible_stories: "No new eligible stories were available for delivery.",
+  ai_unavailable: "AI analysis was unavailable.",
+  ai_no_selections: "AI analysis returned no usable selections.",
+  discovery_unavailable: "Discovery sources were unavailable.",
+  history_unavailable: "Notification history was unavailable, so stories were suppressed for safety.",
+  preparation_unavailable: "Digest preparation was unavailable.",
+  persistence_unavailable: "Selected stories could not be persisted safely.",
+};
+
+/** Formats one prepared normal, degraded, or status-only daily payload. */
+export function formatDailyDigestEmail(digest: PreparedDailyDigest): DiscoveryEmailContent {
+  if (digest.mode === "normal") {
+    const stories = digest.items.filter((item) => item.kind === "analyzed").map(item => item.candidate.discovery);
+    if (stories.length === 0) throw new Error("Normal daily digest requires analyzed stories.");
+    return formatBatchDigestEmail(stories);
+  }
+  const date = digest.cycleDate.slice(0, 10);
+  if (digest.mode === "status_only") {
+    const heading = "Daily digest — status update";
+    const reason = dailyReasonText[digest.reason];
+    return { subject: heading, text: `${heading}\n\nUTC scheduled date: ${date}\n\n${reason}`,
+      html: `<!doctype html><html lang="en"><body><h1>${escapeHtml(heading)}</h1><p>UTC scheduled date: ${escapeHtml(date)}</p><p>${escapeHtml(reason)}</p></body></html>` };
+  }
+  const emptySelection = digest.reason === "ai_no_selections";
+  const heading = emptySelection ? "Daily digest — discovery highlights" : "Daily digest — AI analysis unavailable";
+  const explanation = emptySelection
+    ? "AI analysis returned no usable selections; these highlights come directly from today's discovery results."
+    : "These stories were selected directly from today's discovery results; AI analysis was unavailable.";
+  const textStories = digest.items.map((item, index) => {
+    if (item.kind === "analyzed") return `STORY ${index + 1} — PREVIOUSLY ANALYZED\n${item.candidate.discovery.analysis.name}\n${item.candidate.discovery.analysis.sourceUrl}`;
+    const source = item.candidate.source;
+    const href = safeHref(source.url);
+    const hostname = new URL(href).hostname;
+    const snippet = truncateUtf8(source.snippet?.trim() ?? "", 768);
+    return `STORY ${index + 1}\n${source.title}\nSource: ${hostname}\n${href}${snippet ? `\n${snippet}` : ""}`;
+  });
+  const htmlStories = digest.items.map((item, index) => {
+    if (item.kind === "analyzed") {
+      const story = item.candidate.discovery;
+      return `<section><p>Previously analyzed</p><h2>${escapeHtml(story.analysis.name)}</h2><a href="${escapeHtml(safeHref(story.analysis.sourceUrl))}">${escapeHtml(story.analysis.sourceTitle)}</a></section>`;
+    }
+    const source = item.candidate.source;
+    const href = safeHref(source.url);
+    const snippet = truncateUtf8(source.snippet?.trim() ?? "", 768);
+    return `<section><h2>${escapeHtml(source.title)}</h2><p>${escapeHtml(new URL(href).hostname)}</p>${snippet ? `<p>${escapeHtml(snippet)}</p>` : ""}<a href="${escapeHtml(href)}">View source</a></section>`;
+  });
+  return { subject: heading, text: [heading, explanation, ...textStories].join("\n\n"),
+    html: `<!doctype html><html lang="en"><body><h1>${escapeHtml(heading)}</h1><p>${escapeHtml(explanation)}</p>${htmlStories.join("")}</body></html>` };
 }
 
 function formatDigest(stories: StoredDiscovery[], options: DigestEmailOptions, batch = false): DiscoveryEmailContent {
