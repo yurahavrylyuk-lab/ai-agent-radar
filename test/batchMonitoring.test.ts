@@ -316,6 +316,28 @@ test("reservation without dispatch remains distinct from one batch invocation an
   assert.deepEqual(result.batch?.selected, []);
 });
 
+test("a reviewed confirmed-zero retry success still finalizes exactly one normal digest", async () => {
+  const f = fixture();
+  f.dependencies.analyze = async batch => {
+    Object.assign(f.dependencies.geminiCycleContext, {
+      reservationAttempts: 2, reservations: 2, providerDispatches: 2,
+      retryEligible: true, retryAttempted: true, retrySkipReason: "none",
+      attempts: [
+        { ordinal: 1, providerFailureClass: "unavailable_503", accountingOutcome: "confirmed_zero", elapsedMs: 50 },
+        { ordinal: 2, accountingOutcome: "exact", elapsedMs: 1_200 },
+      ],
+    });
+    return selection(batch, [0]);
+  };
+  const result = await run(f.dependencies);
+  assert.equal(f.sent.length, 1);
+  assert.equal(result.notificationsSent, 1);
+  assert.equal(result.delivery?.deliveryMode, "normal");
+  assert.equal(result.batch?.providerDispatches, 2);
+  assert.equal(result.batch?.retryAttempted, true);
+  assert.deepEqual(result.batch?.attempts?.map(attempt => attempt.accountingOutcome), ["confirmed_zero", "exact"]);
+});
+
 test("known groups, prompt exclusions and truncation diagnostics describe the actual prepared subset", async () => {
   const f = fixture(); const old = stored("https://example.test/known", 8, "2026-10-01T00:00:00.000Z"); f.discoveries.set(old.normalizedUrl, old);
   let page = 0;
@@ -585,6 +607,7 @@ test("provider failures reach scheduled telemetry only through bounded reviewed 
         usageTracker: usage,
         cycleContext: f.dependencies.geminiCycleContext,
         environment: { GEMINI_API_KEY: "offline-key", GEMINI_DAILY_REQUEST_LIMIT: "5", GEMINI_WEEKLY_REQUEST_LIMIT: "20", GEMINI_MONTHLY_REQUEST_LIMIT: "50", GEMINI_DAILY_TOKEN_LIMIT: "10000", GEMINI_WEEKLY_TOKEN_LIMIT: "30000", GEMINI_MONTHLY_TOKEN_LIMIT: "100000" },
+        sleep: async () => {}, random: () => 0,
         fetchImplementation: async () => { fetchCalls++; return item.response(); },
       }) });
 
@@ -597,14 +620,15 @@ test("provider failures reach scheduled telemetry only through bounded reviewed 
       });
       const data = await usage.getUsageData();
 
-      assert.equal(fetchCalls, 1);
+      const attempts = item.providerFailureClass === undefined ? 1 : 2;
+      assert.equal(fetchCalls, attempts);
       assert.equal(result.batch?.status, "provider_failed");
       assert.equal(result.batch?.providerFailureClass, item.providerFailureClass);
       assert.equal(summary.batch?.providerFailureClass, item.providerFailureClass);
-      assert.equal(result.geminiProviderAttempts, 1);
-      assert.equal(data.records.length, 1);
-      assert.equal(data.records[0]?.accountingStatus, item.accountingStatus);
-      assert.deepEqual([data.records[0]?.requestCount, data.records[0]?.inputTokens, data.records[0]?.outputTokens, data.records[0]?.totalTokens], [1, 0, 0, 0]);
+      assert.equal(result.geminiProviderAttempts, attempts);
+      assert.equal(data.records.length, attempts);
+      assert.ok(data.records.every(record => record.accountingStatus === item.accountingStatus));
+      assert.ok(data.records.every(record => [record.requestCount, record.inputTokens, record.outputTokens, record.totalTokens].join() === "1,0,0,0"));
       const serialized = JSON.stringify(summary);
       assert.equal(serialized.includes(item.privateText), false);
       assert.equal(serialized.includes("PRIVATE_CANDIDATE_TITLE"), false);

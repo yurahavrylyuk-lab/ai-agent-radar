@@ -337,6 +337,10 @@ async function runBatchMonitoringCycleInternal(dependencies: BatchMonitoringDepe
   batch.reservationAttempts = geminiCycleContext.reservationAttempts;
   batch.reservations = geminiCycleContext.reservations;
   batch.providerDispatches = geminiCycleContext.providerDispatches;
+  batch.attempts = geminiCycleContext.attempts.map(attempt => ({ ...attempt }));
+  batch.retryEligible = geminiCycleContext.retryEligible;
+  batch.retryAttempted = geminiCycleContext.retryAttempted;
+  batch.retrySkipReason = geminiCycleContext.retrySkipReason;
   result.geminiProviderAttempts = geminiCycleContext.providerDispatches;
   result.geminiRequestsByModel["gemini-3.8-flash"] = geminiCycleContext.providerDispatches;
   const replayCandidates: BatchDeliveryCandidate[] = [...replay.values()]

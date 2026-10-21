@@ -248,6 +248,14 @@ export interface XAccountFailure {
 }
 
 export type GeminiProviderFailureClass = "resource_exhausted_429" | "unavailable_503";
+export type GeminiBatchAccountingOutcome = "exact" | "confirmed_zero" | "transport_ambiguous" | "pre_dispatch_zero";
+export type GeminiBatchRetrySkipReason = "none" | "not_eligible" | "accounting" | "admission" | "budget" | "exhausted";
+export interface GeminiBatchAttemptSummary {
+  ordinal: 1 | 2;
+  providerFailureClass?: GeminiProviderFailureClass;
+  accountingOutcome: GeminiBatchAccountingOutcome;
+  elapsedMs: number;
+}
 
 export type BraveDiscoverySourceHealth = "healthy" | "degraded" | "unavailable" | "quota_blocked";
 export type RssDiscoverySourceHealth = "healthy" | "degraded" | "unavailable";
@@ -275,6 +283,10 @@ export interface BatchCycleMetrics {
     provenance: DiscoveryProvenance[];
   }>;
   freshDelivered: number; replayDelivered: number; emailCount: number;
+  attempts?: GeminiBatchAttemptSummary[];
+  retryEligible?: boolean;
+  retryAttempted?: boolean;
+  retrySkipReason?: GeminiBatchRetrySkipReason;
 }
 
 export interface MonitoringCycleResult {

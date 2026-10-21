@@ -173,6 +173,13 @@ function summarizeBatch(batch: BatchCycleMetrics, env: RadarWorkerEnv): BatchCyc
   const providerFailureClass = allowedString(batch.providerFailureClass, ["resource_exhausted_429", "unavailable_503"] as const);
   const braveHealth = allowedString(batch.discoverySourceHealth?.brave, ["healthy", "degraded", "unavailable", "quota_blocked"] as const) ?? "unavailable";
   const rssHealth = allowedString(batch.discoverySourceHealth?.rss, ["healthy", "degraded", "unavailable"] as const) ?? "unavailable";
+  const attempts = (Array.isArray(batch.attempts) ? batch.attempts : []).slice(0, 2).flatMap(attempt => {
+    const ordinal = attempt?.ordinal === 1 || attempt?.ordinal === 2 ? attempt.ordinal : undefined;
+    const accountingOutcome = allowedString(attempt?.accountingOutcome, ["exact", "confirmed_zero", "transport_ambiguous", "pre_dispatch_zero"] as const);
+    const providerClass = allowedString(attempt?.providerFailureClass, ["resource_exhausted_429", "unavailable_503"] as const);
+    return ordinal === undefined || accountingOutcome === undefined ? [] : [{ ordinal, accountingOutcome,
+      elapsedMs: boundedCount(attempt.elapsedMs, 90_000), ...(providerClass === undefined ? {} : { providerFailureClass: providerClass }) }];
+  });
   return {
     searchAttempts: boundedCount(batch.searchAttempts, 10), searchSuccesses: boundedCount(batch.searchSuccesses, 10), searchFailures: boundedCount(batch.searchFailures, 10),
     rawObservations: boundedCount(batch.rawObservations, 75), acceptedObservations: boundedCount(batch.acceptedObservations, 75),
@@ -188,9 +195,13 @@ function summarizeBatch(batch: BatchCycleMetrics, env: RadarWorkerEnv): BatchCyc
     truncationStage: allowedString(batch.truncationStage, ["initial", "snippet384", "snippet192", "snippet96", "snippet0", "title128", "tail"] as const) ?? null,
     status,
     ...(status === "provider_failed" && providerFailureClass !== undefined ? { providerFailureClass } : {}),
-    reservationAttempts: boundedCount(batch.reservationAttempts, 1), reservations: boundedCount(batch.reservations, 1), providerDispatches: boundedCount(batch.providerDispatches, 1),
+    reservationAttempts: boundedCount(batch.reservationAttempts, 2), reservations: boundedCount(batch.reservations, 2), providerDispatches: boundedCount(batch.providerDispatches, 2),
     returnedStories: boundedCount(batch.returnedStories, 4), acceptedStories: boundedCount(batch.acceptedStories, 4), selected,
     freshDelivered: boundedCount(batch.freshDelivered, 4), replayDelivered: boundedCount(batch.replayDelivered, 4), emailCount: boundedCount(batch.emailCount, 1),
+    attempts,
+    retryEligible: batch.retryEligible === true,
+    retryAttempted: batch.retryAttempted === true,
+    retrySkipReason: allowedString(batch.retrySkipReason, ["none", "not_eligible", "accounting", "admission", "budget", "exhausted"] as const) ?? "not_eligible",
   };
 }
 

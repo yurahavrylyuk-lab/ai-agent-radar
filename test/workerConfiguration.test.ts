@@ -314,7 +314,8 @@ function batchMetrics(overrides: Partial<BatchCycleMetrics> = {}): BatchCycleMet
     discoverySourceHealth: { brave: "degraded", rss: "healthy", outage: false },
     truncationStage: "tail", status: "validated", reservationAttempts: 1, reservations: 1, providerDispatches: 1,
     returnedStories: 4, acceptedStories: 4, selected: [{ candidateId: "c050", hostname: "example.test", score: 8, provenance: [{ kind: "brave", queryOrdinal: 10, resultOrdinal: 5 }] }],
-    freshDelivered: 2, replayDelivered: 1, emailCount: 1, ...overrides,
+    freshDelivered: 2, replayDelivered: 1, emailCount: 1,
+    attempts: [], retryEligible: false, retryAttempted: false, retrySkipReason: "none", ...overrides,
   };
 }
 
@@ -339,6 +340,27 @@ test("scheduled summary copies every batch counter and distinguishes selected st
   assert.equal(summary.batch?.providerDispatches, 1); assert.equal(summary.batch?.acceptedStories, 4);
   const reservedOnly = createScheduledCycleSummary(monitoringResult({ batch: batchMetrics({ reservations: 1, providerDispatches: 0, status: "provider_failed", selected: [], acceptedStories: 0 }) }), environment());
   assert.equal(reservedOnly.batch?.reservations, 1); assert.equal(reservedOnly.batch?.providerDispatches, 0);
+});
+
+test("scheduled summary bounds and allowlists two Gemini Batch attempts", () => {
+  const summary = createScheduledCycleSummary(monitoringResult({ batch: batchMetrics({
+    reservationAttempts: 9, reservations: 9, providerDispatches: 9,
+    attempts: [
+      { ordinal: 1, providerFailureClass: "unavailable_503", accountingOutcome: "confirmed_zero", elapsedMs: 99_999 },
+      { ordinal: 2, accountingOutcome: "exact", elapsedMs: 1_200 },
+      { ordinal: 2, accountingOutcome: "exact", elapsedMs: 1 },
+    ],
+    retryEligible: true, retryAttempted: true, retrySkipReason: "exhausted",
+  }) }), environment());
+  assert.equal(summary.batch?.providerDispatches, 2);
+  assert.deepEqual(summary.batch?.attempts, [
+    { ordinal: 1, accountingOutcome: "confirmed_zero", elapsedMs: 90_000, providerFailureClass: "unavailable_503" },
+    { ordinal: 2, accountingOutcome: "exact", elapsedMs: 1_200 },
+  ]);
+  const poisoned = monitoringResult({ batch: batchMetrics() });
+  (poisoned.batch as unknown as Record<string, unknown>).attempts = [{ ordinal: 1, accountingOutcome: "PRIVATE_BODY", elapsedMs: 1 }];
+  (poisoned.batch as unknown as Record<string, unknown>).retrySkipReason = "PRIVATE_BODY";
+  assert.doesNotMatch(JSON.stringify(createScheduledCycleSummary(poisoned, environment())), /PRIVATE_BODY/);
 });
 
 test("scheduled summary independently allowlists provider failure classification", () => {

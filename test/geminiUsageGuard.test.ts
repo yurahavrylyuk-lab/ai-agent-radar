@@ -82,12 +82,12 @@ const retryInfoDetail = { "@type": "type.googleapis.com/google.rpc.RetryInfo", r
 const modelQuota = (details: unknown[], message = "Quota exhausted") => jsonResponse({ error: { status: "RESOURCE_EXHAUSTED", message, details } }, 429, "Too Many Requests");
 const requestedModel = (init?: RequestInit) => JSON.parse(String(init?.body)).model as ApprovedGeminiModel;
 
-test("batch single-dispatch policy preserves accounting for every provider outcome", async (t) => {
+test("batch policy retries only reviewed confirmed-zero provider outcomes", async (t) => {
   const cases = [
     { name: "success", response: () => jsonResponse(successfulBody), status: "exact", settlements: 1 },
-    { name: "verified 503", response: unavailable, status: "confirmed_zero", settlements: 1, error: /HTTP 503/, providerFailureClass: "unavailable_503" },
-    { name: "verified 503 without provider status", response: () => jsonResponse({ error: { message: "Unavailable" } }, 503, "Service Unavailable"), status: "confirmed_zero", settlements: 1, error: /HTTP 503/, providerFailureClass: "unavailable_503" },
-    { name: "model-specific 429", response: () => modelQuota([quotaFailure(quotaViolation("gemini-3.8-flash"))]), status: "confirmed_zero", settlements: 1, error: /HTTP 429/, providerFailureClass: "resource_exhausted_429" },
+    { name: "verified 503", response: unavailable, status: "confirmed_zero", settlements: 2, attempts: 2, error: /HTTP 503/, providerFailureClass: "unavailable_503" },
+    { name: "verified 503 without provider status", response: () => jsonResponse({ error: { message: "Unavailable" } }, 503, "Service Unavailable"), status: "confirmed_zero", settlements: 2, attempts: 2, error: /HTTP 503/, providerFailureClass: "unavailable_503" },
+    { name: "model-specific 429", response: () => modelQuota([quotaFailure(quotaViolation("gemini-3.8-flash"))]), status: "confirmed_zero", settlements: 2, attempts: 2, error: /HTTP 429/, providerFailureClass: "resource_exhausted_429" },
     { name: "ambiguous 429", response: () => modelQuota([]), status: "transport_ambiguous", reason: "response_usage_unavailable", settlements: 0, error: /unconfirmed usage/ },
     { name: "synchronous transport throw", response: (): Response => { throw new Error("network unavailable"); }, status: "transport_ambiguous", reason: "network_error", settlements: 0, error: /network unavailable/ },
     { name: "invalid provider JSON", response: () => new Response("not-json"), status: "transport_ambiguous", reason: "response_usage_unavailable", settlements: 0, error: /not valid JSON/ },
@@ -100,7 +100,7 @@ test("batch single-dispatch policy preserves accounting for every provider outco
     assert.equal(context.batchStarted, false);
     assert.deepEqual([context.reservationAttempts, context.reservations, context.providerDispatches], [0, 0, 0]);
     const models: ApprovedGeminiModel[] = [];
-    const dependencies = { usageTracker: tracker, environment: highLimitEnv, cycleContext: context, retryDelayMs: 0,
+    const dependencies = { usageTracker: tracker, environment: highLimitEnv, cycleContext: context, retryDelayMs: 0, sleep: async () => {}, random: () => 0,
       fetchImplementation: ((_url, init) => { models.push(requestedModel(init)); return Promise.resolve(item.response()); }) as typeof fetch };
     const result = geminiBatch.generateBatchWithGemini("batch input", dependencies);
     assert.equal(context.batchStarted, true, "invocation must be consumed before any await");
@@ -117,17 +117,55 @@ test("batch single-dispatch policy preserves accounting for every provider outco
       assert.equal(tracker.data.records[0]?.totalTokens, 112);
     }
     await assert.rejects(geminiBatch.generateBatchWithGemini("second", dependencies), /batch.*already started/i);
-    assert.deepEqual(models, ["gemini-3.8-flash"]);
-    assert.deepEqual([context.reservationAttempts, context.reservations, context.providerDispatches], [1, 1, 1]);
-    assert.equal(context.providerAttempts, 1);
+    const attempts = item.attempts ?? 1;
+    assert.deepEqual(models, Array.from({ length: attempts }, () => "gemini-3.8-flash"));
+    assert.deepEqual([context.reservationAttempts, context.reservations, context.providerDispatches], [attempts, attempts, attempts]);
+    assert.equal(context.providerAttempts, attempts);
     assert.equal(context.fallbacks, 0);
     assert.equal(context.analysesUsingFallbackModel, 0);
-    assert.deepEqual(context.requestsByModel, { "gemini-3.8-flash": 1, "gemini-3.6-flash": 0, "gemini-3.5-flash-lite": 0 });
-    assert.equal(tracker.recordCalls, 1);
+    assert.deepEqual(context.requestsByModel, { "gemini-3.8-flash": attempts, "gemini-3.6-flash": 0, "gemini-3.5-flash-lite": 0 });
+    assert.equal(tracker.recordCalls, attempts);
     assert.equal(tracker.settlementCalls, item.settlements);
-    assert.equal(tracker.data.records[0]?.accountingStatus, item.status);
-    assert.equal(tracker.data.records[0]?.ambiguityReason, item.reason);
+    assert.ok(tracker.data.records.every(record => record.accountingStatus === item.status));
+    assert.ok(tracker.data.records.every(record => record.ambiguityReason === item.reason));
   });
+});
+
+test("reviewed confirmed-zero 429 retries once on the same model and succeeds", async () => {
+  const tracker = new MemoryTracker({ records: [], usageUnknown: false });
+  const context = geminiBatch.createGeminiBatchCycleContext();
+  const events: string[] = [];
+  const bodies: string[] = [];
+  let calls = 0;
+  const result = await geminiBatch.generateBatchWithGemini("immutable batch prompt", {
+    usageTracker: tracker, environment: highLimitEnv, cycleContext: context, random: () => 0,
+    sleep: async milliseconds => { events.push(`sleep:${milliseconds}`); },
+    fetchImplementation: (async (_url, init) => {
+      calls += 1; events.push(`dispatch:${calls}`); bodies.push(String(init?.body));
+      return calls === 1 ? modelQuota([quotaFailure(quotaViolation("gemini-3.8-flash"))]) : jsonResponse(successfulBody);
+    }) as typeof fetch,
+  });
+  assert.equal(result.outputText, "GEMINI_OK");
+  assert.deepEqual(events, ["dispatch:1", "sleep:1000", "dispatch:2"]);
+  assert.equal(bodies[0], bodies[1]);
+  assert.deepEqual(tracker.data.records.map(record => record.accountingStatus), ["confirmed_zero", "exact"]);
+  assert.deepEqual(context.attempts.map(attempt => [attempt.ordinal, attempt.accountingOutcome]), [[1, "confirmed_zero"], [2, "exact"]]);
+  assert.equal(context.retryEligible, true); assert.equal(context.retryAttempted, true); assert.equal(context.retrySkipReason, "none");
+});
+
+test("batch retry is skipped when backoff cannot fit inside the original deadline", async () => {
+  const tracker = new MemoryTracker({ records: [], usageUnknown: false });
+  const context = geminiBatch.createGeminiBatchCycleContext();
+  let clock = 0; let fetchCalls = 0; let sleepCalls = 0;
+  await assert.rejects(geminiBatch.generateBatchWithGemini("batch", {
+    usageTracker: tracker, environment: highLimitEnv, cycleContext: context,
+    monotonicNow: () => clock, random: () => 1,
+    sleep: async () => { sleepCalls += 1; },
+    fetchImplementation: (async () => { fetchCalls += 1; clock = 89_000; return unavailable(); }) as typeof fetch,
+  }), /HTTP 503/);
+  assert.equal(fetchCalls, 1); assert.equal(sleepCalls, 0);
+  assert.equal(context.retryEligible, true); assert.equal(context.retryAttempted, false); assert.equal(context.retrySkipReason, "budget");
+  assert.deepEqual(tracker.data.records.map(record => record.accountingStatus), ["confirmed_zero"]);
 });
 
 test("batch admission denial and reservation failure consume the invocation without dispatch", async (t) => {
