@@ -141,6 +141,28 @@ export interface BatchDeliveryCandidate extends DeliveryCandidate {
   aliases: readonly string[];
 }
 
+export type DailyDigestMode = "normal" | "degraded" | "status_only";
+export type DailyDigestReason = "selected" | "no_eligible_stories" | "ai_unavailable" | "ai_no_selections"
+  | "discovery_unavailable" | "history_unavailable" | "preparation_unavailable" | "persistence_unavailable";
+export type DailyDigestItem =
+  | { kind: "analyzed"; candidate: BatchDeliveryCandidate }
+  | { kind: "raw"; candidate: BatchCandidate };
+export interface DailyDigestInput {
+  cycleDate: string;
+  fresh: readonly BatchDeliveryCandidate[];
+  replay: readonly BatchDeliveryCandidate[];
+  rawCandidates: readonly BatchCandidate[];
+  observedAliases: ReadonlyMap<string, readonly string[]>;
+  allowRawFallback: boolean;
+  reason: DailyDigestReason;
+}
+export interface PreparedDailyDigest {
+  mode: DailyDigestMode;
+  reason: DailyDigestReason;
+  cycleDate: string;
+  items: DailyDigestItem[];
+}
+
 /** Provider-neutral content ready for a future email transport. */
 export interface DiscoveryEmailContent {
   subject: string;
