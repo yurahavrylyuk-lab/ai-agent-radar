@@ -260,7 +260,7 @@ export type GeminiProviderFailureClass = Extract<GeminiFailureClass, "resource_e
 export type GeminiBatchAccountingOutcome = "exact" | "confirmed_zero" | "transport_ambiguous" | "pre_dispatch_zero";
 export type GeminiBatchRetrySkipReason = "none" | "not_eligible" | "accounting" | "admission" | "budget" | "exhausted";
 export interface GeminiBatchAttemptSummary {
-  ordinal: 1 | 2;
+  ordinal: 1 | 2 | 3;
   failureClass?: GeminiFailureClass;
   providerFailureClass?: GeminiProviderFailureClass;
   httpStatus?: number | null;
