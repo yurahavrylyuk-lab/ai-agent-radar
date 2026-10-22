@@ -16,17 +16,17 @@ Daily delivery guarantee is COMPLETED / NATURALLY VALIDATED on 2026-10-22: four 
 
 RSS: four approved feeds; max5 feeds, 5 positions/feed, 5 seconds/feed, 256 KiB, no retry/redirect. Brave limits remain 10/day, 100/week, 350/month. X disabled/deprecated; 0004 unapplied. HTTP remains health-only. No manual monitoring endpoint.
 
-## Target — Gemini Reliability V2 (not implemented)
+## Implemented target — Gemini Reliability V2 (offline-tested, not deployed)
 
 Gemini attempt → durable bounded classification/accounting evidence → failure-aware retry decision → shared bounded budget → deterministic fallback → one email.
 
-[Gemini Reliability V2 design](docs/superpowers/specs/2026-10-22-gemini-reliability-v2-design.md) is the design authority. It explicitly supersedes the coarse generic confirmed-zero 429/503 one-retry policy **as a target only**. Reviewed 503 may receive two retries (max3 dispatches); current model-specific 429 cannot establish a transient quota window and gets no retry. Unknown/malformed, timeout, transport, semantic and accounting failures stop Gemini. No model/provider fallback.
+[Gemini Reliability V2 design](docs/superpowers/specs/2026-10-22-gemini-reliability-v2-design.md) and [implementation plan](docs/superpowers/plans/2026-10-22-gemini-reliability-v2.md) govern the implemented feature branch. Reviewed 503 may receive two retries (max3 dispatches); current model-specific 429 cannot establish a transient quota window and gets no retry. Unknown/malformed, timeout, transport, semantic and accounting failures stop Gemini. No model/provider fallback.
 
-Proposed delays: 1500–2000 ms then 3000–4000 ms. One 90-second envelope with Gemini cutoff at +75 seconds leaves 15 seconds of finalization opportunity; at least 10 seconds must remain after delay before retry admission. Existing quotas/accounting remain authoritative.
+Implemented delays are 1500–2000 ms then 3000–4000 ms. One 90-second envelope with Gemini cutoff at +75 seconds leaves 15 seconds of finalization opportunity; at least 10 seconds must remain after delay before retry admission. Existing quotas/accounting remain authoritative.
 
-Propose bounded cycle and attempt tables in existing D1, additive 0008 behind human migration approval; no overloaded accounting/notification fields. Confirmed-zero settlement and its durable class must be atomic before retry. Failed telemetry cannot trigger another email or hide uncertainty. Console summaries remain supplementary.
+Bounded cycle and attempt tables are implemented through additive `0008_monitoring_cycle_observability.sql`, still behind human migration approval and unapplied. Confirmed-zero settlement and its durable class are atomic before retry. Failed telemetry cannot trigger another email or hide uncertainty. Console summaries remain supplementary.
 
-Priority 2 reuses existing dark table/inline-CSS email shell, truthful degraded banner, raw cards and safe 768-byte plain snippets. Normal analyzed/replay low-score semantics remain intact. No implementation plan is created in this architecture phase.
+The degraded visual redesign reuses the existing dark table/inline-CSS email shell, truthful degraded banner, raw cards and a deterministic safe 768-byte snippet cleaner. Normal analyzed/replay low-score semantics remain intact. Offline implementation and validation are complete; independent review, migration approval, merge, deployment and natural-cycle validation remain separate gates.
 
 ## Authoritative execution order
 
@@ -43,7 +43,7 @@ Priority 2 reuses existing dark table/inline-CSS email shell, truthful degraded 
 
 ## Superseded historical policies
 
-Legacy P0 multi-model retry and per-story analysis are not scheduled Batch authority. Earlier send-nothing-on-empty and one-dispatch-only scheduled descriptions are superseded by deployed daily delivery/coarse retry. V2 is only designed. X activation is deprecated; Threads, RSS body_limit, background execution, legacy cleanup and limit centralization remain separate work. Preserve historical specs/commits; do not treat their imperative instructions as current authority.
+Legacy P0 multi-model retry and per-story analysis are not scheduled Batch authority. Earlier send-nothing-on-empty and one-dispatch-only scheduled descriptions are superseded by deployed daily delivery/coarse retry. V2 is implemented and tested only on its feature branch; it is not production authority until approved and released. X activation is deprecated; Threads, RSS body_limit, background execution, legacy cleanup and limit centralization remain separate work. Preserve historical specs/commits; do not treat their imperative instructions as current authority.
 
 ### Backlog/Plan Actualization Checkpoint
 

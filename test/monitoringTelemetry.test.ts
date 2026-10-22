@@ -90,6 +90,11 @@ test("D1 telemetry preserves two same-day invocations and recovers ordered attem
     const recovered = await new D1MonitoringTelemetry(d1).readCycle(start.cycleId);
     assert.equal(recovered?.phase, "sources_complete");
     assert.deepEqual(recovered?.snapshot, snapshot);
+    assert.deepEqual(recovered?.snapshot && {
+      brave: recovered.snapshot.braveHealth,
+      rss: recovered.snapshot.rssHealth,
+      outage: recovered.snapshot.outage,
+    }, { brave: "healthy", rss: "degraded", outage: false }, "source health survives without console evidence");
     assert.deepEqual(recovered?.attempts.map(item => [item.ordinal, item.dispatchStatus, item.failureClass]), [[1, "intent", "none"]]);
     assert.equal((database.prepare("SELECT count(*) AS count FROM monitoring_cycles").get() as { count: number }).count, 2);
     const finalSnapshot = { ...snapshot, delivery: { deliveryMode: "status_only" as const, deliveryReason: "no_eligible_stories" as const,

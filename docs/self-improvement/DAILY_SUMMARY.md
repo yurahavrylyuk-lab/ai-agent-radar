@@ -1,5 +1,14 @@
 # Daily Self-Improvement Summary
 
+## 2026-10-22 — Gemini Reliability V2 implementation ready for review
+
+- Implemented the approved V2 plan on `codex/gemini-reliability-v2-implementation`: closed attempt outcomes, durable cycle/attempt telemetry, atomic accounting-plus-attempt settlement, maximum-three same-model dispatches only for reviewed proven-zero 503, and a shared 90-second envelope with a +75-second retry cutoff. Model-specific 429, timeout, transport ambiguity, malformed/semantic failure and accounting uncertainty do not retry.
+- Scheduled execution now persists bounded checkpoints and final outcomes without putting delivery at risk. All finalization paths still converge on one email attempt; Brave/RSS behavior, deterministic fallback, replay, low-relevance delivery, quotas and X-disabled state are unchanged.
+- Added the approved degraded/status visual shell and deterministic bounded snippet cleaner. Provider bodies, prompts, arbitrary error content and secrets do not enter durable or scheduled observability.
+- Added unapplied `0008_monitoring_cycle_observability.sql`. Status is **MIGRATION_READY_FOR_HUMAN_APPROVAL**; it was tested only with disposable SQLite/local Workerd state and was not applied to application or production D1.
+- Evidence: task acceptance 23/23; focused V2 suite 254/254; snippet 7/7; email 42/42; Workerd persistence regression passed; full suite 690/690; build, Worker typecheck, Wrangler dry-run, bundle audit and `git diff --check` passed.
+- Production remains source `0df2c2399c76b4c7c518119b6a8511a300ef9aee`, Worker `6129de15-115c-4f61-9a3b-488d26baf301`, deployment `77fbd332-da4a-4862-9608-78cb963883f9` from the human handoff. No production query, provider call, monitoring cycle, migration, D1 mutation, deployment, push, PR or merge occurred. Independent Analyst review and explicit human release approval remain required.
+
 ## 2026-10-22 — Gemini Reliability V2 architecture and production actualization
 
 - Architecture/docs only from main `0df2c2399c76b4c7c518119b6a8511a300ef9aee`, branch `codex/gemini-reliability-v2-design`. Added V2 spec; no implementation plan or runtime changes.

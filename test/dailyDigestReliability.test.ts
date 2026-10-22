@@ -3,6 +3,9 @@ import test from "node:test";
 
 import { createDailyEmailContext, finalizeDailyDigest, prepareDailyDigest } from "../src/services/notificationOrchestrator.js";
 import { formatDailyDigestEmail } from "../src/services/discoveryEmailFormatter.js";
+import { createGeminiBatchCycleContext, generateBatchWithGemini } from "../src/tools/llm/gemini.js";
+import type { ApprovedGeminiModel } from "../src/config/geminiModels.js";
+import type { GeminiAmbiguityReason, GeminiUsageAdmission, GeminiUsageData, GeminiUsageRecord, GeminiUsageReservation, GeminiUsageSettlement, GeminiUsageStore } from "../src/services/geminiUsageTracker.js";
 import type { BatchCandidate, BatchDeliveryCandidate, PreparedDailyDigest, StoredDiscovery } from "../src/types/index.js";
 import type { NotificationHistory } from "../src/services/notificationHistoryCore.js";
 
@@ -175,4 +178,98 @@ test("email telemetry checkpoint failure cannot suppress or duplicate the guarde
   assert.equal(sends, 1);
   assert.equal(first.emailOutcome, "accepted");
   assert.equal(second.emailAttempts, 0);
+});
+
+class ReliabilityUsageStore implements GeminiUsageStore {
+  data: GeminiUsageData = { records: [], usageUnknown: false };
+  async getUsageData() { return structuredClone(this.data); }
+  async recordRequest() {}
+  async markUsageUnknown() { this.data.usageUnknown = true; }
+  async reserveRequest(record: GeminiUsageRecord & { model: ApprovedGeminiModel }, _admission: GeminiUsageAdmission) {
+    const stored = { ...record, id: this.data.records.length + 1, accountingStatus: "reserved" as const, accountingThrough: record.timestamp };
+    this.data.records.push(stored);
+    return { id: `memory:${stored.id}`, record: stored };
+  }
+  private index(reservation: GeminiUsageReservation) { return Number(reservation.id.split(":")[1]) - 1; }
+  async settleRequest(reservation: GeminiUsageReservation, usage: GeminiUsageSettlement) {
+    const index = this.index(reservation);
+    this.data.records[index] = { ...this.data.records[index]!, ...usage, accountingStatus: "exact", settledAt: reservation.record.timestamp, accountingThrough: reservation.record.timestamp };
+  }
+  async confirmZeroRequest(reservation: GeminiUsageReservation) {
+    const index = this.index(reservation);
+    this.data.records[index] = { ...this.data.records[index]!, accountingStatus: "confirmed_zero", settledAt: reservation.record.timestamp, accountingThrough: reservation.record.timestamp };
+  }
+  async markRequestAmbiguous(reservation: GeminiUsageReservation, reason: GeminiAmbiguityReason) {
+    const index = this.index(reservation);
+    this.data.records[index] = { ...this.data.records[index]!, accountingStatus: "transport_ambiguous", ambiguityReason: reason };
+  }
+  async reconcileAbandonedReservation() { return "reconciled" as const; }
+  async retireAmbiguousRequest() { return "retired" as const; }
+}
+
+const reliabilityEnvironment = {
+  GEMINI_API_KEY: "offline",
+  GEMINI_DAILY_REQUEST_LIMIT: "100",
+  GEMINI_WEEKLY_REQUEST_LIMIT: "100",
+  GEMINI_MONTHLY_REQUEST_LIMIT: "100",
+  GEMINI_DAILY_TOKEN_LIMIT: "100000",
+  GEMINI_WEEKLY_TOKEN_LIMIT: "100000",
+  GEMINI_MONTHLY_TOKEN_LIMIT: "100000",
+};
+
+async function providerFailureThenDegradedDelivery(response: () => Response) {
+  const usage = new ReliabilityUsageStore();
+  const gemini = createGeminiBatchCycleContext();
+  let dispatches = 0;
+  await assert.rejects(generateBatchWithGemini("bounded batch", {
+    usageTracker: usage,
+    environment: reliabilityEnvironment,
+    cycleContext: gemini,
+    sleep: async () => {},
+    random: () => 0,
+    fetchImplementation: (async () => { dispatches += 1; return response(); }) as typeof fetch,
+  }));
+  const digest = await prepareDailyDigest({ cycleDate, fresh: [], replay: [], rawCandidates: [raw("fallback")],
+    observedAliases: new Map(), allowRawFallback: true, reason: "ai_unavailable" }, history());
+  const context = createDailyEmailContext();
+  let emailAttempts = 0;
+  const delivery = await finalizeDailyDigest(digest, { context, sendEmail: async () => { emailAttempts += 1; return { id: "accepted" }; } });
+  return { usage, gemini, dispatches, emailAttempts, digest, delivery };
+}
+
+test("503_503_503_persists_three_then_one_degraded_email", async () => {
+  const result = await providerFailureThenDegradedDelivery(() => new Response(JSON.stringify({ error: { status: "UNAVAILABLE" } }), { status: 503 }));
+  assert.equal(result.dispatches, 3);
+  assert.equal(result.emailAttempts, 1);
+  assert.equal(result.digest.mode, "degraded");
+  assert.equal(result.delivery.emailOutcome, "accepted");
+  assert.deepEqual(result.usage.data.records.map(record => [record.id, record.requestCount, record.accountingStatus]), [
+    [1, 1, "confirmed_zero"], [2, 1, "confirmed_zero"], [3, 1, "confirmed_zero"],
+  ]);
+  assert.deepEqual(result.gemini.attempts.map(attempt => [attempt.ordinal, attempt.failureClass]), [
+    [1, "unavailable_503"], [2, "unavailable_503"], [3, "unavailable_503"],
+  ]);
+});
+
+test("429_persists_one_then_degraded", async () => {
+  const result = await providerFailureThenDegradedDelivery(() => new Response(JSON.stringify({ error: {
+    status: "RESOURCE_EXHAUSTED",
+    details: [{ "@type": "type.googleapis.com/google.rpc.QuotaFailure", violations: [{
+      quotaMetric: "requests", quotaDimensions: { model: "gemini-3.8-flash" },
+    }] }],
+  } }), { status: 429 }));
+  assert.equal(result.dispatches, 1);
+  assert.equal(result.emailAttempts, 1);
+  assert.deepEqual(result.usage.data.records.map(record => [record.id, record.requestCount, record.accountingStatus]), [[1, 1, "confirmed_zero"]]);
+  assert.deepEqual(result.gemini.attempts.map(attempt => [attempt.ordinal, attempt.failureClass]), [[1, "resource_exhausted_429"]]);
+});
+
+test("no_payload_status_only reaches one final email attempt", async () => {
+  const digest = await prepareDailyDigest({ cycleDate, fresh: [], replay: [], rawCandidates: [], observedAliases: new Map(),
+    allowRawFallback: true, reason: "ai_unavailable" }, history());
+  let sends = 0;
+  const result = await finalizeDailyDigest(digest, { context: createDailyEmailContext(), sendEmail: async () => { sends += 1; return { id: "status" }; } });
+  assert.equal(digest.mode, "status_only");
+  assert.equal(sends, 1);
+  assert.equal(result.emailOutcome, "accepted");
 });

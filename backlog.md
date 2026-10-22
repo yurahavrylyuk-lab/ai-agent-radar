@@ -19,9 +19,9 @@ Current production/main source `0df2c2399c76b4c7c518119b6a8511a300ef9aee`, Worke
 
 ## Active work and completion criteria
 
-1. **TODO / ARCHITECTURE_READY:** durable bounded Gemini classifications and cycle summaries; failure-aware maximum-three-attempt policy for proven-zero 503 with exponential backoff/jitter. Current 429 evidence cannot establish transient rate exhaustion, so V2 does not retry it. Timeout/ambiguity never retries. Additive D1 telemetry migration proposed, not applied.
-2. **TODO / DESIGNED:** reuse normal dark inline-CSS/table email shell, degraded banner, styled cards and safely cleaned bounded snippets; preserve plain text and truthful raw/replay provenance.
-3. **TODO:** after human-controlled release, naturally validate V2 evidence, retry policy, styling, source health, accounting and one email; record unexercised paths separately.
+1. **IMPLEMENTED / TESTED; AWAITING REVIEW AND RELEASE:** durable bounded Gemini classifications and cycle summaries; failure-aware maximum-three-attempt policy for proven-zero 503 with bounded exponential backoff/jitter. Current 429 evidence cannot establish transient rate exhaustion, so V2 does not retry it. Timeout/ambiguity never retries. Additive migration `0008_monitoring_cycle_observability.sql` is ready for separate human approval and remains unapplied.
+2. **IMPLEMENTED / TESTED; NOT DEPLOYED:** normal dark inline-CSS/table email shell, degraded banner, styled cards and safely cleaned bounded snippets; plain text and truthful raw/replay provenance are preserved.
+3. **NEXT RELEASE GATE:** independent review, human-approved migration `0008`, compatible Worker deployment, then natural validation of V2 evidence, retry policy, styling, source health, accounting and one email; record unexercised paths separately.
 4. **TODO:** smallest safe OpenAI/Cloudflare AI RSS body_limit correction; do not blindly increase limits.
 5. **TODO:** official Meta API Threads only, shared candidate pool, no per-source Gemini call.
 6. **TODO:** real combined Brave/RSS/Threads proof after their releases.
@@ -48,7 +48,7 @@ Current production/main source `0df2c2399c76b4c7c518119b6a8511a300ef9aee`, Worke
 - **DONE historically / DEPRECATED activation:** P6 X implementation; disabled, zero production dependency, migration 0004 unapplied.
 
 
-Target: [Gemini Reliability V2 design](docs/superpowers/specs/2026-10-22-gemini-reliability-v2-design.md). Design only; human review precedes implementation planning. No runtime implementation, migration, deployment or production authorization follows from this roadmap.
+Implementation authority: [Gemini Reliability V2 design](docs/superpowers/specs/2026-10-22-gemini-reliability-v2-design.md) and [implementation plan](docs/superpowers/plans/2026-10-22-gemini-reliability-v2.md). The feature is implemented and offline-tested on `codex/gemini-reliability-v2-implementation`, but is not merged or deployed. Migration `0008` is not applied; review and explicit human release approval remain mandatory.
 
 ### Backlog/Plan Actualization Checkpoint
 
