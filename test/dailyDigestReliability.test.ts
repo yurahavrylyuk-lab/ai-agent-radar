@@ -139,3 +139,21 @@ test("failed daily transport is not retried and status delivery writes no story 
   assert.equal(outcome.emailOutcome, "failed");
   assert.equal(repeated.emailAttempts, 0);
 });
+
+test("email telemetry checkpoint failure cannot suppress or duplicate the guarded send", async () => {
+  const context = createDailyEmailContext();
+  let checkpoints = 0;
+  let sends = 0;
+  const digest: PreparedDailyDigest = { mode: "status_only", reason: "no_eligible_stories", cycleDate, items: [] };
+  const dependencies = {
+    context,
+    beforeEmailAttempt: async () => { checkpoints += 1; throw new Error("telemetry unavailable"); },
+    sendEmail: async () => { sends += 1; return { id: "accepted-once" }; },
+  };
+  const first = await finalizeDailyDigest(digest, dependencies);
+  const second = await finalizeDailyDigest(digest, dependencies);
+  assert.equal(checkpoints, 1);
+  assert.equal(sends, 1);
+  assert.equal(first.emailOutcome, "accepted");
+  assert.equal(second.emailAttempts, 0);
+});

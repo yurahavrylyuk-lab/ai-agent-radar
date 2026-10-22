@@ -96,6 +96,19 @@ test("ambiguity remains unknown and conflicting replay rejects", async () => {
   } finally { value.db.close(); }
 });
 
+test("successful usage may be refined only from none to response_invalid after Batch validation", async () => {
+  const value = await fixture();
+  try {
+    const ref = { cycleId, ordinal: 1 as const };
+    await value.usage.settleObservedAttempt(ref, value.reservation, { kind: "exact", usage: { inputTokens: 2, outputTokens: 3, totalTokens: 5 },
+      evidence: { failureClass: "none", httpStatus: 200, accountingError: false, observedAt: value.observedAt } });
+    await value.telemetry.recordEvidence(ref, { failureClass: "response_invalid", httpStatus: 200, accountingError: false, observedAt: value.observedAt });
+    assert.equal((await value.telemetry.readCycle(cycleId))?.attempts[0]?.failureClass, "response_invalid");
+    await assert.rejects(value.telemetry.recordEvidence(ref, { failureClass: "unavailable_503", httpStatus: 503, accountingError: false, observedAt: value.observedAt }), /terminal evidence/i);
+    assert.equal((await value.usage.getUsageData()).records.at(-1)?.accountingStatus, "exact");
+  } finally { value.db.close(); }
+});
+
 class MemoryUsage implements GeminiUsageStore {
   reservation: GeminiUsageReservation = { id: "memory:1", record: { id: 1, timestamp: "2026-10-22T08:00:01.000Z", provider: "gemini", operation: "analysis", requestCount: 1, inputTokens: 0, outputTokens: 0, totalTokens: 0, model: "gemini-3.8-flash", accountingStatus: "reserved", accountingThrough: "2026-10-22T08:00:01.000Z" } };
   status: "none" | "reserved" | "exact" | "confirmed_zero" | "transport_ambiguous" = "none";

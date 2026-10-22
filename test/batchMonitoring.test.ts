@@ -7,6 +7,7 @@ import { analyzeBatch, BatchAnalysisError } from "../src/services/analysisAgent.
 import { normalizeDiscoveryUrl, DiscoveryHistoryError, type DiscoveryHistory } from "../src/services/discoveryHistoryCore.js";
 import { NotificationHistoryError, type NotificationHistory } from "../src/services/notificationHistoryCore.js";
 import { D1GeminiUsageStore } from "../src/services/d1GeminiUsageStore.js";
+import { D1MonitoringTelemetry } from "../src/services/d1MonitoringTelemetry.js";
 import { createScheduledCycleSummary, createWorkerMonitoringDependencies, type RadarWorkerEnv } from "../src/worker.js";
 import { BraveUsageGuardDeniedError } from "../src/tools/webSearch.js";
 import { createGeminiBatchCycleContext, generateBatchWithGemini } from "../src/tools/llm/gemini.js";
@@ -124,6 +125,30 @@ test("all fifty observations reach one batch after all ten searches, including a
   assert.ok(f.events.indexOf("send") > f.events.lastIndexOf("persist:https://example.test/query1/story3"));
   assert.ok(f.sent[0]!.text.indexOf("Query 10 result 5") < f.sent[0]!.text.indexOf("Query 1 result 1"));
   assert.equal(result.batch?.submittedCandidates, 50);
+});
+
+test("source checkpoint failure prevents Gemini but preserves one guarded degraded delivery", async () => {
+  const f = fixture();
+  const phases: string[] = [];
+  const snapshots: Array<{ brave: string | null; rss: string | null; outage: boolean | null }> = [];
+  f.dependencies.onTelemetryCheckpoint = async (phase, snapshot) => {
+    phases.push(phase);
+    snapshots.push({ brave: snapshot.braveHealth, rss: snapshot.rssHealth, outage: snapshot.outage });
+    assert.equal(snapshot.candidateCounts.received, 50);
+    if (phase === "sources_complete") throw new Error("cycle telemetry unavailable");
+  };
+  const result = await run(f.dependencies);
+  assert.deepEqual(phases, ["sources_complete", "gemini_complete"]);
+  assert.deepEqual(snapshots, [
+    { brave: "healthy", rss: "healthy", outage: false },
+    { brave: "healthy", rss: "healthy", outage: false },
+  ]);
+  assert.equal(f.analyzeCalls(), 0);
+  assert.equal(result.batch?.providerDispatches, 0);
+  assert.equal(result.batch?.status, "preparation_failed");
+  assert.equal(result.delivery?.deliveryMode, "degraded");
+  assert.equal(result.delivery?.emailAttempts, 1);
+  assert.equal(f.sent.length, 1);
 });
 
 test("an all-low Batch selection still produces one marked digest", async () => {
@@ -553,17 +578,17 @@ test("racing replay joins only the bounded original scan and shares observed ali
 class D1Statement {
   constructor(private database: Database.Database, private sql: string, private values: unknown[] = []) {}
   bind(...values: unknown[]) { return new D1Statement(this.database, this.sql, values); }
-  private statement() { return this.database.prepare(this.sql.replace(/\?\d+/g, "?")); }
-  async first<T>() { return (this.statement().get(...this.values) as T | undefined) ?? null; }
-  async all<T>() { return { success: true, results: this.statement().all(...this.values) as T[], meta: {} as D1Meta }; }
-  async run() { const r = this.statement().run(...this.values); return { success: true, results: [], meta: { changes: r.changes, last_row_id: Number(r.lastInsertRowid) } as D1Meta }; }
+  private compiled() { const values: unknown[] = []; const sql = this.sql.replace(/\?(\d+)/g, (_match, raw: string) => { values.push(this.values[Number(raw) - 1]); return "?"; }); return { statement: this.database.prepare(sql), values }; }
+  async first<T>() { const value = this.compiled(); return (value.statement.get(...value.values) as T | undefined) ?? null; }
+  async all<T>() { const value = this.compiled(); return { success: true, results: value.statement.all(...value.values) as T[], meta: {} as D1Meta }; }
+  async run() { const value = this.compiled(); const r = value.statement.run(...value.values); return { success: true, results: [], meta: { changes: r.changes, last_row_id: Number(r.lastInsertRowid) } as D1Meta }; }
   async batchResult() { return /\bRETURNING\b/i.test(this.sql) ? this.all() : this.run(); }
 }
 
 async function withD1(action: (database: Database.Database, d1: D1Database) => Promise<void>) {
   const database = new Database(":memory:");
   try {
-    for (const file of ["0001_initial.sql", "0003_gemini_usage_model.sql", "0005_gemini_ambiguity_accounting.sql", "0006_gemini_timeout_admission.sql"]) {
+    for (const file of ["0001_initial.sql", "0003_gemini_usage_model.sql", "0005_gemini_ambiguity_accounting.sql", "0006_gemini_timeout_admission.sql", "0008_monitoring_cycle_observability.sql"]) {
       database.exec(await readFile(new URL(`../migrations/${file}`, import.meta.url), "utf8"));
     }
     const d1 = { prepare: (sql: string) => new D1Statement(database, sql), async batch(statements: D1Statement[]) {
@@ -573,6 +598,33 @@ async function withD1(action: (database: Database.Database, d1: D1Database) => P
     await action(database, d1);
   } finally { database.close(); }
 }
+
+test("successful exact usage followed by invalid Batch output refines the same durable attempt", async () => {
+  await withD1(async (_database, d1) => {
+    const cycleId = "6d46738d-d269-4f9a-9f8f-1f615340fea8";
+    const telemetry = new D1MonitoringTelemetry(d1);
+    await telemetry.createCycle({ cycleId, scheduledAt: "2026-10-22T08:00:00.000Z", startedAt: "2026-10-22T08:00:00.100Z", sourceSha: null, workerVersion: null });
+    const env = {
+      DB: d1, BRAVE_SEARCH_API_KEY: "offline-brave", BRAVE_DAILY_SEARCH_LIMIT: "10", BRAVE_WEEKLY_SEARCH_LIMIT: "100", BRAVE_MONTHLY_SEARCH_LIMIT: "350",
+      GEMINI_API_KEY: "offline-gemini", GEMINI_DAILY_REQUEST_LIMIT: "5", GEMINI_WEEKLY_REQUEST_LIMIT: "20", GEMINI_MONTHLY_REQUEST_LIMIT: "50",
+      GEMINI_DAILY_TOKEN_LIMIT: "10000", GEMINI_WEEKLY_TOKEN_LIMIT: "30000", GEMINI_MONTHLY_TOKEN_LIMIT: "100000",
+      RESEND_API_KEY: "offline-resend", NOTIFICATION_EMAIL: "offline@example.test",
+    } satisfies RadarWorkerEnv;
+    const dependencies = createWorkerMonitoringDependencies(env, { attemptTelemetry: { repository: telemetry, cycleId } });
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async () => new Response(JSON.stringify({ output_text: "not valid batch JSON", usage: {
+        total_input_tokens: 2, total_output_tokens: 3, total_tokens: 5,
+      } }));
+      const candidate = { candidateId: "c001", source: { title: "Offline", url: "https://example.test/offline" },
+        normalizedUrl: "https://example.test/offline", aliasKey: "https://example.test/offline", aliases: ["https://example.test/offline"],
+        provenance: [{ kind: "brave" as const, queryOrdinal: 1, resultOrdinal: 1 }] };
+      await assert.rejects(dependencies.analyze({ prompt: "offline", candidates: [candidate], promptBytes: 7, sizeExcluded: 0, truncationStage: "initial" }), BatchAnalysisError);
+      const recovered = await telemetry.readCycle(cycleId);
+      assert.deepEqual(recovered?.attempts.map(attempt => [attempt.ordinal, attempt.failureClass, attempt.accountingStatus]), [[1, "response_invalid", "exact"]]);
+    } finally { globalThis.fetch = originalFetch; }
+  });
+});
 
 test("provider failures reach scheduled telemetry only through bounded reviewed classes", async (t) => {
   const cases = [
@@ -643,7 +695,7 @@ test("provider failures reach scheduled telemetry only through bounded reviewed 
       });
       const data = await usage.getUsageData();
 
-      const attempts = item.providerFailureClass === undefined ? 1 : 2;
+      const attempts = item.providerFailureClass === "unavailable_503" ? 3 : 1;
       assert.equal(fetchCalls, attempts);
       assert.equal(result.batch?.status, "provider_failed");
       assert.equal(result.batch?.providerFailureClass, item.providerFailureClass);

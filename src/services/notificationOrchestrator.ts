@@ -21,6 +21,8 @@ export interface NotificationOrchestratorDependencies {
   /** Used by notifyDigest for a multi-story digest email. */
   formatDigest?: DigestEmailFormatter;
   sendEmail?: EmailSender;
+  /** Best-effort bounded telemetry hook. Delivery never depends on its success. */
+  beforeEmailAttempt?: () => Promise<void>;
 }
 
 export interface DigestDeliveryResult {
@@ -120,12 +122,13 @@ export function createDailyEmailContext(): DailyEmailContext { return { emailAtt
 /** Owns the single mail-transport attempt for one scheduled invocation. */
 export async function finalizeDailyDigest(
   digest: PreparedDailyDigest,
-  dependencies: { context: DailyEmailContext; history?: NotificationHistory; sendEmail: EmailSender; onAccepted?: () => void },
+  dependencies: { context: DailyEmailContext; history?: NotificationHistory; sendEmail: EmailSender; onAccepted?: () => void; beforeEmailAttempt?: () => Promise<void> },
 ): Promise<DailyEmailOutcome> {
   if (dependencies.context.emailAttempted) {
     return { emailAttempts: 0, emailOutcome: "not_attempted", historyOutcome: "not_required", finalizationReached: true };
   }
   dependencies.context.emailAttempted = true;
+  try { await dependencies.beforeEmailAttempt?.(); } catch { /* delivery remains authoritative */ }
   let content: DiscoveryEmailContent;
   try {
     content = formatDailyDigestEmail(digest);

@@ -80,6 +80,7 @@ test("D1 telemetry preserves two same-day invocations and recovers ordered attem
     const second = { ...start, cycleId: "855a313a-2168-4a8f-8f8e-621f91d47f9c", startedAt: "2026-10-22T08:00:00.250Z" };
     await repository.createCycle(second);
     await repository.checkpoint(start.cycleId, "sources_complete", snapshot);
+    await assert.rejects(repository.completeCycle(start.cycleId, snapshot), /before delivery finalization/i);
     database.prepare("INSERT INTO gemini_usage(timestamp,provider,operation,request_count,input_tokens,output_tokens,total_tokens,model,accounting_status,accounting_through) VALUES(?,?,?,?,?,?,?,?,?,?)")
       .run("2026-10-22T08:00:01.000Z", "gemini", "analysis", 1, 0, 0, 0, "gemini-3.8-flash", "reserved", "2026-10-22T08:00:01.000Z");
     const id = (database.prepare("SELECT max(id) AS id FROM gemini_usage").get() as { id: number }).id;
@@ -91,5 +92,10 @@ test("D1 telemetry preserves two same-day invocations and recovers ordered attem
     assert.deepEqual(recovered?.snapshot, snapshot);
     assert.deepEqual(recovered?.attempts.map(item => [item.ordinal, item.dispatchStatus, item.failureClass]), [[1, "intent", "none"]]);
     assert.equal((database.prepare("SELECT count(*) AS count FROM monitoring_cycles").get() as { count: number }).count, 2);
+    const finalSnapshot = { ...snapshot, delivery: { deliveryMode: "status_only" as const, deliveryReason: "no_eligible_stories" as const,
+      analyzedStories: 0, rawStories: 0, replayStories: 0, emailAttempts: 1 as const, emailOutcome: "accepted" as const,
+      historyOutcome: "not_required" as const, finalizationReached: true } };
+    await repository.completeCycle(start.cycleId, finalSnapshot);
+    assert.equal((await repository.readCycle(start.cycleId))?.phase, "completed");
   } finally { database.close(); }
 });

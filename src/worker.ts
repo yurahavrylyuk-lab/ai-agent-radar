@@ -2,13 +2,15 @@ import { D1BraveUsageStore } from "./services/d1BraveUsageStore.js";
 import { D1DiscoveryHistory } from "./services/d1DiscoveryHistory.js";
 import { D1GeminiUsageStore } from "./services/d1GeminiUsageStore.js";
 import { D1NotificationHistory } from "./services/d1NotificationHistory.js";
+import { D1MonitoringTelemetry } from "./services/d1MonitoringTelemetry.js";
+import type { CycleSnapshotV1, MonitoringTelemetry } from "./services/monitoringTelemetry.js";
 import { inspectGeminiAvailability } from "./services/geminiUsageGuard.js";
-import { analyzeBatch } from "./services/analysisAgent.js";
+import { analyzeBatch, BatchAnalysisError } from "./services/analysisAgent.js";
 import { createMonitoringRuntimeConfiguration } from "./services/radarRuntimeConfiguration.js";
 import { createGeminiBatchCycleContext, generateBatchWithGemini } from "./tools/llm/gemini.js";
 import { sendWithResend } from "./tools/email/resend.js";
 import { searchWebPage } from "./tools/webSearch.js";
-import { finalizeStatusOnlyMonitoringCycle, runBatchMonitoringCycle, type BatchMonitoringDependencies } from "./services/monitor.js";
+import { createMonitoringCycleSnapshot, finalizeStatusOnlyMonitoringCycle, runBatchMonitoringCycle, type BatchMonitoringDependencies } from "./services/monitor.js";
 import { createDailyEmailContext } from "./services/notificationOrchestrator.js";
 import { collectRss } from "./services/rssDiscovery.js";
 import { RSS_FEEDS } from "./config/rssSources.js";
@@ -105,6 +107,10 @@ export interface ScheduledCycleSummary {
 export interface ScheduledMonitoringDependencies {
   runCycle?: () => Promise<MonitoringCycleResult>;
   logInfo?: (summary: ScheduledCycleSummary) => void;
+  telemetry?: MonitoringTelemetry;
+  scheduledAt?: Date;
+  startedAt?: Date;
+  cycleId?: string;
 }
 
 function redactScheduledError(error: string, env: RadarWorkerEnv, maximumLength = MAX_SCHEDULED_ERROR_LENGTH): string {
@@ -173,8 +179,8 @@ function summarizeBatch(batch: BatchCycleMetrics, env: RadarWorkerEnv): BatchCyc
   const providerFailureClass = allowedString(batch.providerFailureClass, ["resource_exhausted_429", "unavailable_503"] as const);
   const braveHealth = allowedString(batch.discoverySourceHealth?.brave, ["healthy", "degraded", "unavailable", "quota_blocked"] as const) ?? "unavailable";
   const rssHealth = allowedString(batch.discoverySourceHealth?.rss, ["healthy", "degraded", "unavailable"] as const) ?? "unavailable";
-  const attempts = (Array.isArray(batch.attempts) ? batch.attempts : []).slice(0, 2).flatMap(attempt => {
-    const ordinal = attempt?.ordinal === 1 || attempt?.ordinal === 2 ? attempt.ordinal : undefined;
+  const attempts = (Array.isArray(batch.attempts) ? batch.attempts : []).slice(0, 3).flatMap(attempt => {
+    const ordinal = attempt?.ordinal === 1 || attempt?.ordinal === 2 || attempt?.ordinal === 3 ? attempt.ordinal : undefined;
     const accountingOutcome = allowedString(attempt?.accountingOutcome, ["exact", "confirmed_zero", "transport_ambiguous", "pre_dispatch_zero"] as const);
     const providerClass = allowedString(attempt?.providerFailureClass, ["resource_exhausted_429", "unavailable_503"] as const);
     return ordinal === undefined || accountingOutcome === undefined ? [] : [{ ordinal, accountingOutcome,
@@ -195,7 +201,7 @@ function summarizeBatch(batch: BatchCycleMetrics, env: RadarWorkerEnv): BatchCyc
     truncationStage: allowedString(batch.truncationStage, ["initial", "snippet384", "snippet192", "snippet96", "snippet0", "title128", "tail"] as const) ?? null,
     status,
     ...(status === "provider_failed" && providerFailureClass !== undefined ? { providerFailureClass } : {}),
-    reservationAttempts: boundedCount(batch.reservationAttempts, 2), reservations: boundedCount(batch.reservations, 2), providerDispatches: boundedCount(batch.providerDispatches, 2),
+    reservationAttempts: boundedCount(batch.reservationAttempts, 3), reservations: boundedCount(batch.reservations, 3), providerDispatches: boundedCount(batch.providerDispatches, 3),
     returnedStories: boundedCount(batch.returnedStories, 4), acceptedStories: boundedCount(batch.acceptedStories, 4), selected,
     freshDelivered: boundedCount(batch.freshDelivered, 4), replayDelivered: boundedCount(batch.replayDelivered, 4), emailCount: boundedCount(batch.emailCount, 1),
     attempts,
@@ -327,6 +333,7 @@ export function createWorkerPersistence(env: RadarWorkerEnv) {
 export interface WorkerMonitoringDependencyOverrides {
   readonly searchPage?: typeof searchWebPage;
   readonly collectRss?: BatchMonitoringDependencies["collectRss"];
+  readonly attemptTelemetry?: { repository: MonitoringTelemetry; cycleId: string };
 }
 
 export const workerdRssFetch: typeof fetch = (input, init) => globalThis.fetch(input, init);
@@ -350,13 +357,34 @@ export function createWorkerMonitoringDependencies(
       freshness: options?.freshness,
     }),
     collectRss: overrides.collectRss ?? (now => collectRss({ now, fetch: workerdRssFetch })),
-    analyze: batch => analyzeBatch(batch, {
-      generate: input => generateBatchWithGemini(input, {
-        usageTracker: persistence.geminiUsageStore,
-        environment: configuration.environment,
-        cycleContext: geminiCycleContext,
-      }),
-    }),
+    analyze: async batch => {
+      try {
+        return await analyzeBatch(batch, {
+          generate: input => generateBatchWithGemini(input, {
+            usageTracker: persistence.geminiUsageStore,
+            environment: configuration.environment,
+            cycleContext: geminiCycleContext,
+            ...(overrides.attemptTelemetry === undefined ? {} : {
+              attemptTelemetry: {
+                repository: overrides.attemptTelemetry.repository,
+                cycleId: overrides.attemptTelemetry.cycleId,
+                settle: (ref, reservation, outcome) => persistence.geminiUsageStore.settleObservedAttempt(ref, reservation, outcome),
+              },
+            }),
+          }),
+        });
+      } catch (error) {
+        const last = geminiCycleContext.attempts.at(-1);
+        if (error instanceof BatchAnalysisError && overrides.attemptTelemetry && last?.accountingOutcome === "exact") {
+          await overrides.attemptTelemetry.repository.recordEvidence(
+            { cycleId: overrides.attemptTelemetry.cycleId, ordinal: last.ordinal },
+            { failureClass: "response_invalid", httpStatus: last.httpStatus ?? null, accountingError: false, observedAt: new Date().toISOString() },
+          );
+          last.failureClass = "response_invalid";
+        }
+        throw error;
+      }
+    },
     notification: {
       history: persistence.notificationHistory,
       sendEmail: (content) => sendWithResend(content, {
@@ -373,14 +401,43 @@ export async function runScheduledMonitoring(
 ): Promise<MonitoringCycleResult> {
   const runCycle = dependencies.runCycle ?? (async () => {
     const context = createDailyEmailContext();
+    const telemetry = dependencies.telemetry ?? new D1MonitoringTelemetry(env.DB);
+    const scheduledAt = dependencies.scheduledAt ?? new Date();
+    const startedAt = dependencies.startedAt ?? new Date();
+    const cycleId = dependencies.cycleId ?? crypto.randomUUID();
+    let cycleCreated = false;
+    let latestSnapshot: CycleSnapshotV1 | undefined;
     try {
-      return await runBatchMonitoringCycle({ ...createWorkerMonitoringDependencies(env), dailyEmailContext: context });
+      await telemetry.createCycle({ cycleId, scheduledAt: scheduledAt.toISOString(), startedAt: startedAt.toISOString(), sourceSha: null, workerVersion: null });
+      cycleCreated = true;
+    } catch { /* status-only delivery remains available */ }
+    const beforeEmailAttempt = async () => {
+      if (cycleCreated && latestSnapshot) await telemetry.checkpoint(cycleId, "email_attempting", latestSnapshot);
+    };
+    try {
+      if (!cycleCreated) return await finalizeStatusOnlyMonitoringCycle(
+        context, content => sendWithResend(content, { environment: env as unknown as Record<string, string | undefined> }),
+        startedAt.toISOString(), "preparation_unavailable",
+      );
+      const cycleDependencies = createWorkerMonitoringDependencies(env, { attemptTelemetry: { repository: telemetry, cycleId } });
+      cycleDependencies.onTelemetryCheckpoint = async (phase, snapshot) => {
+        latestSnapshot = snapshot;
+        await telemetry.checkpoint(cycleId, phase, snapshot);
+      };
+      cycleDependencies.notification.beforeEmailAttempt = beforeEmailAttempt;
+      const result = await runBatchMonitoringCycle({ ...cycleDependencies, dailyEmailContext: context });
+      try { await telemetry.completeCycle(cycleId, createMonitoringCycleSnapshot(result)); } catch { /* never retry delivery */ }
+      return result;
     } catch {
-      return finalizeStatusOnlyMonitoringCycle(
+      const result = await finalizeStatusOnlyMonitoringCycle(
         context,
         content => sendWithResend(content, { environment: env as unknown as Record<string, string | undefined> }),
-        new Date().toISOString(),
+        startedAt.toISOString(),
+        "history_unavailable",
+        beforeEmailAttempt,
       );
+      if (cycleCreated) try { await telemetry.completeCycle(cycleId, createMonitoringCycleSnapshot(result)); } catch { /* never retry delivery */ }
+      return result;
     }
   });
   const result = await runCycle();
@@ -404,7 +461,7 @@ export default {
       headers: { "content-type": "text/plain; charset=UTF-8" },
     });
   },
-  scheduled(_event: ScheduledEvent, env: RadarWorkerEnv, context: ExecutionContext): void {
-    handleScheduledMonitoring(env, context);
+  scheduled(event: ScheduledEvent, env: RadarWorkerEnv, context: ExecutionContext): void {
+    handleScheduledMonitoring(env, context, { scheduledAt: new Date(event.scheduledTime) });
   },
 };
