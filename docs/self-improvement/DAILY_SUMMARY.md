@@ -1,5 +1,14 @@
 # Daily Self-Improvement Summary
 
+## 2026-10-22 — Gemini Reliability V2 architecture and production actualization
+
+- Architecture/docs only from main `0df2c2399c76b4c7c518119b6a8511a300ef9aee`, branch `codex/gemini-reliability-v2-design`. Added V2 spec; no implementation plan or runtime changes.
+- Human production handoff supersedes prior review-pending deployment status: Worker `6129de15-115c-4f61-9a3b-488d26baf301`, deployment `77fbd332-da4a-4862-9608-78cb963883f9`. Natural 2026-10-22 degraded email: four raw fresh stories, zero replay, one acceptance, no resend/crash. Daily delivery guarantee COMPLETED / NATURALLY VALIDATED.
+- Rows29/30 confirmed_zero with safe separate accounting prove deployed retry only partially: exact 429/503 is unknown, final summary not durable. Outage telemetry not fully naturally validated; low-score/timeout fallback not exercised.
+- Designed conservative closed classification, max3 only for proven-zero 503, bounded exponential jitter/shared time budget, additive D1 cycle/attempt evidence with atomic zero outcome and human migration gate. Current 429 evidence cannot prove a transient window. No quota changes.
+- Priority2 reuses existing email design system and safely cleaned snippets. Rewrote exact ten-item roadmap and preserved/expanded the permanent five-document actualization checkpoint. Older entries below remain historical, not current release status.
+- Validation: scoped documentation consistency and whitespace checks; runtime tests not run (documentation-only). Unrelated untracked design preserved byte-identically. No monitoring, provider, D1, migration, deployment, push or merge. Design awaits human review before implementation planning.
+
 ## 2026-10-21 — Daily digest reliability review blockers
 
 - Status: REVIEW; corrected two independently verified finalization defects on `codex/daily-digest-reliability-implementation` without changing the approved feature scope.
