@@ -65,6 +65,19 @@ WHEN NEW.cycle_id IS NOT OLD.cycle_id OR NEW.ordinal IS NOT OLD.ordinal OR NEW.u
   OR NEW.model IS NOT OLD.model OR NEW.started_at IS NOT OLD.started_at
 BEGIN SELECT RAISE(ABORT, 'monitoring attempt identity is immutable'); END;
 
+CREATE TRIGGER monitoring_attempt_dispatch_progress
+BEFORE UPDATE ON monitoring_gemini_attempts
+WHEN NOT (
+  NEW.dispatch_status = OLD.dispatch_status
+  OR (OLD.dispatch_status='not_dispatched' AND NEW.dispatch_status='intent')
+  OR (OLD.dispatch_status='intent' AND NEW.dispatch_status='observed')
+)
+BEGIN SELECT RAISE(ABORT, 'monitoring dispatch state cannot skip or regress'); END;
+
+CREATE TRIGGER monitoring_attempt_protect_delete
+BEFORE DELETE ON monitoring_gemini_attempts
+BEGIN SELECT RAISE(ABORT, 'monitoring attempt evidence is durable'); END;
+
 CREATE TRIGGER monitoring_attempt_validate_outcome
 BEFORE UPDATE ON monitoring_gemini_attempts
 WHEN NEW.settlement_status <> 'pending' AND NOT EXISTS (

@@ -4,6 +4,7 @@ import { classifyGeminiHttpFailure, isReviewedGeminiProviderFailure } from "../.
 import { areGeminiTimestampsInSameUtcWindows } from "../../services/geminiAccountingWindows.js";
 import type { GeminiAmbiguityReason, GeminiUsageReservation, GeminiUsageStore } from "../../services/geminiUsageTracker.js";
 import type { RuntimeEnvironment } from "../../services/radarRuntimeConfiguration.js";
+import type { AttemptRef, AttemptSettlement, MonitoringTelemetry } from "../../services/monitoringTelemetry.js";
 import type { GeminiBatchAttemptSummary, GeminiBatchRetrySkipReason, GeminiProviderFailureClass } from "../../types/index.js";
 import type { LlmResult } from "./types.js";
 
@@ -86,6 +87,11 @@ export interface GeminiDependencies {
   /** Offline deterministic hooks for the bounded Batch-only backoff. */
   sleep?: (milliseconds: number) => Promise<void>;
   random?: () => number;
+  attemptTelemetry?: {
+    repository: MonitoringTelemetry;
+    cycleId: string;
+    settle: (ref: AttemptRef, reservation: GeminiUsageReservation, outcome: AttemptSettlement) => Promise<void>;
+  };
 }
 
 function sleep(ms: number): Promise<void> { return new Promise((resolve) => setTimeout(resolve, ms)); }
@@ -243,6 +249,27 @@ async function generateWithGeminiPolicy(
       context.providerAttempts += 1;
       context.requestsByModel[model] += 1;
 
+      const attemptRef: AttemptRef | undefined = dependencies.attemptTelemetry && batchContext
+        ? { cycleId: dependencies.attemptTelemetry.cycleId, ordinal: attempt as 1 | 2 }
+        : undefined;
+      const observedAt = () => new Date(Math.max(now().getTime(), new Date(reservation.record.timestamp).getTime())).toISOString();
+      const settleAttempt = async (outcome: AttemptSettlement): Promise<void> => {
+        if (dependencies.attemptTelemetry && attemptRef) {
+          await dependencies.attemptTelemetry.settle(attemptRef, reservation, outcome);
+          return;
+        }
+        if (outcome.kind === "exact") await settleExactUsage(tracker, reservation, outcome.usage,
+          "Gemini request succeeded, but its usage could not be recorded safely.");
+        else if (outcome.kind === "confirmed_zero") await tracker.confirmZeroRequest(reservation);
+        else await preserveAmbiguity(tracker, reservation, outcome.reason);
+      };
+      if (dependencies.attemptTelemetry && attemptRef) {
+        try { await dependencies.attemptTelemetry.repository.bindAttempt(attemptRef, reservation); }
+        catch {
+          await rejectBeforeDispatch(tracker, reservation, "Gemini request telemetry could not be bound before provider dispatch.");
+        }
+      }
+
       if (!areGeminiTimestampsInSameUtcWindows(reservation.record.timestamp, now())) {
         await rejectBeforeDispatch(tracker, reservation,
           "Gemini request was not dispatched because its accounting window changed after reservation.");
@@ -269,14 +296,34 @@ async function generateWithGeminiPolicy(
       let errorBody: string | undefined;
       let parsedErrorBody: GeminiErrorBody | undefined;
       let geminiResponse: GeminiResponse | undefined;
+      let telemetryObservationFailed = false;
+      if (dependencies.attemptTelemetry && attemptRef) {
+        try { await dependencies.attemptTelemetry.repository.markDispatchIntent(attemptRef); }
+        catch {
+          clearTimeout(timeout);
+          await settleAttempt({ kind: "confirmed_zero", evidence: { failureClass: "accounting_failure", httpStatus: null, accountingError: true, observedAt: observedAt() } });
+          throw new Error("Gemini request telemetry intent could not be recorded before provider dispatch.");
+        }
+      }
       try {
         if (batchContext) batchContext.providerDispatches += 1;
-        response = await fetchImplementation(GEMINI_INTERACTIONS_URL, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
-          body: JSON.stringify({ model, input }),
-          signal: controller.signal,
-        });
+        let responsePromise: Promise<Response> | undefined;
+        let synchronousDispatchError: unknown;
+        try {
+          responsePromise = fetchImplementation(GEMINI_INTERACTIONS_URL, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+            body: JSON.stringify({ model, input }),
+            signal: controller.signal,
+          });
+        } catch (error) { synchronousDispatchError = error; }
+        if (dependencies.attemptTelemetry && attemptRef) {
+          try { await dependencies.attemptTelemetry.repository.markDispatchObserved(attemptRef); }
+          catch { telemetryObservationFailed = true; }
+        }
+        if (synchronousDispatchError !== undefined) throw synchronousDispatchError;
+        if (!responsePromise) throw new Error("Gemini fetch did not return a response promise.");
+        response = await responsePromise;
         if (response.ok) {
           const body = await response.text();
           if (!deadlineExpired()) geminiResponse = JSON.parse(body) as GeminiResponse;
@@ -290,7 +337,11 @@ async function generateWithGeminiPolicy(
           ? "timeout"
           : response === undefined ? "network_error" : "response_usage_unavailable";
         if (reason === "timeout") context.dispatchBlockedByTimeout = true;
-        await preserveAmbiguity(tracker, reservation, reason);
+        try { await settleAttempt({ kind: "transport_ambiguous", reason, evidence: {
+          failureClass: timedOut ? "timeout" : response === undefined ? "transport_error" : "response_invalid",
+          httpStatus: response?.status ?? null, accountingError: telemetryObservationFailed, observedAt: observedAt(),
+        } }); }
+        catch { throw new Error("Gemini request outcome is ambiguous, and its durable ambiguity state could not be verified safely."); }
         if (batchContext) batchContext.attempts.push({ ordinal: attempt as 1 | 2,
           failureClass: timedOut ? "timeout" : response === undefined ? "transport_error" : "response_invalid",
           httpStatus: response?.status ?? null, accountingError: false, accountingOutcome: "transport_ambiguous",
@@ -303,7 +354,10 @@ async function generateWithGeminiPolicy(
 
       if (deadlineExpired()) {
         context.dispatchBlockedByTimeout = true;
-        await preserveAmbiguity(tracker, reservation, "timeout");
+        try { await settleAttempt({ kind: "transport_ambiguous", reason: "timeout", evidence: {
+          failureClass: "timeout", httpStatus: response?.status ?? null, accountingError: telemetryObservationFailed, observedAt: observedAt(),
+        } }); }
+        catch { throw new Error("Gemini request outcome is ambiguous, and its durable ambiguity state could not be verified safely."); }
         if (batchContext) batchContext.attempts.push({ ordinal: attempt as 1 | 2, failureClass: "timeout",
           httpStatus: response?.status ?? null, accountingError: false, accountingOutcome: "transport_ambiguous", elapsedMs: timeoutMs });
         throw new Error("Gemini request timed out after 90 seconds.");
@@ -320,13 +374,17 @@ async function generateWithGeminiPolicy(
         const zeroUsageIsConfirmed = providerFailureClass !== undefined;
 
         if (!zeroUsageIsConfirmed) {
-          await preserveAmbiguity(tracker, reservation, "response_usage_unavailable");
+          await settleAttempt({ kind: "transport_ambiguous", reason: "response_usage_unavailable", evidence: {
+            failureClass, httpStatus: response.status, accountingError: telemetryObservationFailed, observedAt: observedAt(),
+          } });
           if (batchContext) batchContext.attempts.push({ ordinal: attempt as 1 | 2, failureClass,
             httpStatus: response.status, accountingError: false, accountingOutcome: "transport_ambiguous",
             elapsedMs: Math.min(timeoutMs, Math.max(0, Math.trunc(monotonicNow() - deadlineStartedAt))) });
           throw new Error(`Gemini API request failed with unconfirmed usage: HTTP ${response.status} ${response.statusText}: ${message}`);
         }
-        try { await tracker.confirmZeroRequest(reservation); }
+        try { await settleAttempt({ kind: "confirmed_zero", evidence: {
+          failureClass, httpStatus: response.status, accountingError: telemetryObservationFailed, observedAt: observedAt(),
+        } }); }
         catch {
           if (batchContext) batchContext.attempts.push({ ordinal: attempt as 1 | 2, failureClass, providerFailureClass,
             httpStatus: response.status, accountingError: true, accountingOutcome: "transport_ambiguous",
@@ -338,6 +396,10 @@ async function generateWithGeminiPolicy(
           batchContext.attempts.push({ ordinal: attempt as 1 | 2, failureClass, providerFailureClass,
             httpStatus: response.status, accountingError: false,
             accountingOutcome: "confirmed_zero", elapsedMs: Math.min(timeoutMs, Math.max(0, Math.trunc(monotonicNow() - deadlineStartedAt))) });
+          if (telemetryObservationFailed) {
+            batchContext.retrySkipReason = "accounting";
+            throw new Error("Gemini provider outcome was settled, but dispatch telemetry could not be recorded safely.");
+          }
           if (attempt === 1) {
             batchContext.retryEligible = true;
             const delay = 1_000 + Math.floor(Math.min(1, Math.max(0, random())) * 500);
@@ -376,26 +438,33 @@ async function generateWithGeminiPolicy(
       }
 
       if (!geminiResponse) {
-        await preserveAmbiguity(tracker, reservation, "response_usage_unavailable");
+        await settleAttempt({ kind: "transport_ambiguous", reason: "response_usage_unavailable", evidence: {
+          failureClass: "response_invalid", httpStatus: response.status, accountingError: telemetryObservationFailed, observedAt: observedAt(),
+        } });
         throw new Error("Gemini response was not valid JSON.");
       }
 
       let usage: LlmResult["usage"];
       try { usage = usageOf(geminiResponse.usage); }
       catch {
-        await preserveAmbiguity(tracker, reservation, "response_usage_unavailable");
+        await settleAttempt({ kind: "transport_ambiguous", reason: "response_usage_unavailable", evidence: {
+          failureClass: "response_invalid", httpStatus: response.status, accountingError: telemetryObservationFailed, observedAt: observedAt(),
+        } });
         throw new Error("Gemini response did not include valid token usage.");
       }
       const { thoughtTokens: _thoughtTokens, ...trackedUsage } = usage;
       try {
-        await settleExactUsage(tracker, reservation, trackedUsage,
-          "Gemini request succeeded, but its usage could not be recorded safely.");
+        await settleAttempt({ kind: "exact", usage: trackedUsage, evidence: {
+          failureClass: "none", httpStatus: response.status, accountingError: telemetryObservationFailed, observedAt: observedAt(),
+        } });
       } catch (error) {
+        if (dependencies.attemptTelemetry) throw new Error("Gemini request succeeded, but its usage and attempt evidence could not be recorded safely.");
         if (batchContext) batchContext.attempts.push({ ordinal: attempt as 1 | 2, failureClass: "accounting_failure",
           httpStatus: response.status, accountingError: true, accountingOutcome: "transport_ambiguous",
           elapsedMs: Math.min(timeoutMs, Math.max(0, Math.trunc(monotonicNow() - deadlineStartedAt))) });
         throw error;
       }
+      if (telemetryObservationFailed) throw new Error("Gemini request succeeded, but dispatch telemetry could not be recorded safely.");
       if (batchContext) batchContext.attempts.push({ ordinal: attempt as 1 | 2, failureClass: "none",
         httpStatus: response.status, accountingError: false, accountingOutcome: "exact",
         elapsedMs: Math.min(timeoutMs, Math.max(0, Math.trunc(monotonicNow() - deadlineStartedAt))) });

@@ -141,15 +141,15 @@ test("settlement_failure_preserves_observed_provider_class as bounded evidence",
     cycleContext: context,
     fetchImplementation: (async () => unavailable()) as typeof fetch,
   }), /confirmed-zero attempt could not be recorded safely/);
-  assert.deepEqual(context.attempts, [{
+  assert.deepEqual(context.attempts.map(({ elapsedMs: _elapsedMs, ...attempt }) => attempt), [{
     ordinal: 1,
     failureClass: "unavailable_503",
     providerFailureClass: "unavailable_503",
     httpStatus: 503,
     accountingError: true,
     accountingOutcome: "transport_ambiguous",
-    elapsedMs: 0,
   }]);
+  assert.ok(Number.isSafeInteger(context.attempts[0]?.elapsedMs));
   assert.equal(JSON.stringify(context.attempts).includes("settlement canary"), false);
 });
 

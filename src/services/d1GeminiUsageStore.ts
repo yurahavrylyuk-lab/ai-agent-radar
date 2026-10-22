@@ -15,6 +15,8 @@ import {
 } from "./geminiUsageTracker.js";
 import type { ApprovedGeminiModel } from "../config/geminiModels.js";
 import { isProtectedGeminiUnresolvedRecord } from "./geminiUsageGuard.js";
+import { isGeminiFailureClass } from "./geminiFailureClassification.js";
+import type { AttemptRef, AttemptSettlement } from "./monitoringTelemetry.js";
 
 interface GeminiUsageRow {
   id: number;
@@ -230,6 +232,62 @@ export class D1GeminiUsageStore implements GeminiUsageStore {
       authoritative.ambiguityReason === reason && authoritative.inputTokens === 0 &&
       authoritative.outputTokens === 0 && authoritative.totalTokens === 0) return;
     throw new Error("Gemini ambiguous outcome could not be recorded safely.");
+  }
+
+  /** Atomically settles one D1 usage reservation and its bound scheduled-attempt evidence. */
+  async settleObservedAttempt(ref: AttemptRef, reservation: GeminiUsageReservation, outcome: AttemptSettlement): Promise<void> {
+    const id = reservationId(reservation.id);
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(ref.cycleId) || ![1, 2, 3].includes(ref.ordinal) ||
+      !isGeminiFailureClass(outcome.evidence.failureClass) ||
+      !(outcome.evidence.httpStatus === null || (Number.isInteger(outcome.evidence.httpStatus) && outcome.evidence.httpStatus >= 100 && outcome.evidence.httpStatus <= 599)) ||
+      typeof outcome.evidence.accountingError !== "boolean" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(outcome.evidence.observedAt)) {
+      throw new Error("Gemini attempt settlement has an invalid format.");
+    }
+    if (outcome.kind === "exact" && (!Number.isSafeInteger(outcome.usage.inputTokens) || outcome.usage.inputTokens < 0 ||
+      !Number.isSafeInteger(outcome.usage.outputTokens) || outcome.usage.outputTokens < 0 || !Number.isSafeInteger(outcome.usage.totalTokens) ||
+      outcome.usage.totalTokens < outcome.usage.inputTokens + outcome.usage.outputTokens)) {
+      throw new Error("Gemini attempt settlement has invalid usage.");
+    }
+    const attempt = await this.database.prepare(
+      "SELECT usage_id,model,started_at,accounting_status,settlement_status,failure_class,http_status,accounting_error FROM monitoring_gemini_attempts WHERE cycle_id=?1 AND ordinal=?2",
+    ).bind(ref.cycleId, ref.ordinal).first<{ usage_id:number; model:string; started_at:string; accounting_status:string; settlement_status:string; failure_class:string; http_status:number|null; accounting_error:number }>();
+    if (!attempt || attempt.usage_id !== id || attempt.model !== reservation.record.model || attempt.started_at !== reservation.record.timestamp) {
+      throw new Error("Gemini attempt settlement identity could not be verified safely.");
+    }
+    const targetAccounting = outcome.kind === "exact" ? "exact" : outcome.kind === "confirmed_zero" ? "confirmed_zero" : "transport_ambiguous";
+    const targetSettlement = outcome.kind === "transport_ambiguous" ? "unresolved" : "settled";
+    if (attempt.settlement_status !== "pending") {
+      if (attempt.accounting_status === targetAccounting && attempt.settlement_status === targetSettlement &&
+        attempt.failure_class === outcome.evidence.failureClass && attempt.http_status === outcome.evidence.httpStatus &&
+        attempt.accounting_error === (outcome.evidence.accountingError ? 1 : 0)) {
+        const record = await this.getRecord(id);
+        const usageMatches = outcome.kind !== "exact" || (record?.inputTokens === outcome.usage.inputTokens && record.outputTokens === outcome.usage.outputTokens && record.totalTokens === outcome.usage.totalTokens);
+        if (matchesReservationIdentity(record, reservation) && record.accountingStatus === targetAccounting && usageMatches) return;
+      }
+      throw new Error("Gemini attempt settlement conflicts with durable evidence.");
+    }
+    const usageStatement = outcome.kind === "exact"
+      ? this.database.prepare("UPDATE gemini_usage SET input_tokens=?1,output_tokens=?2,total_tokens=?3,accounting_status='exact',settled_at=?4,accounting_through=?4 WHERE id=?5 AND timestamp=?6 AND provider=?7 AND operation=?8 AND request_count=?9 AND model=?10 AND accounting_status='reserved' AND input_tokens=0 AND output_tokens=0 AND total_tokens=0 RETURNING id")
+        .bind(outcome.usage.inputTokens, outcome.usage.outputTokens, outcome.usage.totalTokens, outcome.evidence.observedAt, id, reservation.record.timestamp, reservation.record.provider, reservation.record.operation, reservation.record.requestCount, reservation.record.model)
+      : outcome.kind === "confirmed_zero"
+        ? this.database.prepare("UPDATE gemini_usage SET accounting_status='confirmed_zero',settled_at=?1,accounting_through=?1 WHERE id=?2 AND timestamp=?3 AND provider=?4 AND operation=?5 AND request_count=?6 AND model=?7 AND accounting_status='reserved' AND input_tokens=0 AND output_tokens=0 AND total_tokens=0 RETURNING id")
+          .bind(outcome.evidence.observedAt, id, reservation.record.timestamp, reservation.record.provider, reservation.record.operation, reservation.record.requestCount, reservation.record.model)
+        : this.database.prepare("UPDATE gemini_usage SET accounting_status='transport_ambiguous',ambiguity_reason=?1,accounting_through=?2 WHERE id=?3 AND timestamp=?4 AND provider=?5 AND operation=?6 AND request_count=?7 AND model=?8 AND accounting_status='reserved' AND input_tokens=0 AND output_tokens=0 AND total_tokens=0 RETURNING id")
+          .bind(outcome.reason, outcome.evidence.observedAt, id, reservation.record.timestamp, reservation.record.provider, reservation.record.operation, reservation.record.requestCount, reservation.record.model);
+    const attemptStatement = this.database.prepare(
+      "UPDATE monitoring_gemini_attempts SET failure_class=?1,http_status=?2,accounting_error=?3,updated_at=?4,ended_at=?4,accounting_status=?5,settlement_status=?6 WHERE cycle_id=?7 AND ordinal=?8 AND usage_id=?9",
+    ).bind(outcome.evidence.failureClass, outcome.evidence.httpStatus, outcome.evidence.accountingError ? 1 : 0,
+      outcome.evidence.observedAt, targetAccounting, targetSettlement, ref.cycleId, ref.ordinal, id);
+    try { await this.database.batch([usageStatement, attemptStatement]); }
+    catch { throw new Error("Gemini usage and attempt evidence could not be settled atomically."); }
+    const authoritative = await this.database.prepare(
+      "SELECT accounting_status,settlement_status,failure_class,http_status,accounting_error FROM monitoring_gemini_attempts WHERE cycle_id=?1 AND ordinal=?2 AND usage_id=?3",
+    ).bind(ref.cycleId, ref.ordinal, id).first<{ accounting_status:string; settlement_status:string; failure_class:string; http_status:number|null; accounting_error:number }>();
+    const record = await this.getRecord(id);
+    if (!authoritative || authoritative.accounting_status !== targetAccounting || authoritative.settlement_status !== targetSettlement ||
+      authoritative.failure_class !== outcome.evidence.failureClass || authoritative.http_status !== outcome.evidence.httpStatus ||
+      authoritative.accounting_error !== (outcome.evidence.accountingError ? 1 : 0) || !matchesReservationIdentity(record, reservation) ||
+      record.accountingStatus !== targetAccounting) throw new Error("Gemini usage and attempt evidence could not be verified safely.");
   }
 
   async reconcileAbandonedReservation(
