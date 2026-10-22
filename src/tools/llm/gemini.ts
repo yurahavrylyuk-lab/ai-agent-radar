@@ -1,5 +1,6 @@
 import { APPROVED_GEMINI_MODELS, type ApprovedGeminiModel } from "../../config/geminiModels.js";
 import { checkGeminiUsage } from "../../services/geminiUsageGuard.js";
+import { classifyGeminiHttpFailure, isReviewedGeminiProviderFailure } from "../../services/geminiFailureClassification.js";
 import { areGeminiTimestampsInSameUtcWindows } from "../../services/geminiAccountingWindows.js";
 import type { GeminiAmbiguityReason, GeminiUsageReservation, GeminiUsageStore } from "../../services/geminiUsageTracker.js";
 import type { RuntimeEnvironment } from "../../services/radarRuntimeConfiguration.js";
@@ -128,34 +129,6 @@ function parseErrorBody(body: string): GeminiErrorBody | undefined {
 function errorMessage(body: string, parsed: GeminiErrorBody | undefined, apiKey: string): string {
   const message = parsed?.error?.message ?? parsed?.error?.status;
   return safeMessage(typeof message === "string" && message ? message : body || "No response body returned.", apiKey);
-}
-
-function isUnavailable(status: number, parsed: GeminiErrorBody | undefined): boolean {
-  const providerStatus = parsed?.error?.status;
-  return status === 503 && (providerStatus === undefined || providerStatus === "UNAVAILABLE");
-}
-
-function isModelSpecificQuotaFailure(parsed: GeminiErrorBody | undefined, model: ApprovedGeminiModel): boolean {
-  if (parsed?.error?.status !== "RESOURCE_EXHAUSTED" || !Array.isArray(parsed.error.details) || parsed.error.details.length === 0) return false;
-  let quotaFailureFound = false;
-  for (const detail of parsed.error.details) {
-    if (!detail || typeof detail !== "object") return false;
-    const value = detail as Record<string, unknown>;
-    const detailType = value["@type"];
-    if (detailType === "type.googleapis.com/google.rpc.Help" || detailType === "type.googleapis.com/google.rpc.RetryInfo") continue;
-    if (detailType !== "type.googleapis.com/google.rpc.QuotaFailure" || !Array.isArray(value.violations) || value.violations.length === 0) return false;
-    quotaFailureFound = true;
-    const violationsAreModelSpecific = value.violations.every((violation) => {
-      if (!violation || typeof violation !== "object") return false;
-      const item = violation as Record<string, unknown>;
-      const dimensions = item.quotaDimensions;
-      const identity = item.quotaMetric ?? item.quotaId;
-      return typeof identity === "string" && identity.trim().length > 0 && !!dimensions && typeof dimensions === "object" &&
-        (dimensions as Record<string, unknown>).model === model;
-    });
-    if (!violationsAreModelSpecific) return false;
-  }
-  return quotaFailureFound;
 }
 
 function initializeFrozenAllowance(context: GeminiCycleContext, check: Awaited<ReturnType<typeof checkGeminiUsage>>): void {
@@ -318,7 +291,9 @@ async function generateWithGeminiPolicy(
           : response === undefined ? "network_error" : "response_usage_unavailable";
         if (reason === "timeout") context.dispatchBlockedByTimeout = true;
         await preserveAmbiguity(tracker, reservation, reason);
-        if (batchContext) batchContext.attempts.push({ ordinal: attempt as 1 | 2, accountingOutcome: "transport_ambiguous",
+        if (batchContext) batchContext.attempts.push({ ordinal: attempt as 1 | 2,
+          failureClass: timedOut ? "timeout" : response === undefined ? "transport_error" : "response_invalid",
+          httpStatus: response?.status ?? null, accountingError: false, accountingOutcome: "transport_ambiguous",
           elapsedMs: Math.min(timeoutMs, Math.max(0, Math.trunc(monotonicNow() - deadlineStartedAt))) });
         if (timedOut) throw new Error("Gemini request timed out after 90 seconds.");
         if (response?.ok) throw new Error("Gemini response was not valid JSON.");
@@ -329,7 +304,8 @@ async function generateWithGeminiPolicy(
       if (deadlineExpired()) {
         context.dispatchBlockedByTimeout = true;
         await preserveAmbiguity(tracker, reservation, "timeout");
-        if (batchContext) batchContext.attempts.push({ ordinal: attempt as 1 | 2, accountingOutcome: "transport_ambiguous", elapsedMs: timeoutMs });
+        if (batchContext) batchContext.attempts.push({ ordinal: attempt as 1 | 2, failureClass: "timeout",
+          httpStatus: response?.status ?? null, accountingError: false, accountingOutcome: "transport_ambiguous", elapsedMs: timeoutMs });
         throw new Error("Gemini request timed out after 90 seconds.");
       }
 
@@ -337,22 +313,30 @@ async function generateWithGeminiPolicy(
         const body = errorBody ?? "";
         const parsed = parsedErrorBody;
         const message = errorMessage(body, parsed, apiKey);
-        const providerFailureClass: GeminiProviderFailureClass | undefined = isUnavailable(response.status, parsed)
-          ? "unavailable_503"
-          : response.status === 429 && isModelSpecificQuotaFailure(parsed, model)
-            ? "resource_exhausted_429"
-            : undefined;
+        const failureClass = classifyGeminiHttpFailure(response.status, parsed, model);
+        const providerFailureClass: GeminiProviderFailureClass | undefined = isReviewedGeminiProviderFailure(failureClass)
+          ? failureClass
+          : undefined;
         const zeroUsageIsConfirmed = providerFailureClass !== undefined;
 
         if (!zeroUsageIsConfirmed) {
           await preserveAmbiguity(tracker, reservation, "response_usage_unavailable");
+          if (batchContext) batchContext.attempts.push({ ordinal: attempt as 1 | 2, failureClass,
+            httpStatus: response.status, accountingError: false, accountingOutcome: "transport_ambiguous",
+            elapsedMs: Math.min(timeoutMs, Math.max(0, Math.trunc(monotonicNow() - deadlineStartedAt))) });
           throw new Error(`Gemini API request failed with unconfirmed usage: HTTP ${response.status} ${response.statusText}: ${message}`);
         }
         try { await tracker.confirmZeroRequest(reservation); }
-        catch { throw new Error("Gemini request failed, and the confirmed-zero attempt could not be recorded safely."); }
+        catch {
+          if (batchContext) batchContext.attempts.push({ ordinal: attempt as 1 | 2, failureClass, providerFailureClass,
+            httpStatus: response.status, accountingError: true, accountingOutcome: "transport_ambiguous",
+            elapsedMs: Math.min(timeoutMs, Math.max(0, Math.trunc(monotonicNow() - deadlineStartedAt))) });
+          throw new Error("Gemini request failed, and the confirmed-zero attempt could not be recorded safely.");
+        }
 
         if (batchContext) {
-          batchContext.attempts.push({ ordinal: attempt as 1 | 2, providerFailureClass,
+          batchContext.attempts.push({ ordinal: attempt as 1 | 2, failureClass, providerFailureClass,
+            httpStatus: response.status, accountingError: false,
             accountingOutcome: "confirmed_zero", elapsedMs: Math.min(timeoutMs, Math.max(0, Math.trunc(monotonicNow() - deadlineStartedAt))) });
           if (attempt === 1) {
             batchContext.retryEligible = true;
@@ -403,9 +387,17 @@ async function generateWithGeminiPolicy(
         throw new Error("Gemini response did not include valid token usage.");
       }
       const { thoughtTokens: _thoughtTokens, ...trackedUsage } = usage;
-      await settleExactUsage(tracker, reservation, trackedUsage,
-        "Gemini request succeeded, but its usage could not be recorded safely.");
-      if (batchContext) batchContext.attempts.push({ ordinal: attempt as 1 | 2, accountingOutcome: "exact",
+      try {
+        await settleExactUsage(tracker, reservation, trackedUsage,
+          "Gemini request succeeded, but its usage could not be recorded safely.");
+      } catch (error) {
+        if (batchContext) batchContext.attempts.push({ ordinal: attempt as 1 | 2, failureClass: "accounting_failure",
+          httpStatus: response.status, accountingError: true, accountingOutcome: "transport_ambiguous",
+          elapsedMs: Math.min(timeoutMs, Math.max(0, Math.trunc(monotonicNow() - deadlineStartedAt))) });
+        throw error;
+      }
+      if (batchContext) batchContext.attempts.push({ ordinal: attempt as 1 | 2, failureClass: "none",
+        httpStatus: response.status, accountingError: false, accountingOutcome: "exact",
         elapsedMs: Math.min(timeoutMs, Math.max(0, Math.trunc(monotonicNow() - deadlineStartedAt))) });
 
       console.info("[INFO] Gemini request completed.");

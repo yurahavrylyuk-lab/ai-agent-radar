@@ -131,6 +131,28 @@ test("batch policy retries only reviewed confirmed-zero provider outcomes", asyn
   });
 });
 
+test("settlement_failure_preserves_observed_provider_class as bounded evidence", async () => {
+  const tracker = new MemoryTracker({ records: [], usageUnknown: false });
+  tracker.confirmZeroRequest = async () => { throw new Error("settlement canary must not escape"); };
+  const context = geminiBatch.createGeminiBatchCycleContext();
+  await assert.rejects(geminiBatch.generateBatchWithGemini("batch input", {
+    usageTracker: tracker,
+    environment: highLimitEnv,
+    cycleContext: context,
+    fetchImplementation: (async () => unavailable()) as typeof fetch,
+  }), /confirmed-zero attempt could not be recorded safely/);
+  assert.deepEqual(context.attempts, [{
+    ordinal: 1,
+    failureClass: "unavailable_503",
+    providerFailureClass: "unavailable_503",
+    httpStatus: 503,
+    accountingError: true,
+    accountingOutcome: "transport_ambiguous",
+    elapsedMs: 0,
+  }]);
+  assert.equal(JSON.stringify(context.attempts).includes("settlement canary"), false);
+});
+
 test("reviewed confirmed-zero 429 retries once on the same model and succeeds", async () => {
   const tracker = new MemoryTracker({ records: [], usageUnknown: false });
   const context = geminiBatch.createGeminiBatchCycleContext();
