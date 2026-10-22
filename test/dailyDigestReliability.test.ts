@@ -111,6 +111,25 @@ test("daily renderer preserves analyzed low-score labels and safely renders degr
   assert.match(status.text, /2026-10-21/);
 });
 
+test("mixed degraded digest preserves analyzed replay truth while raw cards stay unscored", () => {
+  const replay = analyzed("replay-low", "replay", 5);
+  const digest: PreparedDailyDigest = {
+    mode: "degraded",
+    reason: "ai_unavailable",
+    cycleDate,
+    items: [{ kind: "raw", candidate: raw("raw-first") }, { kind: "analyzed", candidate: replay }],
+  };
+
+  const content = formatDailyDigestEmail(digest);
+  assert.match(content.text, /STORY 1[\s\S]*Title raw-first/);
+  assert.match(content.text, /STORY 2 — PREVIOUSLY ANALYZED[\s\S]*Relevance: 5\/10[\s\S]*It could be relevant/);
+  assert.match(content.html, /Previously analyzed/);
+  assert.match(content.html, /Relevance: 5\/10/);
+  assert.match(content.html, /It could be relevant/);
+  const rawSection = content.html.slice(content.html.indexOf("Raw raw-first"), content.html.indexOf("Previously analyzed"));
+  assert.doesNotMatch(rawSection, /Relevance:|It could be relevant|AI summary/i);
+});
+
 test("daily finalizer consumes one email attempt and records raw aliases only after acceptance", async () => {
   const candidate = raw("raw", "https://example.test/story#one");
   candidate.aliases = [candidate.normalizedUrl, "https://example.test/story#two"];

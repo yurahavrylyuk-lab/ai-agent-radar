@@ -1,4 +1,5 @@
 import type { DiscoveryEmailContent, PreparedDailyDigest, StoredDiscovery } from "../types/index.js";
+import { cleanDegradedSnippet } from "./degradedSnippet.js";
 
 export type DigestEmailMode = "normal" | "fallback";
 
@@ -248,17 +249,6 @@ export function formatBatchDigestEmail(stories: StoredDiscovery[]): DiscoveryEma
   return formatDigest(stories, {}, true);
 }
 
-function truncateUtf8(value: string, limit: number): string {
-  const encoder = new TextEncoder();
-  if (encoder.encode(value).byteLength <= limit) return value;
-  let result = "";
-  for (const character of value) {
-    if (encoder.encode(result + character).byteLength > limit) break;
-    result += character;
-  }
-  return result;
-}
-
 const dailyReasonText: Record<PreparedDailyDigest["reason"], string> = {
   selected: "Selected stories are ready.",
   no_eligible_stories: "No new eligible stories were available for delivery.",
@@ -269,6 +259,91 @@ const dailyReasonText: Record<PreparedDailyDigest["reason"], string> = {
   preparation_unavailable: "Digest preparation was unavailable.",
   persistence_unavailable: "Selected stories could not be persisted safely.",
 };
+
+interface DailySource {
+  readonly hostname: string;
+  readonly href?: string;
+}
+
+function dailySource(value: string): DailySource {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" && url.protocol !== "http:") return { hostname: "Source unavailable" };
+    return { hostname: url.hostname, href: value };
+  } catch {
+    return { hostname: "Source unavailable" };
+  }
+}
+
+function dailySourceLink(source: DailySource, label = "View source"): string {
+  return source.href
+    ? `<a href="${escapeHtml(source.href)}" style="display: inline-block; padding: 9px 14px; border-radius: 8px; background-color: ${ACCENT}; color: #07111f; font-family: Arial, Helvetica, sans-serif; font-size: 14px; font-weight: 700; line-height: 18px; text-decoration: none;">${escapeHtml(label)} &#8594;</a>`
+    : `<span style="color: ${SECONDARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 13px; line-height: 18px;">Source unavailable</span>`;
+}
+
+function dailyShellHtml(badge: string, heading: string, explanation: string, content: string): string {
+  return `<!doctype html>
+<html lang="en">
+  <body style="margin: 0; padding: 0; background-color: ${EMAIL_BACKGROUND};">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width: 100%; background-color: ${EMAIL_BACKGROUND};">
+      <tr>
+        <td align="center" style="padding: 28px 14px;">
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width: 100%; max-width: 640px; border: 1px solid #26344d; border-radius: 16px; background-color: ${CARD_BACKGROUND}; overflow: hidden;">
+            <tr>
+              <td style="padding: 30px 30px 24px; border-bottom: 1px solid #26344d;">
+                <p style="margin: 0 0 8px; color: ${PRIMARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 18px; font-weight: 700; letter-spacing: 1.6px; line-height: 24px;">AI AGENT RADAR — DAILY DIGEST</p>
+                <span style="display: inline-block; margin: 0 0 14px; padding: 6px 9px; border: 1px solid #3b4b67; border-radius: 999px; background-color: #1d2a40; color: #dbeafe; font-family: Arial, Helvetica, sans-serif; font-size: 11px; font-weight: 700; letter-spacing: 1px; line-height: 15px;">${escapeHtml(badge)}</span>
+                <h1 style="margin: 0 0 10px; color: ${PRIMARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 24px; line-height: 30px;">${escapeHtml(heading)}</h1>
+                <p style="margin: 0; color: ${SECONDARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 15px; line-height: 22px;">${escapeHtml(explanation)}</p>
+              </td>
+            </tr>
+            ${content}
+            <tr>
+              <td style="padding: 18px 30px; border-top: 1px solid #26344d; background-color: #0d1422;">
+                <p style="margin: 0; color: ${SECONDARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 13px; line-height: 19px;">AI Agent Radar<br>Automated AI discovery monitor</p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>`;
+}
+
+function rawDailyCardHtml(title: string, snippet: string, source: DailySource, slot: number): string {
+  return `<tr>
+              <td style="padding: 20px 30px; border-top: 1px solid #26344d;">
+                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width: 100%; border: 1px solid #2a3954; border-radius: 10px; background-color: ${PANEL_BACKGROUND};">
+                  <tr><td style="padding: 18px;">
+                    <p style="margin: 0 0 5px; color: ${ACCENT}; font-family: Arial, Helvetica, sans-serif; font-size: 11px; font-weight: 700; letter-spacing: 1.1px; line-height: 16px; text-transform: uppercase;">Story ${slot}</p>
+                    <h2 style="margin: 0 0 8px; color: ${PRIMARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 19px; line-height: 25px;">${escapeHtml(title)}</h2>
+                    <p style="margin: 0 0 ${snippet ? "10" : "16"}px; color: ${SECONDARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 13px; line-height: 19px;">${escapeHtml(source.hostname)}</p>
+                    ${snippet ? `<p style="margin: 0 0 16px; color: ${PRIMARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 14px; line-height: 21px;">${escapeHtml(snippet)}</p>` : ""}
+                    ${dailySourceLink(source)}
+                  </td></tr>
+                </table>
+              </td>
+            </tr>`;
+}
+
+function analyzedDailyCardHtml(story: StoredDiscovery, slot: number): string {
+  const source = dailySource(story.analysis.sourceUrl);
+  return `<tr>
+              <td style="padding: 20px 30px; border-top: 1px solid #26344d;">
+                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width: 100%; border: 1px solid #2a3954; border-radius: 10px; background-color: ${PANEL_BACKGROUND};">
+                  <tr><td style="padding: 18px;">
+                    <p style="margin: 0 0 5px; color: ${ACCENT}; font-family: Arial, Helvetica, sans-serif; font-size: 11px; font-weight: 700; letter-spacing: 1.1px; line-height: 16px; text-transform: uppercase;">Story ${slot} &middot; Previously analyzed</p>
+                    <h2 style="margin: 0 0 8px; color: ${PRIMARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 19px; line-height: 25px;">${escapeHtml(story.analysis.name)}</h2>
+                    <p style="margin: 0 0 8px; color: ${ACCENT}; font-family: Arial, Helvetica, sans-serif; font-size: 14px; line-height: 20px;">Relevance: ${story.analysis.relevanceScore}/10</p>
+                    ${story.analysis.relevanceScore < 7 ? `<p style="margin: 0 0 8px; color: ${ACCENT}; font-family: Arial, Helvetica, sans-serif; font-size: 14px; font-weight: 700; line-height: 20px;">${LOW_RELEVANCE_LABEL}</p>` : ""}
+                    <p style="margin: 0 0 16px; color: ${SECONDARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 14px; line-height: 21px;">${escapeHtml(story.analysis.summary)}</p>
+                    ${dailySourceLink(source)}
+                  </td></tr>
+                </table>
+              </td>
+            </tr>`;
+}
 
 /** Formats one prepared normal, degraded, or status-only daily payload. */
 export function formatDailyDigestEmail(digest: PreparedDailyDigest): DiscoveryEmailContent {
@@ -281,34 +356,50 @@ export function formatDailyDigestEmail(digest: PreparedDailyDigest): DiscoveryEm
   if (digest.mode === "status_only") {
     const heading = "Daily digest — status update";
     const reason = dailyReasonText[digest.reason];
-    return { subject: heading, text: `${heading}\n\nUTC scheduled date: ${date}\n\n${reason}`,
-      html: `<!doctype html><html lang="en"><body><h1>${escapeHtml(heading)}</h1><p>UTC scheduled date: ${escapeHtml(date)}</p><p>${escapeHtml(reason)}</p></body></html>` };
+    const explanation = `UTC scheduled date: ${date}. ${reason}`;
+    return {
+      subject: heading,
+      text: `${heading}\n\nUTC scheduled date: ${date}\n\n${reason}`,
+      html: dailyShellHtml("STATUS UPDATE", heading, explanation, ""),
+    };
   }
   const emptySelection = digest.reason === "ai_no_selections";
   const heading = emptySelection ? "Daily digest — discovery highlights" : "Daily digest — AI analysis unavailable";
   const explanation = emptySelection
-    ? "AI analysis returned no usable selections; these highlights come directly from today's discovery results."
-    : "These stories were selected directly from today's discovery results; AI analysis was unavailable.";
-  const textStories = digest.items.map((item, index) => {
-    if (item.kind === "analyzed") return `STORY ${index + 1} — PREVIOUSLY ANALYZED\n${item.candidate.discovery.analysis.name}\n${item.candidate.discovery.analysis.sourceUrl}`;
-    const source = item.candidate.source;
-    const href = safeHref(source.url);
-    const hostname = new URL(href).hostname;
-    const snippet = truncateUtf8(source.snippet?.trim() ?? "", 768);
-    return `STORY ${index + 1}\n${source.title}\nSource: ${hostname}\n${href}${snippet ? `\n${snippet}` : ""}`;
-  });
-  const htmlStories = digest.items.map((item, index) => {
+    ? "AI analysis completed without selecting stories. These highlights were selected directly from today's discovery results."
+    : "AI analysis was temporarily unavailable. These stories were selected directly from today's discovery results.";
+  const rendered = digest.items.map((item, index) => {
     if (item.kind === "analyzed") {
       const story = item.candidate.discovery;
-      return `<section><p>Previously analyzed</p><h2>${escapeHtml(story.analysis.name)}</h2><a href="${escapeHtml(safeHref(story.analysis.sourceUrl))}">${escapeHtml(story.analysis.sourceTitle)}</a></section>`;
+      const source = dailySource(story.analysis.sourceUrl);
+      const text = [
+        `STORY ${index + 1} — PREVIOUSLY ANALYZED`,
+        story.analysis.name,
+        `Relevance: ${story.analysis.relevanceScore}/10`,
+        ...(story.analysis.relevanceScore < 7 ? [LOW_RELEVANCE_LABEL] : []),
+        story.analysis.summary,
+        `Source: ${source.hostname}`,
+        ...(source.href ? [source.href] : []),
+      ].join("\n");
+      return { text, html: analyzedDailyCardHtml(story, index + 1) };
     }
-    const source = item.candidate.source;
-    const href = safeHref(source.url);
-    const snippet = truncateUtf8(source.snippet?.trim() ?? "", 768);
-    return `<section><h2>${escapeHtml(source.title)}</h2><p>${escapeHtml(new URL(href).hostname)}</p>${snippet ? `<p>${escapeHtml(snippet)}</p>` : ""}<a href="${escapeHtml(href)}">View source</a></section>`;
+    const candidate = item.candidate.source;
+    const source = dailySource(candidate.url);
+    const snippet = cleanDegradedSnippet(candidate.snippet);
+    const text = [
+      `STORY ${index + 1}`,
+      candidate.title,
+      `Source: ${source.hostname}`,
+      ...(source.href ? [source.href] : []),
+      ...(snippet ? [snippet] : []),
+    ].join("\n");
+    return { text, html: rawDailyCardHtml(candidate.title, snippet, source, index + 1) };
   });
-  return { subject: heading, text: [heading, explanation, ...textStories].join("\n\n"),
-    html: `<!doctype html><html lang="en"><body><h1>${escapeHtml(heading)}</h1><p>${escapeHtml(explanation)}</p>${htmlStories.join("")}</body></html>` };
+  return {
+    subject: heading,
+    text: [heading, explanation, ...rendered.map(item => item.text), "AI Agent Radar\nAutomated AI discovery monitor"].join("\n\n"),
+    html: dailyShellHtml("DEGRADED MODE", heading, explanation, rendered.map(item => item.html).join("")),
+  };
 }
 
 function formatDigest(stories: StoredDiscovery[], options: DigestEmailOptions, batch = false): DiscoveryEmailContent {
