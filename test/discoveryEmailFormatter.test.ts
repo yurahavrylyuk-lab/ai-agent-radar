@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import * as formatter from "../src/services/discoveryEmailFormatter.js";
 import { formatDiscoveryEmail, formatDigestEmail } from "../src/services/discoveryEmailFormatter.js";
-import type { StoredDiscovery } from "../src/types/index.js";
+import type { BatchCandidate, PreparedDailyDigest, StoredDiscovery } from "../src/types/index.js";
 
 function discovery(): StoredDiscovery {
   return {
@@ -305,4 +305,85 @@ test("normal digest formatting does not include the fallback label", () => {
   assert.doesNotMatch(defaultContent.html, /It could be relevant/);
   assert.doesNotMatch(defaultContent.text, /It could be relevant/);
   assert.deepEqual(explicitContent, defaultContent);
+});
+
+function rawDigestCandidate(id: string, url = `https://news.example/${id}`): BatchCandidate {
+  return {
+    candidateId: id,
+    source: { title: `Raw ${id}`, url, snippet: `<p>Useful <strong>${id}</strong></p><script>private()</script>` },
+    normalizedUrl: url,
+    aliasKey: url,
+    aliases: [url],
+    provenance: [{ kind: "rss", sourceId: "github-changelog", itemOrdinal: 1 }],
+  };
+}
+
+test("degraded daily digest reuses the dark shell and renders bounded plain raw cards", () => {
+  const items = ["one", "two", "three", "four"].map(id => ({ kind: "raw" as const, candidate: rawDigestCandidate(id) }));
+  const digest: PreparedDailyDigest = {
+    mode: "degraded",
+    reason: "ai_unavailable",
+    cycleDate: "2026-10-22T08:00:00.000Z",
+    items,
+  };
+
+  const content = formatter.formatDailyDigestEmail(digest);
+
+  assert.equal(content.subject, "Daily digest — AI analysis unavailable");
+  assert.match(content.html, /AI AGENT RADAR — DAILY DIGEST/);
+  assert.match(content.html, /DEGRADED MODE/);
+  assert.match(content.html, /background-color: #090d16/);
+  assert.match(content.html, /background-color: #111827/);
+  assert.match(content.html, /background-color: #182235/);
+  assert.match(content.html, /color: #78a9ff/);
+  assert.equal((content.html.match(/View source/g) ?? []).length, 4);
+  assert.match(content.html, /news\.example/);
+  assert.doesNotMatch(content.html, /<script>|private\(\)|Relevance:|It could be relevant|AI summary/i);
+  assert.match(content.text, /STORY 1[\s\S]*Raw one[\s\S]*Source: news\.example[\s\S]*https:\/\/news\.example\/one[\s\S]*Useful one/);
+  assert.doesNotMatch(content.text, /<p>|<strong>|private\(\)/);
+  assert.match(content.html, /Automated AI discovery monitor/);
+});
+
+test("degraded raw cards keep invalid URLs non-clickable and tolerate missing snippets", () => {
+  const unsafe = rawDigestCandidate("unsafe", "javascript:alert(1)");
+  unsafe.source.snippet = undefined;
+  const content = formatter.formatDailyDigestEmail({
+    mode: "degraded",
+    reason: "ai_unavailable",
+    cycleDate: "2026-10-22T08:00:00.000Z",
+    items: [{ kind: "raw", candidate: unsafe }],
+  });
+
+  assert.doesNotMatch(content.html, /href="javascript:|href="#"/i);
+  assert.doesNotMatch(content.html, /View source/);
+  assert.match(content.html, /Source unavailable/);
+  assert.match(content.text, /Source: Source unavailable/);
+});
+
+test("successful Gemini with no selections uses truthful highlights copy", () => {
+  const content = formatter.formatDailyDigestEmail({
+    mode: "degraded",
+    reason: "ai_no_selections",
+    cycleDate: "2026-10-22T08:00:00.000Z",
+    items: [{ kind: "raw", candidate: rawDigestCandidate("highlight") }],
+  });
+
+  assert.match(content.text, /AI analysis completed without selecting stories/);
+  assert.doesNotMatch(content.text, /AI analysis was temporarily unavailable/);
+  assert.doesNotMatch(content.html, /AI analysis was temporarily unavailable/);
+});
+
+test("status-only daily digest shares the styled shell without fabricating stories", () => {
+  const content = formatter.formatDailyDigestEmail({
+    mode: "status_only",
+    reason: "no_eligible_stories",
+    cycleDate: "2026-10-22T08:00:00.000Z",
+    items: [],
+  });
+
+  assert.match(content.html, /AI AGENT RADAR — DAILY DIGEST/);
+  assert.match(content.html, /STATUS UPDATE/);
+  assert.match(content.html, /background-color: #090d16/);
+  assert.match(content.html, /Automated AI discovery monitor/);
+  assert.doesNotMatch(content.html, /Story 1|View source/);
 });

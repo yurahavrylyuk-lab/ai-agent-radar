@@ -13,6 +13,7 @@ import { createGeminiCycleContext, getGeminiProviderFailureClass, type GeminiBat
 import { xPostIdFromUrl, type XDiscoveryResult } from "./xDiscovery.js";
 import { BraveUsageGuardDeniedError } from "../tools/webSearch.js";
 import { sendWithResend } from "../tools/email/resend.js";
+import type { CycleSnapshotV1 } from "./monitoringTelemetry.js";
 import type { BatchAnalysisResult, BatchCycleMetrics, BatchDeliveryCandidate, BatchObservation, BraveSearchPage, DailyEmailContext, DeliveryCandidate, DiscoveryProcessingResult, MonitoringCycleResult, MonitoringSearchFailure, NotificationResult, PreparedBatch, RssDiscoveryResult, SearchResult, StoredDiscovery, XSourceProvenance } from "../types/index.js";
 
 export const MONITORING_QUERY = "new AI agent developer tool framework release";
@@ -58,6 +59,36 @@ export interface BatchMonitoringDependencies {
   now?: () => Date;
   /** Shared by the Worker so initialization failures use the same one-shot finalizer guard. */
   dailyEmailContext?: DailyEmailContext;
+  onTelemetryCheckpoint?: (phase: "sources_complete" | "gemini_complete", snapshot: CycleSnapshotV1) => Promise<void>;
+}
+
+function cycleSnapshot(result: MonitoringCycleResult): CycleSnapshotV1 {
+  const batch = result.batch;
+  const attempts = batch?.attempts ?? [];
+  return {
+    version: 1,
+    braveHealth: batch?.discoverySourceHealth.brave ?? null,
+    rssHealth: batch?.discoverySourceHealth.rss ?? null,
+    outage: batch?.discoverySourceHealth.outage ?? null,
+    candidateCounts: {
+      received: batch?.rawObservations ?? null,
+      unique: batch?.acceptedObservations ?? null,
+      submitted: batch?.submittedCandidates ?? null,
+    },
+    geminiDispatchCount: batch?.providerDispatches ?? null,
+    delivery: result.delivery ? { ...result.delivery } : null,
+    accounting: {
+      reserved: Math.max(0, (batch?.reservations ?? 0) - attempts.length),
+      exact: attempts.filter(attempt => attempt.accountingOutcome === "exact").length,
+      confirmedZero: attempts.filter(attempt => attempt.accountingOutcome === "confirmed_zero" || attempt.accountingOutcome === "pre_dispatch_zero").length,
+      ambiguous: attempts.filter(attempt => attempt.accountingOutcome === "transport_ambiguous").length,
+      unavailable: false,
+    },
+  };
+}
+
+export function createMonitoringCycleSnapshot(result: MonitoringCycleResult): CycleSnapshotV1 {
+  return cycleSnapshot(result);
 }
 
 const geminiBlockedReasons = new Set<GeminiBlockedReason>([
@@ -275,7 +306,18 @@ async function runBatchMonitoringCycleInternal(dependencies: BatchMonitoringDepe
     }
   }
 
-  if (prepared) {
+  let sourceCheckpointReady = true;
+  if (dependencies.onTelemetryCheckpoint) {
+    try { await dependencies.onTelemetryCheckpoint("sources_complete", cycleSnapshot(result)); }
+    catch {
+      sourceCheckpointReady = false;
+      prepared = undefined;
+      batch.status = "preparation_failed";
+      result.failures += 1;
+    }
+  }
+
+  if (prepared && sourceCheckpointReady) {
     let availability: GeminiAvailability;
     try { availability = safeGeminiAvailability(await dependencies.geminiPreflight(now())); }
     catch { availability = { allowed: false, reason: "usage_state_unavailable" }; }
@@ -343,6 +385,10 @@ async function runBatchMonitoringCycleInternal(dependencies: BatchMonitoringDepe
   batch.retrySkipReason = geminiCycleContext.retrySkipReason;
   result.geminiProviderAttempts = geminiCycleContext.providerDispatches;
   result.geminiRequestsByModel["gemini-3.8-flash"] = geminiCycleContext.providerDispatches;
+  if (dependencies.onTelemetryCheckpoint) {
+    try { await dependencies.onTelemetryCheckpoint("gemini_complete", cycleSnapshot(result)); }
+    catch { result.failures += 1; }
+  }
   const replayCandidates: BatchDeliveryCandidate[] = [...replay.values()]
     .filter(discovery => isBatchNewsUrl(discovery.normalizedUrl))
     .map(discovery => ({ discovery, origin: "replay" as const, aliases: [] as readonly string[] }));
@@ -370,6 +416,7 @@ async function runBatchMonitoringCycleInternal(dependencies: BatchMonitoringDepe
   const acceptedItems = digest.items;
   const email = await finalizeDailyDigest(digest, {
     context: emailContext, history: notification.history, sendEmail: notification.sendEmail ?? sendWithResend,
+    beforeEmailAttempt: notification.beforeEmailAttempt,
     onAccepted: () => {
       result.notificationsSent = batch.emailCount = 1;
       result.freshStoriesSent = batch.freshDelivered = acceptedItems.filter(item => item.kind === "analyzed" && item.candidate.origin === "fresh").length;
@@ -393,11 +440,12 @@ export async function finalizeStatusOnlyMonitoringCycle(
   sendEmail: NonNullable<NotificationOrchestratorDependencies["sendEmail"]>,
   cycleDate: string,
   reason: "history_unavailable" | "discovery_unavailable" | "preparation_unavailable" = "discovery_unavailable",
+  beforeEmailAttempt?: () => Promise<void>,
 ): Promise<MonitoringCycleResult> {
   const result = emptyResult(MONITORING_QUERIES.join(" | "), 0);
   result.failures = 1;
   const digest = { mode: "status_only" as const, reason, cycleDate, items: [] };
-  const outcome = await finalizeDailyDigest(digest, { context, sendEmail });
+  const outcome = await finalizeDailyDigest(digest, { context, sendEmail, beforeEmailAttempt });
   if (outcome.emailOutcome === "accepted") result.notificationsSent = 1;
   result.delivery = {
     deliveryMode: digest.mode, deliveryReason: digest.reason,
@@ -413,7 +461,7 @@ export async function runBatchMonitoringCycle(dependencies: BatchMonitoringDepen
     return await runBatchMonitoringCycleInternal(dependencies, context);
   } catch {
     const cycleDate = (dependencies.now ?? (() => new Date()))().toISOString();
-    return finalizeStatusOnlyMonitoringCycle(context, dependencies.notification.sendEmail ?? sendWithResend, cycleDate, "history_unavailable");
+    return finalizeStatusOnlyMonitoringCycle(context, dependencies.notification.sendEmail ?? sendWithResend, cycleDate, "history_unavailable", dependencies.notification.beforeEmailAttempt);
   }
 }
 

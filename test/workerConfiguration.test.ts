@@ -142,10 +142,11 @@ test("Worker search composition forwards the monitoring freshness option without
 test("default scheduled Worker uses batch entry with no X tables and HTTP methods/paths remain health-only", async () => {
   const env = environment();
   let databaseReads = 0;
+  const databaseWrites: Array<{ sql: string; values: unknown[] }> = [];
   env.DB = { prepare(sql: string) {
     assert.doesNotMatch(sql, /\bx_(?:poll|pending|usage|inbox|request)/i);
     databaseReads++;
-    return { bind() { return this; }, async all() { return { success: true, results: [] }; }, async first() { return { usage_unknown: 0 }; }, async run() { return { success: true, meta: { changes: 1 } }; } };
+    return { values: [] as unknown[], bind(...values: unknown[]) { this.values = values; return this; }, async all() { return { success: true, results: [] }; }, async first() { return { usage_unknown: 0 }; }, async run() { databaseWrites.push({ sql, values: this.values }); return { success: true, meta: { changes: 1 } }; } };
   } } as unknown as D1Database;
   const originalFetch = globalThis.fetch;
   const originalInfo = console.info;
@@ -168,6 +169,10 @@ test("default scheduled Worker uses batch entry with no X tables and HTTP method
     assert.equal(summaries.length, 1);
     assert.equal(result.xRequestsAttempted, 0);
     assert.equal(result.xBlockedReason, "disabled");
+    assert.ok(databaseWrites.some(write => /INSERT INTO monitoring_cycles/.test(write.sql)));
+    assert.ok(databaseWrites.some(write => /UPDATE monitoring_cycles/.test(write.sql) && write.values[0] === "sources_complete"));
+    assert.ok(databaseWrites.some(write => /UPDATE monitoring_cycles/.test(write.sql) && write.values[0] === "email_attempting"));
+    assert.ok(databaseWrites.some(write => /UPDATE monitoring_cycles/.test(write.sql) && write.values[0] === "completed"));
     providerUrls.length = 0;
     databaseReads = 0;
     for (const method of ["GET", "POST"]) {
@@ -342,20 +347,22 @@ test("scheduled summary copies every batch counter and distinguishes selected st
   assert.equal(reservedOnly.batch?.reservations, 1); assert.equal(reservedOnly.batch?.providerDispatches, 0);
 });
 
-test("scheduled summary bounds and allowlists two Gemini Batch attempts", () => {
+test("scheduled summary bounds and allowlists three Gemini Batch attempts", () => {
   const summary = createScheduledCycleSummary(monitoringResult({ batch: batchMetrics({
     reservationAttempts: 9, reservations: 9, providerDispatches: 9,
     attempts: [
       { ordinal: 1, providerFailureClass: "unavailable_503", accountingOutcome: "confirmed_zero", elapsedMs: 99_999 },
       { ordinal: 2, accountingOutcome: "exact", elapsedMs: 1_200 },
-      { ordinal: 2, accountingOutcome: "exact", elapsedMs: 1 },
+      { ordinal: 3, accountingOutcome: "exact", elapsedMs: 1 },
+      { ordinal: 3, accountingOutcome: "exact", elapsedMs: 1 },
     ],
     retryEligible: true, retryAttempted: true, retrySkipReason: "exhausted",
   }) }), environment());
-  assert.equal(summary.batch?.providerDispatches, 2);
+  assert.equal(summary.batch?.providerDispatches, 3);
   assert.deepEqual(summary.batch?.attempts, [
     { ordinal: 1, accountingOutcome: "confirmed_zero", elapsedMs: 90_000, providerFailureClass: "unavailable_503" },
     { ordinal: 2, accountingOutcome: "exact", elapsedMs: 1_200 },
+    { ordinal: 3, accountingOutcome: "exact", elapsedMs: 1 },
   ]);
   const poisoned = monitoringResult({ batch: batchMetrics() });
   (poisoned.batch as unknown as Record<string, unknown>).attempts = [{ ordinal: 1, accountingOutcome: "PRIVATE_BODY", elapsedMs: 1 }];

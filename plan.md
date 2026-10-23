@@ -1,35 +1,37 @@
 # AI Agent Radar — Current architecture and roadmap
 
-## Authority — 2026-10-21
+## Authority — 2026-10-22
 
-Current main/production source: `4fad7003c6619aa1fdee2b27c0f9cae219a9aa60`; Worker `fb6b4691-938e-4c17-8dbd-5cb62d865d35` (human-confirmed deployment). Source-health telemetry is DEPLOYED, not yet NATURALLY VALIDATED. The 2026-10-21 timeout invocation ran the earlier `f53acb06642c7880c62f3c9457562c9d42e61b24` source.
+Current production/main source `0df2c2399c76b4c7c518119b6a8511a300ef9aee`, Worker `6129de15-115c-4f61-9a3b-488d26baf301`, deployment `77fbd332-da4a-4862-9608-78cb963883f9`, from the human-verified 2026-10-22 handoff. No live production query was performed by this architecture task.
 
-## Current production behavior
+## Current production architecture
 
-Natural Cron → Brave + four approved RSS feeds → shared URL/history dedupe and deterministic interleaving → at most 50 candidates / 32 KiB → one Gemini Batch dispatch → validated/persisted selections plus eligible replay → at most four stories / one email.
+Brave + RSS → shared canonical URL/history dedupe and deterministic candidate interleaving → bounded pool (50 candidates / 32 KiB) → Gemini → success: normal digest; failure: deterministic degraded digest → status-only if no usable story payload → one final email attempt.
 
-Gemini currently has no scheduled retry/model fallback. A 90-second timeout remains transport_ambiguous, with no guessed tokens. Valid selected scores 1–10 are deliverable; scores below 7 carry `It could be relevant`. Low-score replay needs persisted Batch selection provenance; legacy low-score replay is excluded. Known/notified aliases are excluded. No useful eligible stories currently means no email, including when Gemini fails and replay is empty.
+Normal analyzed delivery includes eligible replay and Batch-selected scores 1–10; selected scores below 7 retain `It could be relevant`. Degraded raw stories have no fabricated score/analysis. At most four stories total, unchanged history/no-resend and replay rules. Consume the one-email attempt before transport; provider acceptance/history uncertainty never triggers another send. This does not guarantee inbox delivery or survival of platform termination.
 
-RSS bounds stay max 5 feeds, 5 positions/feed, 5 seconds/feed, 256 KiB/feed, no retry/redirect. Four feeds are approved; only GitHub/Chrome have supplied successful natural RSS admission proof. Brave quotas stay 10/day, 100/week, 350/month. X is disabled/deprecated; 0004 remains unapplied. HTTP is health-only; no manual monitoring endpoint.
+Current scheduled Gemini is normally one dispatch, maximum two on the same model only after reviewed confirmed-zero resource_exhausted_429/unavailable_503 and durable settlement. Backoff 1000–1500 ms, separate reservations, one shared 90-second deadline. Timeout/transport ambiguity is never retried. This coarse retry is DEPLOYED / PARTIALLY NATURALLY VALIDATED, not V2.
 
-## Implemented on review branch — not deployed
+Daily delivery guarantee is COMPLETED / NATURALLY VALIDATED on 2026-10-22: four raw fresh stories, zero replay, one accepted degraded email, two confirmed-zero Gemini rows, no new ambiguity. Exact provider class is unavailable; low-score and timeout fallback were not exercised. Outage telemetry is deployed but not fully naturally validated.
 
-All paths converge into one finalizer:
+RSS: four approved feeds; max5 feeds, 5 positions/feed, 5 seconds/feed, 256 KiB, no retry/redirect. Brave limits remain 10/day, 100/week, 350/month. X disabled/deprecated; 0004 unapplied. HTTP remains health-only. No manual monitoring endpoint.
 
-- Normal: existing Gemini analyzed selections + eligible replay.
-- Degraded: existing deterministic fresh pool order, up to four safe unsent raw stories with original title/source/link/snippet, clearly labelled unanalysed; eligible replay can fill remaining slots.
-- Status: if no safe useful stories, send a small truthful daily operational email. History failure suppresses story delivery, not status.
+## Implemented target — Gemini Reliability V2 (offline-tested, not deployed)
 
-One final mail attempt per executing natural invocation; no independent failure/status sends. Consume the attempt before transport. Provider ambiguity or post-acceptance history failure never causes a replacement send. Inbox delivery and survival of platform termination cannot be guaranteed. Raw delivery records ordinary notification identity after acceptance, never fake analysis. Existing replay and low-score rules stay intact.
+Gemini attempt → durable bounded classification/accounting evidence → failure-aware retry decision → shared bounded budget → deterministic fallback → one email.
 
-The review branch implements delivery reliability first and then at most one same-model retry ONLY for the existing proven confirmed-zero `resource_exhausted_429` / `unavailable_503` classifier after successful durable zero settlement. Separate reservations/request counts, unchanged quota guards and one shared cycle context are retained. Delay is 1000–1500 ms; both attempts and backoff share the existing total 90-second budget. Timeout, uncertain transport/usage, failed accounting, semantic errors and arbitrary 429 receive no retry. Max dispatches becomes 2 only through this reviewed exception; normal remains 1. Row 28 and the legacy latch are untouched. No timeout increase, model/provider fallback, extra ranker or second email is added.
+[Gemini Reliability V2 design](docs/superpowers/specs/2026-10-22-gemini-reliability-v2-design.md) and [implementation plan](docs/superpowers/plans/2026-10-22-gemini-reliability-v2.md) govern the implemented feature branch. Reviewed 503 may receive two retries (max3 dispatches); current model-specific 429 cannot establish a transient quota window and gets no retry. Unknown/malformed, timeout, transport, semantic and accounting failures stop Gemini. No model/provider fallback.
 
-The detailed state machine, acceptance tests, privacy rules and rollout gates are in [the design spec](docs/superpowers/specs/2026-10-21-daily-digest-reliability-design.md). No runtime change is authorized by writing this document.
+Implemented delays are 1500–2000 ms then 3000–4000 ms. One 90-second envelope with Gemini cutoff at +75 seconds leaves 15 seconds of finalization opportunity; at least 10 seconds must remain after delay before retry admission. Existing quotas/accounting remain authoritative.
+
+Bounded cycle and attempt tables are implemented through additive `0008_monitoring_cycle_observability.sql`, still behind human migration approval and unapplied. Confirmed-zero settlement and its durable class are atomic before retry. Failed telemetry cannot trigger another email or hide uncertainty. Console summaries remain supplementary.
+
+The degraded visual redesign reuses the existing dark table/inline-CSS email shell, truthful degraded banner, raw cards and a deterministic safe 768-byte snippet cleaner. Normal analyzed/replay low-score semantics remain intact. Offline implementation and validation are complete; independent review, migration approval, merge, deployment and natural-cycle validation remain separate gates.
 
 ## Authoritative execution order
 
-1. **DAILY EMAIL DELIVERY GUARANTEE**
-2. **GEMINI TRANSIENT-FAILURE HARDENING**
+1. **GEMINI RELIABILITY V2**
+2. **DEGRADED EMAIL VISUAL REDESIGN**
 3. **PRODUCTION VALIDATION**
 4. **RSS BODY_LIMIT RELIABILITY**
 5. **THREADS**
@@ -39,17 +41,16 @@ The detailed state machine, acceptance tests, privacy rules and rollout gates ar
 9. **P7 / RELEVANCE + FEEDBACK**
 10. **FINAL STABILIZATION / V1.0**
 
-Priorities 1–2 are implemented offline and await independent review and human-controlled release. Priority 3 observes natural cycles only after an approved release; validation is per path and must not claim unexercised retry/fallback success. Priorities 4–10 remain separate bounded work.
-
 ## Superseded historical policies
 
-The former P0 initial+3 retries / multi-model advancement applies only to retained legacy tooling, not the scheduled path or this two-attempt proposal. The former P1 per-story analysis and fixed four-slot filler wording, P3 explicit score bonuses, P4 trusted-source-only/send-nothing batch assumption, and Threads-as-next priority are superseded for current scheduled architecture. Preserve historical commits/specs as provenance; do not execute their old imperative instructions. X activation is deprecated. Legacy removal and limit centralization wait for priorities 7–8.
+Legacy P0 multi-model retry and per-story analysis are not scheduled Batch authority. Earlier send-nothing-on-empty and one-dispatch-only scheduled descriptions are superseded by deployed daily delivery/coarse retry. V2 is implemented and tested only on its feature branch; it is not production authority until approved and released. X activation is deprecated; Threads, RSS body_limit, background execution, legacy cleanup and limit centralization remain separate work. Preserve historical specs/commits; do not treat their imperative instructions as current authority.
 
 ### Backlog/Plan Actualization Checkpoint
 
-After every major feature or fix that is merged and/or production-validated, before beginning the next major roadmap item:
+After every major merged, deployed or production-validated milestone, before beginning the next major roadmap item:
 
-1. Update `backlog.md` with `DONE`, `TODO`, `DEFERRED`, or `DEPRECATED`, plus current priority and actual execution order.
-2. Update `plan.md` with the current architecture and active implementation rules, explicitly superseding obsolete architecture.
-3. Update `docs/self-improvement/PROJECT_STATE.md` only with verified production or deployment evidence.
-4. Do not begin the next major roadmap item while these authoritative documents materially contradict the shipped state.
+1. Update `backlog.md` with completed/implemented/deployed/naturally validated/partially validated/TODO/deferred status and actual priority.
+2. Update `plan.md` with current architecture and target rules, superseding obsolete instructions explicitly.
+3. Update `docs/self-improvement/PROJECT_STATE.md` only with verified facts and evidence provenance.
+4. Reconcile `docs/self-improvement/DAILY_SUMMARY.md` and `docs/self-improvement/CHANGELOG.md` with the same milestone.
+5. Do not begin the next major item while these five documents materially contradict each other or shipped behavior.

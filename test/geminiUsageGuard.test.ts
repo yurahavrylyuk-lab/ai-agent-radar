@@ -85,9 +85,9 @@ const requestedModel = (init?: RequestInit) => JSON.parse(String(init?.body)).mo
 test("batch policy retries only reviewed confirmed-zero provider outcomes", async (t) => {
   const cases = [
     { name: "success", response: () => jsonResponse(successfulBody), status: "exact", settlements: 1 },
-    { name: "verified 503", response: unavailable, status: "confirmed_zero", settlements: 2, attempts: 2, error: /HTTP 503/, providerFailureClass: "unavailable_503" },
-    { name: "verified 503 without provider status", response: () => jsonResponse({ error: { message: "Unavailable" } }, 503, "Service Unavailable"), status: "confirmed_zero", settlements: 2, attempts: 2, error: /HTTP 503/, providerFailureClass: "unavailable_503" },
-    { name: "model-specific 429", response: () => modelQuota([quotaFailure(quotaViolation("gemini-3.8-flash"))]), status: "confirmed_zero", settlements: 2, attempts: 2, error: /HTTP 429/, providerFailureClass: "resource_exhausted_429" },
+    { name: "verified 503", response: unavailable, status: "confirmed_zero", settlements: 3, attempts: 3, error: /HTTP 503/, providerFailureClass: "unavailable_503" },
+    { name: "verified 503 without provider status", response: () => jsonResponse({ error: { message: "Unavailable" } }, 503, "Service Unavailable"), status: "confirmed_zero", settlements: 3, attempts: 3, error: /HTTP 503/, providerFailureClass: "unavailable_503" },
+    { name: "model-specific 429", response: () => modelQuota([quotaFailure(quotaViolation("gemini-3.8-flash"))]), status: "confirmed_zero", settlements: 1, attempts: 1, error: /HTTP 429/, providerFailureClass: "resource_exhausted_429" },
     { name: "ambiguous 429", response: () => modelQuota([]), status: "transport_ambiguous", reason: "response_usage_unavailable", settlements: 0, error: /unconfirmed usage/ },
     { name: "synchronous transport throw", response: (): Response => { throw new Error("network unavailable"); }, status: "transport_ambiguous", reason: "network_error", settlements: 0, error: /network unavailable/ },
     { name: "invalid provider JSON", response: () => new Response("not-json"), status: "transport_ambiguous", reason: "response_usage_unavailable", settlements: 0, error: /not valid JSON/ },
@@ -131,26 +131,47 @@ test("batch policy retries only reviewed confirmed-zero provider outcomes", asyn
   });
 });
 
-test("reviewed confirmed-zero 429 retries once on the same model and succeeds", async () => {
+test("settlement_failure_preserves_observed_provider_class as bounded evidence", async () => {
+  const tracker = new MemoryTracker({ records: [], usageUnknown: false });
+  tracker.confirmZeroRequest = async () => { throw new Error("settlement canary must not escape"); };
+  const context = geminiBatch.createGeminiBatchCycleContext();
+  await assert.rejects(geminiBatch.generateBatchWithGemini("batch input", {
+    usageTracker: tracker,
+    environment: highLimitEnv,
+    cycleContext: context,
+    fetchImplementation: (async () => unavailable()) as typeof fetch,
+  }), /confirmed-zero attempt could not be recorded safely/);
+  assert.deepEqual(context.attempts.map(({ elapsedMs: _elapsedMs, ...attempt }) => attempt), [{
+    ordinal: 1,
+    failureClass: "unavailable_503",
+    providerFailureClass: "unavailable_503",
+    httpStatus: 503,
+    accountingError: true,
+    accountingOutcome: "transport_ambiguous",
+  }]);
+  assert.ok(Number.isSafeInteger(context.attempts[0]?.elapsedMs));
+  assert.equal(JSON.stringify(context.attempts).includes("settlement canary"), false);
+});
+
+test("reviewed confirmed-zero 429 is terminal without a second dispatch", async () => {
   const tracker = new MemoryTracker({ records: [], usageUnknown: false });
   const context = geminiBatch.createGeminiBatchCycleContext();
   const events: string[] = [];
   const bodies: string[] = [];
   let calls = 0;
-  const result = await geminiBatch.generateBatchWithGemini("immutable batch prompt", {
+  await assert.rejects(geminiBatch.generateBatchWithGemini("immutable batch prompt", {
     usageTracker: tracker, environment: highLimitEnv, cycleContext: context, random: () => 0,
     sleep: async milliseconds => { events.push(`sleep:${milliseconds}`); },
     fetchImplementation: (async (_url, init) => {
       calls += 1; events.push(`dispatch:${calls}`); bodies.push(String(init?.body));
       return calls === 1 ? modelQuota([quotaFailure(quotaViolation("gemini-3.8-flash"))]) : jsonResponse(successfulBody);
     }) as typeof fetch,
-  });
-  assert.equal(result.outputText, "GEMINI_OK");
-  assert.deepEqual(events, ["dispatch:1", "sleep:1000", "dispatch:2"]);
-  assert.equal(bodies[0], bodies[1]);
-  assert.deepEqual(tracker.data.records.map(record => record.accountingStatus), ["confirmed_zero", "exact"]);
-  assert.deepEqual(context.attempts.map(attempt => [attempt.ordinal, attempt.accountingOutcome]), [[1, "confirmed_zero"], [2, "exact"]]);
-  assert.equal(context.retryEligible, true); assert.equal(context.retryAttempted, true); assert.equal(context.retrySkipReason, "none");
+  }), /HTTP 429/);
+  assert.deepEqual(events, ["dispatch:1"]);
+  assert.equal(bodies.length, 1);
+  assert.deepEqual(tracker.data.records.map(record => record.accountingStatus), ["confirmed_zero"]);
+  assert.deepEqual(context.attempts.map(attempt => [attempt.ordinal, attempt.accountingOutcome]), [[1, "confirmed_zero"]]);
+  assert.equal(context.retryEligible, false); assert.equal(context.retryAttempted, false); assert.equal(context.retrySkipReason, "not_eligible");
 });
 
 test("batch retry is skipped when backoff cannot fit inside the original deadline", async () => {
@@ -161,7 +182,7 @@ test("batch retry is skipped when backoff cannot fit inside the original deadlin
     usageTracker: tracker, environment: highLimitEnv, cycleContext: context,
     monotonicNow: () => clock, random: () => 1,
     sleep: async () => { sleepCalls += 1; },
-    fetchImplementation: (async () => { fetchCalls += 1; clock = 89_000; return unavailable(); }) as typeof fetch,
+    fetchImplementation: (async () => { fetchCalls += 1; clock = 64_000; return unavailable(); }) as typeof fetch,
   }), /HTTP 503/);
   assert.equal(fetchCalls, 1); assert.equal(sleepCalls, 0);
   assert.equal(context.retryEligible, true); assert.equal(context.retryAttempted, false); assert.equal(context.retrySkipReason, "budget");

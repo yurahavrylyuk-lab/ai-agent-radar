@@ -4,11 +4,15 @@
 
 This file is the durable source of truth for the production baseline, architecture, limits, safety rules, and approval boundaries. Update it only with verified evidence and the required authorization; distinguish intended changes from deployed facts.
 
-Current production deployment, confirmed by the human handoff on 2026-10-21: source `4fad7003c6619aa1fdee2b27c0f9cae219a9aa60`, Worker version `fb6b4691-938e-4c17-8dbd-5cb62d865d35`. Local main matched that SHA before this documentation branch. No Cloudflare verification was performed in this task. Multi-source outage signaling is **DEPLOYED / awaiting natural-cycle validation**; do not attribute the preceding source's cycle to this deployment.
+Current production/main source `0df2c2399c76b4c7c518119b6a8511a300ef9aee`, Worker `6129de15-115c-4f61-9a3b-488d26baf301`, deployment `77fbd332-da4a-4862-9608-78cb963883f9`, from the human-verified 2026-10-22 handoff. No live production query was performed by this architecture task.
 
-Latest human-supplied natural incident: `2026-10-21T08:00:49.466Z`, source `f53acb06642c7880c62f3c9457562c9d42e61b24`, gemini-3.8-flash, 42 candidates, approximately 22,367 prompt bytes, one dispatch ending at the 90-second timeout. Row 28 remains `transport_ambiguous / timeout`; zero selections and zero eligible replay produced no email. No retry or recovery was performed by this design task.
+Natural Cron `2026-10-22T08:00:49.466Z` completed without Worker crash. Gemini rows 29 and 30 both used gemini-3.8-flash, request_count=1, confirmed_zero, tokens 0/0/0. Row29 reserved/settled at 08:01:16.221Z/08:01:22.151Z; row30 at 08:01:23.653Z/08:01:24.246Z. Two dispatches, ~1.5-second gap, no third, timeout or new ambiguity. Exact 429-versus-503 class cannot be recovered from the missing durable final summary; do not infer it from zero tokens.
 
-Implementation-only checkpoint: branch `codex/daily-digest-reliability-implementation` now converges the scheduled Batch path on one normal, degraded, or status-only email attempt and permits one same-model retry only after reviewed 429/503 evidence has durably settled `confirmed_zero`. Both dispatches share the original 90-second deadline and timeout/transport ambiguity remains non-retryable. This is offline implementation evidence awaiting independent review; it is **not deployed or naturally validated** and does not change the production facts below.
+Daily email delivery guarantee is **COMPLETED / NATURALLY VALIDATED** for this natural degraded path: four fresh raw stories, zero replay, exactly one accepted email, subject `Daily digest — AI analysis unavailable`, all four notification rows sharing message ID `01a162a1-4cbe-72e1-96c7-8aeca90c7166`, no resend. Coarse retry is **DEPLOYED / PARTIALLY NATURALLY VALIDATED**. Multi-source outage telemetry is deployed but not fully naturally validated; low-relevance and timeout fallback were not exercised on this cycle.
+
+Historical 2026-10-21 cycle on f53acb timed out at 90 seconds; row28 remains historical transport_ambiguous/timeout evidence. That cycle produced no email before daily delivery reliability deployment. The prior implementation-only status is superseded by the supplied 2026-10-22 release evidence.
+
+Gemini Reliability V2 and the degraded visual redesign are **IMPLEMENTED / OFFLINE-TESTED** on branch `codex/gemini-reliability-v2-implementation`; they are not merged or deployed. Additive `0008_monitoring_cycle_observability.sql` is **MIGRATION_READY_FOR_HUMAN_APPROVAL**, was exercised only against disposable SQLite/local Workerd data, and is not applied to application or production D1. Independent review, human-approved migration application before a compatible Worker deployment, and natural-cycle validation remain required. No production query, migration, recovery, provider call or production action occurred during this implementation.
 
 The previously verified 2026-10-20 natural cycle ran earlier, from `2026-10-20T08:00:49.466Z` through `2026-10-20T08:01:22.310Z`, on source `244862880eb35300532cf75917d2936668d39409` and Worker version `eec530db-ffea-4a96-9d0e-73439610f923`. It completed 10/10 Brave searches; GitHub Changelog and Chrome for Developers RSS succeeded; OpenAI and Cloudflare AI reached `body_limit`; and five valid RSS candidates entered the shared pool. Gemini ended `provider_failed` with `confirmed_zero`, so no digest/email was produced. This cycle production-proved the RSS native-fetch receiver fix, not the later low-relevance deployment.
 
@@ -31,10 +35,10 @@ Cloudflare Cron
 → multi-query Brave Search + bounded RSS discovery
 → shared canonical URL/history deduplication
 → bounded pool (maximum 50 candidates / 32 KiB prompt)
-→ at most one Gemini batch dispatch
-→ at most four selected stories
-→ D1 discovery persistence
-→ at most one Resend digest
+→ normally one Gemini batch dispatch; at most two after reviewed durable confirmed-zero failure
+→ valid analyzed selections persist in D1; raw fallback does not fabricate analysis
+→ normal / degraded / status-only finalizer (maximum four stories)
+→ at most one Resend attempt
 → D1 notification history
 ```
 
@@ -42,28 +46,28 @@ Cloudflare Cron
 - Autonomous production schedule: `0 8 * * *` UTC, once daily at 08:00 UTC.
 - Public HTTP fetch returns only `AI Agent Radar worker ready`.
 - HTTP requests must never trigger monitoring. There is no manual monitoring endpoint.
-- Each successful scheduled run emits exactly one structured, secret-free cycle summary with aggregate counts and bounded outcome status details. It excludes source URLs and content, redacts configured secret values and email addresses, and truncates error text.
+- Each completed scheduled run emits a console-only structured, secret-free cycle summary (not durably retained in D1) with aggregate counts and bounded outcome status details. It excludes source URLs and content, redacts configured secret values and email addresses, and truncates error text.
 - The current scheduled Batch path collects Brave/RSS and prepares the bounded shared pool before Gemini availability checking. Admission failure prevents Gemini dispatch; eligible replay remains available. The older pre-discovery preflight description belongs to the retained legacy path.
 - Each cycle performs one bounded recent-discovery lookup so an analyzed but unnotified discovery can re-enter the shared digest without Brave rediscovery or Gemini re-analysis. Replay adds no provider request and does not create a second email.
 - The scheduled Batch path records isolated Brave/RSS acquisition failures and preserves successful results; Brave quota denial stops further Brave requests. All-source failure is observable through source-health telemetry. Legacy all-search-failed exception behavior is not the scheduled Batch policy.
 - No automatic full-cycle retries.
-- The production-proven Batch Gemini path performs at most one provider dispatch for the fresh batch and can return at most four selected stories for the single digest. The current deployed source retains the low-relevance behavior introduced at `f81d6ac` and permits scores 1–10 and labels a selected score below 7 with `It could be relevant`; natural low-score delivery has not yet been demonstrated by the supplied evidence.
+- The production Batch Gemini path performs normally one and at most two provider dispatches for the fresh batch after reviewed durable confirmed-zero failure and can return at most four selected stories for the single digest. The current deployed source retains the low-relevance behavior introduced at `f81d6ac` and permits scores 1–10 and labels a selected score below 7 with `It could be relevant`; natural low-score delivery has not yet been demonstrated by the supplied evidence.
 - `runMonitoringCycle()` is the retained legacy per-story path. It is not invoked by the production schedule and is not removed by this documentation reconciliation.
 
 ## Providers
 
 - Search: Brave Search.
-- Analysis: Google Gemini through the reviewed ordered pool `gemini-3.8-flash`, `gemini-3.6-flash`, and `gemini-3.5-flash-lite`. Runtime environment input cannot add, remove, or reorder models; `GEMINI_MODEL` is deprecated and ignored. The production scheduled Batch Gemini path uses one `gemini-3.8-flash` dispatch with no retry or model fallback. The pool remains restricted to approved included Free Tier capacity; paid fallback is disabled.
+- Analysis: Google Gemini through the reviewed ordered pool `gemini-3.8-flash`, `gemini-3.6-flash`, and `gemini-3.5-flash-lite`. Runtime environment input cannot add, remove, or reorder models; `GEMINI_MODEL` is deprecated and ignored. The production scheduled Batch Gemini path uses `gemini-3.8-flash`, normally one dispatch, with one same-model retry only after reviewed confirmed-zero 429/503 and durable settlement; no model fallback. Both dispatches/backoff share 90 seconds; delay is 1000–1500 ms. The pool remains restricted to approved included Free Tier capacity; paid fallback is disabled.
 - Email: Resend.
 - Historical discovery integration: P6 X selected-account polling is implemented but disabled. Production activation is abandoned/deprecated; no X credential or migration activation is planned on the active roadmap.
-- Replacement source roadmap: Brave and RSS are active. The human-approved roadmap prioritizes review/release and natural validation of the implemented daily delivery reliability and bounded Gemini retry before RSS body_limit work and Threads; see backlog.md. These reliability changes are not deployed.
+- Replacement source roadmap: Brave and RSS are active. Daily delivery reliability is deployed and naturally validated. Gemini Reliability V2 and degraded styling are implemented/offline-tested but not released; the next gates are independent review, human-approved migration/deployment, and natural validation, followed by RSS body_limit and Threads; see backlog.md.
 - OpenAI: not used in the cloud production execution path. Local legacy tooling/dependencies do not authorize inclusion in the deployed Worker runtime.
 
 ## RSS production checkpoint
 
 RSS discovery is implemented and deployed. The registry contains exactly four approved first-party feeds (OpenAI News, GitHub Changelog, Cloudflare AI, and Chrome for Developers) in fixed order. Collection remains bounded to five configured feeds, five item positions per feed, one request with no retry or redirect, a 5-second request-through-body deadline, and 256 KiB per feed. Failures are isolated from Brave and expose only bounded allowlisted telemetry. The Workerd native-fetch receiver issue is fixed by injecting a receiver-safe wrapper.
 
-Brave and RSS observations enter the same canonical URL/history/notification deduplication path before deterministic interleaving into the 50-candidate, 32 KiB prompt. The scheduled path retains one Gemini dispatch maximum, four selected stories maximum, and one email maximum. The implementation adds no D1 schema or migration, does not use X or migration `0004`, and does not add Threads behavior.
+Brave and RSS observations enter the same canonical URL/history/notification deduplication path before deterministic interleaving into the 50-candidate, 32 KiB prompt. The scheduled path retains four stories and one email maximum; later deployed coarse retry permits at most two same-model Gemini dispatches under its confirmed-zero gate. The implementation adds no D1 schema or migration, does not use X or migration `0004`, and does not add Threads behavior.
 
 Production evidence from the natural 2026-10-20 cycle proved that GitHub Changelog and Chrome for Developers succeeded and valid RSS candidates entered the shared Gemini pool. OpenAI and Cloudflare AI reached the bounded `body_limit`; those feeds remain follow-up reliability work. This evidence does not claim all four feeds are fully healthy.
 
@@ -73,8 +77,8 @@ Maximum per autonomous monitoring cycle:
 
 - Brave: up to 10 requests (one per `MONITORING_QUERIES` entry; the quota guard stops the loop early if a daily/weekly/monthly limit is reached).
 - Batch prompt: at most 50 submitted candidates and 32 KiB (`32,768` bytes).
-- Gemini: at most one fresh-batch provider dispatch, returning at most four selected stories; known/duplicate URLs do not enter the submitted batch.
-- Gemini provider attempts: one maximum for the scheduled fresh batch. Historical retry/fallback behavior remains documented for older execution paths but is not used by the production Batch Gemini cycle.
+- Gemini: normally one fresh-batch dispatch, at most two under the reviewed confirmed-zero retry gate, returning at most four selected stories; known/duplicate URLs do not enter the submitted batch.
+- Gemini provider attempts: two maximum for scheduled Batch, separate durable reservations/settlements and unchanged quota guards. Timeout/transport ambiguity never retries. Legacy multi-model retry is not scheduled authority. V2 max3 is only a proposed target.
 - Resend: 1 email.
 - OpenAI: 0 calls.
 - X: 0 calls. The implementation remains disabled and its production activation is deprecated.

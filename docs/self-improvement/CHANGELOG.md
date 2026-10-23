@@ -1,5 +1,22 @@
 # Self-improvement changelog
 
+## 2026-10-22 — Gemini Reliability V2 implementation ready for review
+
+- Implemented the approved closed V2 failure contract, durable D1 cycle/attempt telemetry, atomic accounting settlement, and bounded same-model retry policy: reviewed proven-zero 503 may reach three total dispatches; 429, timeout, ambiguity, malformed/semantic and accounting failures do not retry.
+- Added failure-safe scheduled checkpoints/final outcomes, the approved degraded/status email design, and a deterministic bounded snippet cleaner while preserving one final email attempt, deterministic fallback, replay, discovery, quota and X-disabled behavior.
+- Added unapplied migration `0008_monitoring_cycle_observability.sql`, marked **MIGRATION_READY_FOR_HUMAN_APPROVAL**. Disposable SQLite/local Workerd migration and restart evidence passed; no application or production D1 was queried or changed.
+- Offline evidence passed: focused V2 254/254, Task 8 acceptance 23/23, Workerd regression, full suite 690/690, build, Worker typecheck, Wrangler dry-run, bundle audit and `git diff --check`.
+- Implementation branch only: no provider call, monitoring cycle, production migration/D1 mutation, deployment, push, PR or merge. Production facts remain unchanged and release still requires independent review plus explicit human authorization.
+
+## 2026-10-22 — Gemini Reliability V2 architecture and production actualization
+
+- Architecture/docs only from main `0df2c2399c76b4c7c518119b6a8511a300ef9aee`, branch `codex/gemini-reliability-v2-design`. Added V2 spec; no implementation plan or runtime changes.
+- Human production handoff supersedes prior review-pending deployment status: Worker `6129de15-115c-4f61-9a3b-488d26baf301`, deployment `77fbd332-da4a-4862-9608-78cb963883f9`. Natural 2026-10-22 degraded email: four raw fresh stories, zero replay, one acceptance, no resend/crash. Daily delivery guarantee COMPLETED / NATURALLY VALIDATED.
+- Rows29/30 confirmed_zero with safe separate accounting prove deployed retry only partially: exact 429/503 is unknown, final summary not durable. Outage telemetry not fully naturally validated; low-score/timeout fallback not exercised.
+- Designed conservative closed classification, max3 only for proven-zero 503, bounded exponential jitter/shared time budget, additive D1 cycle/attempt evidence with atomic zero outcome and human migration gate. Current 429 evidence cannot prove a transient window. No quota changes.
+- Priority2 reuses existing email design system and safely cleaned snippets. Rewrote exact ten-item roadmap and preserved/expanded the permanent five-document actualization checkpoint. Older entries below remain historical, not current release status.
+- Validation: scoped documentation consistency and whitespace checks; runtime tests not run (documentation-only). Unrelated untracked design preserved byte-identically. No monitoring, provider, D1, migration, deployment, push or merge. Design awaits human review before implementation planning.
+
 ## 2026-10-21 — Daily digest reliability review corrections
 
 - Preserved ineligible replay records as grouped alias/history evidence while excluding them from delivery representation, closing the notified-alias resend gap.
