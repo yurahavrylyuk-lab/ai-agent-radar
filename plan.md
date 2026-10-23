@@ -1,56 +1,43 @@
-# AI Agent Radar — Current architecture and roadmap
+# AI Agent Radar — Architecture and roadmap
 
-## Authority — 2026-10-22
+## Current authority — 2026-10-23
 
-Current production/main source `0df2c2399c76b4c7c518119b6a8511a300ef9aee`, Worker `6129de15-115c-4f61-9a3b-488d26baf301`, deployment `77fbd332-da4a-4862-9608-78cb963883f9`, from the human-verified 2026-10-22 handoff. No live production query was performed by this architecture task.
+Production/main `4eb3cf049f222b1193d827b94b93f88196b03880`; Worker `04ffb752-0e5e-4e15-be37-26af010fa503`; deployment `309f3faf-72b7-4c09-bbd1-ad839efa2155`; production D1 `9fb545e2-2f43-4922-8b21-2d79a8de9556`. These are verified facts supplied by the human 2026-10-23 handoff, not a live production query by this task. Local main matches the supplied source.
 
-## Current production architecture
+Daily email guarantee, durable cycle telemetry, durable attempt telemetry and degraded email redesign are **COMPLETED / NATURALLY VALIDATED** (styling is deployed). Gemini Reliability V2 is **DEPLOYED / PARTIALLY NATURALLY VALIDATED**: timeout/accounting/fallback paths exercised, deployed 503 retry path not naturally exercised. Migration `0008_monitoring_cycle_observability.sql` is **APPLIED**; `0004_x_discovery.sql` remains intentionally **UNAPPLIED**, X disabled.
 
-Brave + RSS → shared canonical URL/history dedupe and deterministic candidate interleaving → bounded pool (50 candidates / 32 KiB) → Gemini → success: normal digest; failure: deterministic degraded digest → status-only if no usable story payload → one final email attempt.
+Natural cycle scheduled `2026-10-23T08:00:49.466Z`, completed `2026-10-23T08:03:06.914Z`; reported runtime ~136.4s (scheduled-to-completed wall interval 137.448s; execution start was not supplied). Brave healthy, 10/10, 50 results; RSS degraded, 2/4 feeds succeeded; 60 raw observations, 47 submitted candidates, 24,303 prompt bytes. One gemini-3.8-flash dispatch lasted 75.331s, ended timeout/transport_ambiguous, correctly no retry. Polished degraded email: one attempt, accepted.
 
-Normal analyzed delivery includes eligible replay and Batch-selected scores 1–10; selected scores below 7 retain `It could be relevant`. Degraded raw stories have no fabricated score/analysis. At most four stories total, unchanged history/no-resend and replay rules. Consume the one-email attempt before transport; provider acceptance/history uncertainty never triggers another send. This does not guarantee inbox delivery or survival of platform termination.
+## Deployed architecture
 
-Current scheduled Gemini is normally one dispatch, maximum two on the same model only after reviewed confirmed-zero resource_exhausted_429/unavailable_503 and durable settlement. Backoff 1000–1500 ms, separate reservations, one shared 90-second deadline. Timeout/transport ambiguity is never retried. This coarse retry is DEPLOYED / PARTIALLY NATURALLY VALIDATED, not V2.
+Brave (10 searches) + RSS → shared URL/alias/history dedupe and deterministic source interleaving → max 50 candidates / 32 KiB prompt → synchronous Gemini Batch → analyzed normal digest, or deterministic polished degraded digest, or truthful status_only → max 4 stories / one final email attempt.
 
-Daily delivery guarantee is COMPLETED / NATURALLY VALIDATED on 2026-10-22: four raw fresh stories, zero replay, one accepted degraded email, two confirmed-zero Gemini rows, no new ambiguity. Exact provider class is unavailable; low-score and timeout fallback were not exercised. Outage telemetry is deployed but not fully naturally validated.
+V2 is production authority: same-model unavailable_503 plus durable confirmed_zero may retry to max 3 actual dispatches. Backoff1500–2000ms then3000–4000ms, one shared90s envelope, Gemini cutoff75s; >=10s after delay for retry admission. 429, timeout, transport ambiguity, invalid responses and accounting uncertainty do not retry. Each attempt has independent protected usage evidence. Applied0008 stores bounded cycle/attempt evidence; no prompt/content/raw errors. Old two-attempt429/503 and console-only descriptions are historical.
 
-RSS: four approved feeds; max5 feeds, 5 positions/feed, 5 seconds/feed, 256 KiB, no retry/redirect. Brave limits remain 10/day, 100/week, 350/month. X disabled/deprecated; 0004 unapplied. HTTP remains health-only. No manual monitoring endpoint.
+Analyzed Batch selections support scores1–10, label below7 `It could be relevant`; raw fallback has no invented score/analysis. Replay, notification dedupe and one-email guard stay unchanged. No promise of exactly-once delivery across provider acceptance/history ambiguity or platform termination.
 
-## Implemented target — Gemini Reliability V2 (offline-tested, not deployed)
+## Active architecture phase
 
-Gemini attempt → durable bounded classification/accounting evidence → failure-aware retry decision → shared bounded budget → deterministic fallback → one email.
+Gemini latency reliability is now first. Recommended [latency design](docs/superpowers/specs/2026-10-23-gemini-latency-reliability-design.md): deterministic max 24 analysis subset after unchanged discovery/history, <=12 KiB prompt and generation_config.thinking_level=low on the existing synchronous Interactions path. Round-robin query/feed queues use a 3:1 Brave/RSS slot pattern and a soft two-per-host cap; full original pool remains available for fallback. Background execution and model fallback are deferred. This design is a target, not shipped behavior; no implementation plan yet. Preserve acquisition, current 75s cutoff, all V2 accounting protections, and full raw candidate pool for fallback. Reuse applied 0008 JSON with a bounded optional latency extension and compatible new readers; no new migration. Natural validation: first 3 eligible dispatched cycles, at most 5 scheduled cycles initially; goals median successful Gemini<=45s and comparable total cycle<=110s, not SLAs.
 
-[Gemini Reliability V2 design](docs/superpowers/specs/2026-10-22-gemini-reliability-v2-design.md) and [implementation plan](docs/superpowers/plans/2026-10-22-gemini-reliability-v2.md) govern the implemented feature branch. Reviewed 503 may receive two retries (max3 dispatches); current model-specific 429 cannot establish a transient quota window and gets no retry. Unknown/malformed, timeout, transport, semantic and accounting failures stop Gemini. No model/provider fallback.
+## Authoritative roadmap
 
-Implemented delays are 1500–2000 ms then 3000–4000 ms. One 90-second envelope with Gemini cutoff at +75 seconds leaves 15 seconds of finalization opportunity; at least 10 seconds must remain after delay before retry admission. Existing quotas/accounting remain authoritative.
+1. **GEMINI LATENCY RELIABILITY**
+2. **GEMINI LATENCY NATURAL PRODUCTION VALIDATION**
+3. **RSS BODY_LIMIT RELIABILITY**
+4. **THREADS**
+5. **BRAVE + RSS + THREADS PRODUCTION PROOF**
+6. **IDEMPOTENT EMAIL DELIVERY**
+7. **CROSS-SOURCE EVENT DEDUPLICATION**
+8. **TELEMETRY-DEGRADED CONTENT CONTINUITY**
+9. **WORKERD CI RUNTIME GATE**
+10. **LEGACY CLEANUP**
+11. **CENTRALIZE PIPELINE LIMITS**
+12. **P7 / RELEVANCE + FEEDBACK**
+13. **FINAL STABILIZATION / V1.0**
 
-Bounded cycle and attempt tables are implemented through additive `0008_monitoring_cycle_observability.sql`, still behind human migration approval and unapplied. Confirmed-zero settlement and its durable class are atomic before retry. Failed telemetry cannot trigger another email or hide uncertainty. Console summaries remain supplementary.
+Future items are separate bounded work: RSS body_limit; official API Threads and combined proof; idempotent/ambiguous email; conservative event dedupe (uncertain/distinct preserve both); telemetry-degraded continuity; Workerd CI; legacy cleanup; limits; relevance/feedback; stabilization. No semantic dedupe or other future implementation in latency work. HTTP remains health-only; X disabled and0004 unapplied.
 
-The degraded visual redesign reuses the existing dark table/inline-CSS email shell, truthful degraded banner, raw cards and a deterministic safe 768-byte snippet cleaner. Normal analyzed/replay low-score semantics remain intact. Offline implementation and validation are complete; independent review, migration approval, merge, deployment and natural-cycle validation remain separate gates.
+## Backlog/Plan Actualization Checkpoint
 
-## Authoritative execution order
-
-1. **GEMINI RELIABILITY V2**
-2. **DEGRADED EMAIL VISUAL REDESIGN**
-3. **PRODUCTION VALIDATION**
-4. **RSS BODY_LIMIT RELIABILITY**
-5. **THREADS**
-6. **BRAVE + RSS + THREADS PRODUCTION PROOF**
-7. **LEGACY CLEANUP**
-8. **CENTRALIZE PIPELINE LIMITS**
-9. **P7 / RELEVANCE + FEEDBACK**
-10. **FINAL STABILIZATION / V1.0**
-
-## Superseded historical policies
-
-Legacy P0 multi-model retry and per-story analysis are not scheduled Batch authority. Earlier send-nothing-on-empty and one-dispatch-only scheduled descriptions are superseded by deployed daily delivery/coarse retry. V2 is implemented and tested only on its feature branch; it is not production authority until approved and released. X activation is deprecated; Threads, RSS body_limit, background execution, legacy cleanup and limit centralization remain separate work. Preserve historical specs/commits; do not treat their imperative instructions as current authority.
-
-### Backlog/Plan Actualization Checkpoint
-
-After every major merged, deployed or production-validated milestone, before beginning the next major roadmap item:
-
-1. Update `backlog.md` with completed/implemented/deployed/naturally validated/partially validated/TODO/deferred status and actual priority.
-2. Update `plan.md` with current architecture and target rules, superseding obsolete instructions explicitly.
-3. Update `docs/self-improvement/PROJECT_STATE.md` only with verified facts and evidence provenance.
-4. Reconcile `docs/self-improvement/DAILY_SUMMARY.md` and `docs/self-improvement/CHANGELOG.md` with the same milestone.
-5. Do not begin the next major item while these five documents materially contradict each other or shipped behavior.
+After every major merged/deployed/validated milestone, reconcile backlog.md, plan.md, docs/self-improvement/PROJECT_STATE.md, DAILY_SUMMARY.md and CHANGELOG.md before the next major roadmap item. Distinguish designed, implemented/tested, deployed, partially naturally validated and naturally validated. Record only actual evidence; historical entries retain their original context. Architecture acceptance never authorizes production mutation.
