@@ -1,5 +1,13 @@
 # Daily Self-Improvement Summary
 
+## 2026-10-23 — Gemini latency reliability implementation ready for independent review
+
+- Implemented deterministic max-24 Gemini candidate selection with 3:1 Brave/RSS queue slots, round-robin query/feed coverage, soft two-per-host preference and deterministic borrowing/relaxation. The original full pool and alias evidence remain unchanged for degraded fallback and notification-history protection.
+- Replaced the scheduled Gemini payload with a compact exact schema bounded to 12,288 bytes, scheduled `thinking_level: low`, and a single synchronous request path. Existing V2 accounting, retry, deadline, quota, delivery and replay semantics remain authoritative.
+- Added compatible optional bounded latency evidence to the applied 0008 snapshot JSON and scheduled summary. Attempt timing freezes around the actual provider interaction and contains only allowlisted counts, modes and timestamps; no prompt, candidate, response or arbitrary provider text is stored.
+- Focused Task 5 integration passed 231/231 and the final focused acceptance set passed 350/350. Final full-suite/build/typecheck/Workerd/dry-run gates are recorded by the final task commit.
+- No migration was added or applied. No provider call, monitoring cycle, production inspection, D1 mutation, deployment, push, PR or merge occurred. Production remains the verified baseline recorded below; independent Analyst review and human release approval remain required.
+
 ## 2026-10-23 — Production governance reconciliation before latency design
 
 Production/main `4eb3cf049f222b1193d827b94b93f88196b03880`; Worker `04ffb752-0e5e-4e15-be37-26af010fa503`; deployment `309f3faf-72b7-4c09-bbd1-ad839efa2155`; production D1 `9fb545e2-2f43-4922-8b21-2d79a8de9556`. These are verified facts supplied by the human 2026-10-23 handoff, not a live production query by this task. Local main matches the supplied source.

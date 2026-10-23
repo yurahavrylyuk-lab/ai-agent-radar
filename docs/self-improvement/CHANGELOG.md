@@ -1,5 +1,12 @@
 # Self-improvement changelog
 
+## 2026-10-23 — Gemini latency reliability implementation
+
+- Added deterministic bounded candidate selection (maximum 24), compact prompt packing (maximum 12,288 bytes), and scheduled low-thinking Gemini input without changing the V2 provider/accounting state machine.
+- Preserved the complete discovery pool and alias evidence for degraded fallback, replay and no-resend protection; selector and byte exclusions are tracked separately.
+- Extended the existing 0008 cycle snapshot JSON compatibly with optional bounded latency evidence and added independently allowlisted scheduled serialization. No migration or configuration change was added.
+- Offline implementation only: focused integration 231/231 and focused acceptance 350/350 passed; final release gates are recorded with the acceptance commit. No production/provider/D1 action occurred.
+
 ## 2026-10-23 — Production governance reconciliation before latency design
 
 Production/main `4eb3cf049f222b1193d827b94b93f88196b03880`; Worker `04ffb752-0e5e-4e15-be37-26af010fa503`; deployment `309f3faf-72b7-4c09-bbd1-ad839efa2155`; production D1 `9fb545e2-2f43-4922-8b21-2d79a8de9556`. These are verified facts supplied by the human 2026-10-23 handoff, not a live production query by this task. Local main matches the supplied source.
