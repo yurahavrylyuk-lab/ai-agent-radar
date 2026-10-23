@@ -1,5 +1,11 @@
 # Self-improvement changelog
 
+## 2026-10-23 — Gemini latency reliability production release
+
+- Deployed exact merged source `223a1b90b9d64483b47717bd02a9d9c334fd3e0d` to Worker version `b8f02106-f558-43a2-a428-529b2051512f`, deployment `44a6b945-07ba-4154-877a-433949ce4e5f`, created `2026-10-23T18:01:16.307406Z`, with 100% traffic.
+- Verified unchanged Cron `0 8 * * *`, production D1 binding `9fb545e2-2f43-4922-8b21-2d79a8de9556`, source annotation and exact ready health response. No migration was applied; `0004_x_discovery.sql` remains intentionally unapplied.
+- Status is **DEPLOYED / AWAITING NATURAL PRODUCTION VALIDATION**. No monitoring or provider call was manually invoked. Initial evidence window is 3 eligible natural cycles, extendable to at most 5 scheduled cycles if inconclusive; deployment alone does not prove improved latency, success rate or timeout resolution.
+
 ## 2026-10-23 — Gemini latency reliability implementation
 
 - Added deterministic bounded candidate selection (maximum 24), compact prompt packing (maximum 12,288 bytes), and scheduled low-thinking Gemini input without changing the V2 provider/accounting state machine.

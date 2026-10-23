@@ -2,7 +2,7 @@
 
 ## Current authority — 2026-10-23
 
-Production/main `4eb3cf049f222b1193d827b94b93f88196b03880`; Worker `04ffb752-0e5e-4e15-be37-26af010fa503`; deployment `309f3faf-72b7-4c09-bbd1-ad839efa2155`; production D1 `9fb545e2-2f43-4922-8b21-2d79a8de9556`. These are verified facts supplied by the human 2026-10-23 handoff, not a live production query by this task. Local main matches the supplied source.
+Production source `223a1b90b9d64483b47717bd02a9d9c334fd3e0d`; Worker `b8f02106-f558-43a2-a428-529b2051512f`; deployment `44a6b945-07ba-4154-877a-433949ce4e5f` created `2026-10-23T18:01:16.307406Z`; production D1 `9fb545e2-2f43-4922-8b21-2d79a8de9556`. Wrangler deployment metadata and the health endpoint were verified after release. Traffic is 100%, Cron remains `0 8 * * *`, and health returned `AI Agent Radar worker ready`.
 
 Daily email guarantee, durable cycle telemetry, durable attempt telemetry and degraded email redesign are **COMPLETED / NATURALLY VALIDATED** (styling is deployed). Gemini Reliability V2 is **DEPLOYED / PARTIALLY NATURALLY VALIDATED**: timeout/accounting/fallback paths exercised, deployed 503 retry path not naturally exercised. Migration `0008_monitoring_cycle_observability.sql` is **APPLIED**; `0004_x_discovery.sql` remains intentionally **UNAPPLIED**, X disabled.
 
@@ -26,8 +26,8 @@ Natural cycle scheduled `2026-10-23T08:00:49.466Z`, completed `2026-10-23T08:03:
 
 ## Scope and completion criteria
 
-1. **IMPLEMENTED / TESTED / AWAITING INDEPENDENT REVIEW:** approved [optimized synchronous Gemini](docs/superpowers/specs/2026-10-23-gemini-latency-reliability-design.md): deterministic max 24 selected candidates, <=12 KiB compact prompt, scheduled low thinking, and bounded latency telemetry. V2 accounting, the full raw fallback pool, alias evidence, replay and one-email finalization remain unchanged. No deployment or natural production validation has occurred.
-2. **TODO after approved release:** 3–5 natural Cron cycles measuring completion/timeout rate, latency, payload, quality, accounting and one email; no manual cycles.
+1. **DEPLOYED / AWAITING NATURAL PRODUCTION VALIDATION:** approved [optimized synchronous Gemini](docs/superpowers/specs/2026-10-23-gemini-latency-reliability-design.md): deterministic max 24 selected candidates, <=12 KiB compact prompt, scheduled low thinking, and bounded latency telemetry. V2 accounting, the full raw fallback pool, alias evidence, replay and one-email finalization remain unchanged. Deployment alone does not prove latency or success-rate improvement.
+2. **ACTIVE NEXT VALIDATION:** observe 3 eligible natural Cron cycles, extending to at most 5 scheduled cycles if evidence remains inconclusive. Measure completion/timeout rate, latency, payload, quality, accounting and one email; no manual cycles.
 3. **TODO:** smallest bounded OpenAI/Cloudflare RSS body_limit fix; no blind limit increase.
 4. **TODO:** official Meta API only, shared source pool, no per-source Gemini request.
 5. **TODO:** natural combined-source proof after Threads release.
