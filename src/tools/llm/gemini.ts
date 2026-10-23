@@ -174,9 +174,12 @@ async function rejectBeforeDispatch(
   tracker: GeminiUsageStore,
   reservation: GeminiUsageReservation,
   message: string,
+  settleZero?: () => Promise<void>,
 ): Promise<never> {
-  try { await tracker.confirmZeroRequest(reservation); }
-  catch { throw new Error("Gemini request was not dispatched, but confirmed-zero accounting could not be recorded safely."); }
+  try {
+    if (settleZero) await settleZero();
+    else await tracker.confirmZeroRequest(reservation);
+  } catch { throw new Error("Gemini request was not dispatched, but confirmed-zero accounting and attempt evidence could not be recorded safely."); }
   throw new Error(message);
 }
 
@@ -270,6 +273,14 @@ async function generateWithGeminiPolicy(
         else if (outcome.kind === "confirmed_zero") await tracker.confirmZeroRequest(reservation);
         else await preserveAmbiguity(tracker, reservation, outcome.reason);
       };
+      const rejectBoundBeforeDispatch = (message: string): Promise<never> => rejectBeforeDispatch(
+        tracker,
+        reservation,
+        message,
+        () => settleAttempt({ kind: "confirmed_zero", evidence: {
+          failureClass: "none", httpStatus: null, accountingError: false, observedAt: observedAt(),
+        } }),
+      );
       if (dependencies.attemptTelemetry && attemptRef) {
         try { await dependencies.attemptTelemetry.repository.bindAttempt(attemptRef, reservation); }
         catch {
@@ -278,21 +289,19 @@ async function generateWithGeminiPolicy(
       }
 
       if (!areGeminiTimestampsInSameUtcWindows(reservation.record.timestamp, now())) {
-        await rejectBeforeDispatch(tracker, reservation,
-          "Gemini request was not dispatched because its accounting window changed after reservation.");
+        await rejectBoundBeforeDispatch("Gemini request was not dispatched because its accounting window changed after reservation.");
       }
 
       try { await dependencies.beforeDispatch?.(reservation); }
-      catch { await rejectBeforeDispatch(tracker, reservation, "Gemini request failed before provider dispatch."); }
+      catch { await rejectBoundBeforeDispatch("Gemini request failed before provider dispatch."); }
 
       if (batchContext && !areGeminiTimestampsInSameUtcWindows(reservation.record.timestamp, now())) {
-        await rejectBeforeDispatch(tracker, reservation,
-          "Gemini request was not dispatched because its accounting window changed after reservation.");
+        await rejectBoundBeforeDispatch("Gemini request was not dispatched because its accounting window changed after reservation.");
       }
 
       if (batchContext && batchDeadlineStartedAt !== undefined && monotonicNow() - batchDeadlineStartedAt >= batchCutoffMs) {
         batchContext.retrySkipReason = "budget";
-        await rejectBeforeDispatch(tracker, reservation, "Gemini batch retry was not dispatched because its overall deadline expired.");
+        await rejectBoundBeforeDispatch("Gemini batch retry was not dispatched because its overall deadline expired.");
       }
       const controller = new AbortController();
       const deadlineStartedAt = batchContext ? (batchDeadlineStartedAt ??= monotonicNow()) : monotonicNow();

@@ -134,3 +134,42 @@ test("attempt bind failure confirms zero and never dispatches", async () => {
   assert.equal(fetches, 0);
   assert.equal(usage.status, "confirmed_zero");
 });
+
+test("post_bind_pre_dispatch_zero_settles_attempt_atomically", async () => {
+  const db = new Database(":memory:");
+  try {
+    for (const file of ["0001_initial.sql", "0003_gemini_usage_model.sql", "0005_gemini_ambiguity_accounting.sql", "0006_gemini_timeout_admission.sql", "0008_monitoring_cycle_observability.sql"])
+      db.exec(await readFile(new URL(`../migrations/${file}`, import.meta.url), "utf8"));
+    const d1 = new D1(db) as unknown as D1Database;
+    const telemetry = new D1MonitoringTelemetry(d1);
+    await telemetry.createCycle({ cycleId, scheduledAt: "2026-10-22T08:00:00.000Z", startedAt: "2026-10-22T08:00:00.100Z", sourceSha: null, workerVersion: null });
+    const usage = new D1GeminiUsageStore(d1);
+    const moments = [
+      new Date("2026-10-22T23:59:59.000Z"),
+      new Date("2026-10-22T23:59:59.000Z"),
+      new Date("2026-10-23T00:00:00.000Z"),
+      new Date("2026-10-23T00:00:00.000Z"),
+    ];
+    let moment = 0;
+    let fetches = 0;
+
+    await assert.rejects(generateBatchWithGemini("batch", {
+      usageTracker: usage,
+      environment: { GEMINI_API_KEY: "test", GEMINI_DAILY_REQUEST_LIMIT: "5", GEMINI_WEEKLY_REQUEST_LIMIT: "20", GEMINI_MONTHLY_REQUEST_LIMIT: "50", GEMINI_DAILY_TOKEN_LIMIT: "10000", GEMINI_WEEKLY_TOKEN_LIMIT: "30000", GEMINI_MONTHLY_TOKEN_LIMIT: "100000" },
+      cycleContext: createGeminiBatchCycleContext(),
+      now: () => moments[Math.min(moment++, moments.length - 1)]!,
+      attemptTelemetry: { repository: telemetry, cycleId, settle: usage.settleObservedAttempt.bind(usage) },
+      fetchImplementation: (async () => { fetches += 1; return new Response(); }) as typeof fetch,
+    }), /accounting window changed/);
+
+    assert.equal(fetches, 0);
+    const usageRecord = (await usage.getUsageData()).records.at(-1);
+    const attempt = (await new D1MonitoringTelemetry(d1).readCycle(cycleId))?.attempts.at(-1);
+    assert.equal(usageRecord?.accountingStatus, "confirmed_zero");
+    assert.deepEqual(
+      [attempt?.dispatchStatus, attempt?.failureClass, attempt?.accountingStatus, attempt?.settlementStatus],
+      ["not_dispatched", "none", "confirmed_zero", "settled"],
+    );
+    assert.equal(db.prepare("SELECT count(*) AS count FROM monitoring_gemini_attempts WHERE settlement_status='pending' OR accounting_status='reserved'").get().count, 0);
+  } finally { db.close(); }
+});
