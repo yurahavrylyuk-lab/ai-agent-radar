@@ -281,6 +281,13 @@ async function generateWithGeminiPolicy(
           failureClass: "none", httpStatus: null, accountingError: false, observedAt: observedAt(),
         } }),
       );
+      const requireRetryDispatchReserve = async (): Promise<void> => {
+        if (batchContext && attempt > 1 && batchDeadlineStartedAt !== undefined &&
+          monotonicNow() - batchDeadlineStartedAt > batchCutoffMs - 10_000) {
+          batchContext.retrySkipReason = "budget";
+          await rejectBoundBeforeDispatch("Gemini batch retry was not dispatched because its finalization reserve was exhausted.");
+        }
+      };
       if (dependencies.attemptTelemetry && attemptRef) {
         try { await dependencies.attemptTelemetry.repository.bindAttempt(attemptRef, reservation); }
         catch {
@@ -299,10 +306,7 @@ async function generateWithGeminiPolicy(
         await rejectBoundBeforeDispatch("Gemini request was not dispatched because its accounting window changed after reservation.");
       }
 
-      if (batchContext && batchDeadlineStartedAt !== undefined && monotonicNow() - batchDeadlineStartedAt >= batchCutoffMs) {
-        batchContext.retrySkipReason = "budget";
-        await rejectBoundBeforeDispatch("Gemini batch retry was not dispatched because its overall deadline expired.");
-      }
+      await requireRetryDispatchReserve();
       const controller = new AbortController();
       const deadlineStartedAt = batchContext ? (batchDeadlineStartedAt ??= monotonicNow()) : monotonicNow();
       const providerDeadlineMs = batchContext ? batchCutoffMs : timeoutMs;
@@ -322,6 +326,7 @@ async function generateWithGeminiPolicy(
           throw new Error("Gemini request telemetry intent could not be recorded before provider dispatch.");
         }
       }
+      await requireRetryDispatchReserve();
       try {
         if (batchContext) batchContext.providerDispatches += 1;
         let responsePromise: Promise<Response> | undefined;
