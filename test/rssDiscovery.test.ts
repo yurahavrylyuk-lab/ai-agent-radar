@@ -23,7 +23,7 @@ function feed(overrides: Partial<RssFeedDefinition> = {}): RssFeedDefinition {
 test("RSS registry exposes only the four approved first-party feeds in fixed order", () => {
   assert.deepEqual(RSS_FEEDS, approvedFeeds);
   assert.deepEqual(RSS_LIMITS, {
-    feeds: 5, itemsPerFeed: 5, timeoutMs: 5000, bodyBytes: 262144,
+    feeds: 5, itemsPerFeed: 5, timeoutMs: 5000, bodyBytes: 1048576,
     depth: 32, elements: 10000, fieldBytes: 8192, titleBytes: 256,
     snippetBytes: 768, urlBytes: 2048, ageMs: 604800000,
   });
@@ -127,6 +127,195 @@ test("parser rejects unsafe or incomplete documents after retained positions", (
 });
 
 const healthyXml = `<rss version="2.0"><channel><title>F</title><item><title>One</title><link>https://example.com/news/one</link><pubDate>Thu, 16 Oct 2026 07:00:00 GMT</pubDate></item></channel></rss>`;
+
+const encoder = new TextEncoder();
+
+function paddedDocument(prefix: string, suffix: string, bytes: number): string {
+  const fixedBytes = encoder.encode(prefix + suffix).byteLength;
+  const remaining = bytes - fixedBytes;
+  assert.ok(remaining >= 11, `target ${bytes} is too small for bounded padding`);
+  const elements = Math.ceil(remaining / 4107);
+  let textBytes = remaining - elements * 11;
+  assert.ok(textBytes >= 0 && textBytes <= elements * 4096);
+  const padding: string[] = [];
+  for (let index = 0; index < elements; index += 1) {
+    const chunkBytes = Math.min(4096, textBytes);
+    padding.push(`<pad>${"x".repeat(chunkBytes)}</pad>`);
+    textBytes -= chunkBytes;
+  }
+  assert.equal(textBytes, 0);
+  const document = `${prefix}${padding.join("")}${suffix}`;
+  assert.equal(encoder.encode(document).byteLength, bytes);
+  return document;
+}
+
+function documentAtBytes(format: "rss" | "atom", bytes: number): string {
+  if (format === "rss") {
+    return paddedDocument(
+      `<?xml version="1.0"?><rss version="2.0"><channel><title>Fixture</title><item><title>Large RSS</title><link>https://example.com/news/large-rss</link><description>Bounded fixture</description><pubDate>Thu, 16 Oct 2026 07:00:00 GMT</pubDate></item>`,
+      `</channel></rss>`,
+      bytes,
+    );
+  }
+  return paddedDocument(
+    `<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom"><title>Fixture</title><entry><title>Large Atom</title><link rel="alternate" type="text/html" href="https://example.com/news/large-atom"/><summary>Bounded fixture</summary><updated>2026-10-16T07:00:00Z</updated></entry>`,
+    `</feed>`,
+    bytes,
+  );
+}
+
+function overflowingBody(onCancel: () => void | Promise<void>): ReadableStream<Uint8Array> {
+  const chunks = Array.from({ length: 16 }, () => new Uint8Array(65536).fill(0x78));
+  chunks.push(new Uint8Array([0x78]));
+  return new ReadableStream<Uint8Array>({
+    pull(controller) {
+      const chunk = chunks.shift();
+      if (chunk) {
+        controller.enqueue(chunk);
+        return;
+      }
+      return new Promise<void>(() => {});
+    },
+    cancel: onCancel,
+  });
+}
+
+test("collector accepts complete RSS and Atom documents through the inclusive one MiB boundary", async () => {
+  for (const format of ["rss", "atom"] as const) {
+    for (const bytes of [262145, 524288, 1048576]) {
+      const body = documentAtBytes(format, bytes);
+      assert.equal(encoder.encode(body).byteLength, bytes);
+      for (const declaredLength of [false, true]) {
+        const result = await collectRss({
+          now,
+          feeds: [rssFeed],
+          fetch: async () => new Response(body, { headers: {
+            "content-type": format === "rss" ? "application/rss+xml" : "application/atom+xml",
+            ...(declaredLength ? { "content-length": String(bytes) } : {}),
+          } }),
+        });
+        assert.deepEqual(result.metrics.outcomes.map(({ elapsedMs: _elapsedMs, ...outcome }) => outcome), [{ feedId: rssFeed.id, reason: "ok" }]);
+        assert.deepEqual(result.observations.map(observation => observation.result && {
+          title: observation.result.title,
+          url: observation.result.url,
+        }), [{
+          title: format === "rss" ? "Large RSS" : "Large Atom",
+          url: format === "rss" ? "https://example.com/news/large-rss" : "https://example.com/news/large-atom",
+        }]);
+      }
+    }
+  }
+});
+
+test("stream overflow cancels without blocking and remains isolated from a later feed", { timeout: 2000 }, async () => {
+  for (const contentLength of [undefined, "1"]) {
+    for (const cancellation of ["reject", "stall"] as const) {
+      let cancelled = false;
+      const calls: string[] = [];
+      const result = await collectRss({
+        now,
+        feeds: [
+          feed({ id: "overflow", endpoint: "https://example.com/overflow.xml" }),
+          feed({ id: "healthy", endpoint: "https://example.com/healthy.xml" }),
+        ],
+        fetch: async input => {
+          calls.push(String(input));
+          if (String(input).endsWith("/healthy.xml")) {
+            return new Response(healthyXml, { headers: { "content-type": "application/xml" } });
+          }
+          return new Response(overflowingBody(() => {
+            cancelled = true;
+            return cancellation === "reject"
+              ? Promise.reject(new Error("private cancellation failure"))
+              : new Promise<void>(() => {});
+          }), { headers: {
+            "content-type": "application/xml",
+            ...(contentLength === undefined ? {} : { "content-length": contentLength }),
+          } });
+        },
+      });
+      await new Promise<void>(resolve => setImmediate(resolve));
+      assert.equal(cancelled, true);
+      assert.deepEqual(calls, ["https://example.com/overflow.xml", "https://example.com/healthy.xml"]);
+      assert.deepEqual(result.metrics.outcomes.map(outcome => outcome.reason), ["body_limit", "ok"]);
+      assert.equal(result.metrics.succeededFeeds, 1);
+      assert.equal(result.metrics.failedFeeds, 1);
+      assert.equal(result.observations.length, 1);
+      assert.equal(result.observations[0]?.provenance.feedId, "healthy");
+    }
+  }
+});
+
+test("oversized or malformed declared lengths reject before body consumption while the exact limit proceeds", async () => {
+  for (const declaredLength of ["1048577", "invalid", "-1", "1.5", ""]) {
+    let bodyReads = 0;
+    const feeds = [
+      feed({ id: "declared", endpoint: "https://example.com/declared.xml" }),
+      feed({ id: "healthy", endpoint: "https://example.com/healthy.xml" }),
+    ];
+    const result = await collectRss({ now, feeds, fetch: async input => {
+      if (String(input).endsWith("/healthy.xml")) return new Response(healthyXml, { headers: { "content-type": "application/xml" } });
+      return {
+        status: 200,
+        ok: true,
+        redirected: false,
+        headers: new Headers({ "content-type": "application/xml", "content-length": declaredLength }),
+        body: { getReader() { bodyReads += 1; throw new Error("body must not be read"); } },
+      } as unknown as Response;
+    } });
+    assert.equal(bodyReads, 0);
+    assert.deepEqual(result.metrics.outcomes.map(outcome => outcome.reason), ["body_limit", "ok"]);
+    assert.equal(result.observations.length, 1);
+  }
+
+  const exact = documentAtBytes("rss", 1048576);
+  const exactResult = await collectRss({
+    now,
+    feeds: [rssFeed],
+    fetch: async () => new Response(exact, { headers: { "content-type": "application/xml", "content-length": "1048576" } }),
+  });
+  assert.equal(exactResult.metrics.outcomes[0]?.reason, "ok");
+  assert.equal(exactResult.observations.length, 1);
+});
+
+test("large valid first positions cannot escape malformed trailing XML or structural limits", async () => {
+  const fiveItems = Array.from({ length: 5 }, (_, index) => `<item><title>Item ${index}</title><link>https://example.com/news/${index}</link><pubDate>Thu, 16 Oct 2026 07:00:00 GMT</pubDate></item>`).join("");
+  const malformedTail = paddedDocument(
+    `<?xml version="1.0"?><rss version="2.0"><channel><title>Fixture</title>${fiveItems}`,
+    `<broken>`,
+    524288,
+  );
+  assert.ok(encoder.encode(malformedTail).byteLength > 262144);
+
+  const structuralDocuments = [
+    malformedTail,
+    `<rss version="2.0"><channel>${`<x>`.repeat(33)}${`</x>`.repeat(33)}</channel></rss>`,
+    `<rss version="2.0"><channel>${"<x/>".repeat(9999)}</channel></rss>`,
+    `<rss version="2.0"><channel><x>${"x".repeat(8193)}</x></channel></rss>`,
+    `<rss version="2.0"><channel><x value="${"x".repeat(8193)}"/></channel></rss>`,
+    `<!DOCTYPE rss [<!ENTITY external SYSTEM "https://example.com/private-entity">]><rss version="2.0"><channel><item><title>&external;</title><link>https://example.com/private-article</link><pubDate>Thu, 16 Oct 2026 07:00:00 GMT</pubDate></item></channel></rss>`,
+  ];
+  for (const xml of structuralDocuments) {
+    assert.ok(encoder.encode(xml).byteLength < 1048576);
+    assert.throws(() => parseRssFeed(xml, rssFeed, now));
+  }
+
+  const calls: string[] = [];
+  const result = await collectRss({
+    now,
+    feeds: [
+      feed({ id: "unsafe", endpoint: "https://example.com/unsafe.xml" }),
+      feed({ id: "healthy", endpoint: "https://example.com/healthy.xml" }),
+    ],
+    fetch: async input => {
+      calls.push(String(input));
+      return new Response(String(input).endsWith("/unsafe.xml") ? structuralDocuments.at(-1)! : healthyXml, { headers: { "content-type": "application/xml" } });
+    },
+  });
+  assert.deepEqual(calls, ["https://example.com/unsafe.xml", "https://example.com/healthy.xml"]);
+  assert.deepEqual(result.metrics.outcomes.map(outcome => outcome.reason), ["parse", "ok"]);
+  assert.equal(result.observations.length, 1);
+});
 
 test("collector fetches configured feeds sequentially once with hardened request options", async () => {
   const calls: Array<{ url: string; init?: RequestInit }> = [];

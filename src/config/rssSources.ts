@@ -17,7 +17,7 @@ export const RSS_LIMITS = Object.freeze({
   feeds: 5,
   itemsPerFeed: 5,
   timeoutMs: 5000,
-  bodyBytes: 262144,
+  bodyBytes: 1048576,
   depth: 32,
   elements: 10000,
   fieldBytes: 8192,
