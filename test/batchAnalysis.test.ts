@@ -15,7 +15,7 @@ function candidate(index: number): BatchCandidate {
 }
 
 function prepared(candidates = [1, 2, 3, 4, 5].map(candidate)): PreparedBatch {
-  return { prompt: "Application-prepared prompt", candidates, promptBytes: 27, sizeExcluded: 0, truncationStage: "initial" };
+  return { prompt: "Application-prepared prompt", candidates, promptBytes: 27, sizeExcluded: 0, truncationStage: "initial", snippetBytesLimit: 192 };
 }
 
 function story(candidateId = "c001", relevanceScore = 8) {
@@ -144,6 +144,15 @@ test("rejects unknown, known-but-not-submitted and size-excluded IDs", () => {
   for (const candidateId of ["c050", "c004", "c003"]) {
     rejects(envelope([story(candidateId)]), { ...prepared([candidate(1), candidate(2)]), sizeExcluded: 1, truncationStage: "tail" });
   }
+});
+test("excluded ID is rejected while an accepted ID binds to the full original source", () => {
+  const submitted = candidate(1);
+  const batch = prepared([submitted]);
+  rejects(envelope([story("c002")]), { ...batch, sizeExcluded: 1, truncationStage: "tail" });
+  const parsed = batchAgent.parseBatchAnalysis(JSON.stringify(envelope([story("c001")])), batch);
+  assert.equal(parsed.selections[0].candidate, submitted);
+  assert.equal(parsed.selections[0].analysis.sourceUrl, submitted.source.url);
+  assert.equal(parsed.selections[0].analysis.sourceTitle, submitted.source.title);
 });
 test("rejects noncanonical candidate IDs even if present in the submitted map", () => {
   for (const candidateId of ["c000", "c051", "c1", " c001", "c001 "]) {

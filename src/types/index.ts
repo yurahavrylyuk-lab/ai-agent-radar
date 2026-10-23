@@ -31,7 +31,7 @@ export interface BatchCandidate {
   provenance: DiscoveryProvenance[];
 }
 
-export type BatchTruncationStage = "initial" | "snippet384" | "snippet192" | "snippet96" | "snippet0" | "title128" | "tail";
+export type BatchTruncationStage = "initial" | "snippet384" | "snippet192" | "snippet128" | "snippet96" | "snippet0" | "title128" | "tail";
 
 export interface PreparedBatch {
   prompt: string;
@@ -40,6 +40,7 @@ export interface PreparedBatch {
   promptBytes: number;
   sizeExcluded: number;
   truncationStage: BatchTruncationStage;
+  snippetBytesLimit: 192 | 128 | 96 | 0;
 }
 
 export interface CandidatePool {
