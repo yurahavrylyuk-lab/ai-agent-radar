@@ -6,6 +6,7 @@ import { NotificationHistoryError, type NotificationHistory } from "./notificati
 import { createDailyEmailContext, finalizeDailyDigest, prepareDailyDigest, notifyDeliveryDigest, type DigestDeliveryResult, type NotificationOrchestratorDependencies } from "./notificationOrchestrator.js";
 import { batchAliasKey, isBatchNewsUrl, prepareBatchCandidates } from "./batchCandidates.js";
 import { prepareBatchPrompt } from "./batchPrompt.js";
+import { selectGeminiCandidates } from "./batchCandidateSelection.js";
 import { BatchAnalysisError } from "./analysisAgent.js";
 import { recordBatchSelection } from "./discoveryProcessor.js";
 import { type GeminiAvailability, type GeminiBlockedReason } from "./geminiUsageGuard.js";
@@ -84,6 +85,10 @@ function cycleSnapshot(result: MonitoringCycleResult): CycleSnapshotV1 {
       ambiguous: attempts.filter(attempt => attempt.accountingOutcome === "transport_ambiguous").length,
       unavailable: false,
     },
+    ...(batch?.latency === undefined ? {} : { latency: {
+      ...batch.latency,
+      attemptTimings: batch.latency.attemptTimings.map(timing => ({ ...timing })),
+    } }),
   };
 }
 
@@ -288,9 +293,23 @@ async function runBatchMonitoringCycleInternal(dependencies: BatchMonitoringDepe
   const fresh: BatchDeliveryCandidate[] = [];
   let selectionPersistenceFailed = false;
   let prepared: PreparedBatch | undefined;
+  const selection = selectGeminiCandidates(pool.candidates);
+  batch.latency = {
+    version: 1,
+    preFilterInputCount: selection.preFilterInputCount,
+    selectedCount: selection.candidates.length,
+    selectorExcluded: selection.selectorExcluded,
+    byteExcluded: null,
+    submittedCount: null,
+    promptBytes: null,
+    snippetBytesLimit: null,
+    thinkingMode: "low",
+    executionMode: "synchronous",
+    attemptTimings: [],
+  };
   if (pool.candidates.length > 0) {
     try {
-      prepared = prepareBatchPrompt(pool.candidates);
+      prepared = prepareBatchPrompt(selection.candidates);
       batch.sizeExcluded = prepared.sizeExcluded;
       batch.submittedCandidates = prepared.candidates.length;
       batch.submittedBySource = {
@@ -299,6 +318,12 @@ async function runBatchMonitoringCycleInternal(dependencies: BatchMonitoringDepe
       };
       batch.promptBytes = prepared.promptBytes;
       batch.truncationStage = prepared.truncationStage;
+      Object.assign(batch.latency, {
+        byteExcluded: prepared.sizeExcluded,
+        submittedCount: prepared.candidates.length,
+        promptBytes: prepared.promptBytes,
+        snippetBytesLimit: prepared.snippetBytesLimit,
+      });
     } catch (error) {
       batch.status = "preparation_failed";
       result.failures += 1;
@@ -383,6 +408,7 @@ async function runBatchMonitoringCycleInternal(dependencies: BatchMonitoringDepe
   batch.retryEligible = geminiCycleContext.retryEligible;
   batch.retryAttempted = geminiCycleContext.retryAttempted;
   batch.retrySkipReason = geminiCycleContext.retrySkipReason;
+  if (batch.latency) batch.latency.attemptTimings = geminiCycleContext.attemptTimings.map(timing => ({ ...timing }));
   result.geminiProviderAttempts = geminiCycleContext.providerDispatches;
   result.geminiRequestsByModel["gemini-3.8-flash"] = geminiCycleContext.providerDispatches;
   if (dependencies.onTelemetryCheckpoint) {
