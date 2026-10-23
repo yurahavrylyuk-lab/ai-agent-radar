@@ -1,8 +1,20 @@
 # AI Agent Radar — Backlog
 
+## 2026-10-23 — RSS BODY_LIMIT reliability implementation
+
+**RSS BODY_LIMIT RELIABILITY = IMPLEMENTED / OFFLINE-TESTED / AWAITING INDEPENDENT REVIEW.** The feature branch changes only global RSS `bodyBytes` from `262144` to `1048576`; complete-document XML validation, sequential feeds, and every other acquisition/parser limit remain unchanged. Production remains on the deployed `262144`-byte source until a later explicit release approval.
+
+[Design amendment](docs/superpowers/specs/2026-10-23-rss-body-limit-reliability-design.md) and [TDD plan](docs/superpowers/plans/2026-10-23-rss-body-limit-reliability.md) are implemented with exact-boundary, streaming, cancellation, full-document, structure, and isolation tests plus a local Workerd sequential safety gate. Focused Node RSS tests passed 23/23; focused RSS/Batch/Worker tests passed 82/82; the full suite passed 713/713; build, Worker typecheck, Workerd, and Wrangler dry-run gates passed. No new migration.
+
+Local docs-only main baseline353c718a146252be47a2d6fbf926fdfbf3e81598 is preserved as the parent of branch codex/rss-body-limit-reliability. Production remains source223a1b90b9d64483b47717bd02a9d9c334fd3e0d, Worker b8f02106-f558-43a2-a428-529b2051512f, deployment44a6b945-07ba-4154-877a-433949ce4e5f. **Gemini Latency Reliability = DEPLOYED / AWAITING NATURAL PRODUCTION VALIDATION.**
+
+**Release hold:** no RSS deployment2026-10-23. First validate2026-10-24 natural Cron from exact deployed Gemini-only source223a1b90b9d64483b47717bd02a9d9c334fd3e0d; a later separate explicit human approval is required to deploy RSS. Building/testing/review and later authorized push/merge may precede that gate; merge alone is not deployment approval. Future Cron has not been claimed as completed.
+
+Implementation and offline verification only; no feed/provider call, D1/migration action, push, PR, merge or deployment. Protected untracked design remains byte-identical and excluded. Permanent Backlog/Plan Actualization Checkpoint remains in force. Older entries below retain their historical context.
+
 ## Current authority — 2026-10-23
 
-Production/main `4eb3cf049f222b1193d827b94b93f88196b03880`; Worker `04ffb752-0e5e-4e15-be37-26af010fa503`; deployment `309f3faf-72b7-4c09-bbd1-ad839efa2155`; production D1 `9fb545e2-2f43-4922-8b21-2d79a8de9556`. These are verified facts supplied by the human 2026-10-23 handoff, not a live production query by this task. Local main matches the supplied source.
+Production source `223a1b90b9d64483b47717bd02a9d9c334fd3e0d`; Worker `b8f02106-f558-43a2-a428-529b2051512f`; deployment `44a6b945-07ba-4154-877a-433949ce4e5f` created `2026-10-23T18:01:16.307406Z`; production D1 `9fb545e2-2f43-4922-8b21-2d79a8de9556`. Wrangler deployment metadata and the health endpoint were verified after release. Traffic is 100%, Cron remains `0 8 * * *`, and health returned `AI Agent Radar worker ready`.
 
 Daily email guarantee, durable cycle telemetry, durable attempt telemetry and degraded email redesign are **COMPLETED / NATURALLY VALIDATED** (styling is deployed). Gemini Reliability V2 is **DEPLOYED / PARTIALLY NATURALLY VALIDATED**: timeout/accounting/fallback paths exercised, deployed 503 retry path not naturally exercised. Migration `0008_monitoring_cycle_observability.sql` is **APPLIED**; `0004_x_discovery.sql` remains intentionally **UNAPPLIED**, X disabled.
 
@@ -26,9 +38,9 @@ Natural cycle scheduled `2026-10-23T08:00:49.466Z`, completed `2026-10-23T08:03:
 
 ## Scope and completion criteria
 
-1. **IMPLEMENTED / TESTED / AWAITING INDEPENDENT REVIEW:** approved [optimized synchronous Gemini](docs/superpowers/specs/2026-10-23-gemini-latency-reliability-design.md): deterministic max 24 selected candidates, <=12 KiB compact prompt, scheduled low thinking, and bounded latency telemetry. V2 accounting, the full raw fallback pool, alias evidence, replay and one-email finalization remain unchanged. No deployment or natural production validation has occurred.
-2. **TODO after approved release:** 3–5 natural Cron cycles measuring completion/timeout rate, latency, payload, quality, accounting and one email; no manual cycles.
-3. **TODO:** smallest bounded OpenAI/Cloudflare RSS body_limit fix; no blind limit increase.
+1. **DEPLOYED / AWAITING NATURAL PRODUCTION VALIDATION:** approved [optimized synchronous Gemini](docs/superpowers/specs/2026-10-23-gemini-latency-reliability-design.md): deterministic max 24 selected candidates, <=12 KiB compact prompt, scheduled low thinking, and bounded latency telemetry. V2 accounting, the full raw fallback pool, alias evidence, replay and one-email finalization remain unchanged. Deployment alone does not prove latency or success-rate improvement.
+2. **ACTIVE NEXT VALIDATION:** observe 3 eligible natural Cron cycles, extending to at most 5 scheduled cycles if evidence remains inconclusive. Measure completion/timeout rate, latency, payload, quality, accounting and one email; no manual cycles.
+3. **IMPLEMENTED / OFFLINE-TESTED / AWAITING INDEPENDENT REVIEW:** global RSS body cap raised from 256 KiB to 1 MiB with all existing structural, timeout, streaming, isolation, and no-secondary-fetch safeguards retained. Not deployed or naturally validated.
 4. **TODO:** official Meta API only, shared source pool, no per-source Gemini request.
 5. **TODO:** natural combined-source proof after Threads release.
 6. **DEFERRED:** idempotent email and ambiguous-send recovery; do not claim current send-before-history ambiguity is solved.
