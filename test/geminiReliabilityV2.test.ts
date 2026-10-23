@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createGeminiBatchCycleContext, generateBatchWithGemini, GEMINI_BATCH_CUTOFF_MS, MAX_GEMINI_BATCH_DISPATCHES } from "../src/tools/llm/gemini.js";
+import { createGeminiBatchCycleContext, generateBatchWithGemini, generateWithGemini, GEMINI_BATCH_CUTOFF_MS, MAX_GEMINI_BATCH_DISPATCHES } from "../src/tools/llm/gemini.js";
 import type { ApprovedGeminiModel } from "../src/config/geminiModels.js";
 import type { GeminiAmbiguityReason, GeminiUsageAdmission, GeminiUsageData, GeminiUsageRecord, GeminiUsageReservation, GeminiUsageSettlement, GeminiUsageStore } from "../src/services/geminiUsageTracker.js";
 
@@ -18,6 +18,11 @@ class Tracker implements GeminiUsageStore {
 const environment={GEMINI_API_KEY:"test",GEMINI_DAILY_REQUEST_LIMIT:"100",GEMINI_WEEKLY_REQUEST_LIMIT:"100",GEMINI_MONTHLY_REQUEST_LIMIT:"100",GEMINI_DAILY_TOKEN_LIMIT:"100000",GEMINI_WEEKLY_TOKEN_LIMIT:"100000",GEMINI_MONTHLY_TOKEN_LIMIT:"100000"};
 const unavailable=()=>new Response(JSON.stringify({error:{status:"UNAVAILABLE"}}),{status:503,statusText:"Service Unavailable"});
 const quota=()=>new Response(JSON.stringify({error:{status:"RESOURCE_EXHAUSTED",details:[{"@type":"type.googleapis.com/google.rpc.QuotaFailure",violations:[{quotaMetric:"requests",quotaDimensions:{model:"gemini-3.8-flash"}}]}]}}),{status:429,statusText:"Too Many Requests"});
+const success=()=>new Response(JSON.stringify({output_text:"ok",usage:{total_input_tokens:1,total_output_tokens:1,total_tokens:2}}),{status:200});
+
+test("scheduled_request_uses_only_low_thinking on every 503 attempt",async()=>{const tracker=new Tracker();const context=createGeminiBatchCycleContext();const bodies:unknown[]=[];await assert.rejects(generateBatchWithGemini("original prompt",{usageTracker:tracker,environment,cycleContext:context,sleep:async()=>{},random:()=>0,fetchImplementation:(async(_input,init)=>{bodies.push(JSON.parse(String(init?.body)));return unavailable();}) as typeof fetch}),/HTTP 503/);assert.equal(bodies.length,3);for(const body of bodies)assert.deepEqual(body,{model:"gemini-3.8-flash",input:"original prompt",generation_config:{thinking_level:"low"}});});
+
+test("legacy_request_shape_unchanged",async()=>{const tracker=new Tracker();let body:unknown;await generateWithGemini("legacy prompt",{usageTracker:tracker,environment,fetchImplementation:(async(_input,init)=>{body=JSON.parse(String(init?.body));return success();}) as typeof fetch});assert.deepEqual(body,{model:"gemini-3.8-flash",input:"legacy prompt"});});
 
 test("three_503_dispatches_and_no_fourth",async()=>{const tracker=new Tracker();const context=createGeminiBatchCycleContext();let calls=0;await assert.rejects(generateBatchWithGemini("batch",{usageTracker:tracker,environment,cycleContext:context,sleep:async()=>{},random:()=>0,fetchImplementation:(async()=>{calls++;return unavailable();}) as typeof fetch}),/HTTP 503/);assert.equal(MAX_GEMINI_BATCH_DISPATCHES,3);assert.equal(calls,3);assert.equal(context.providerDispatches,3);assert.deepEqual(tracker.data.records.map(record=>[record.id,record.accountingStatus,record.requestCount]),[[1,"confirmed_zero",1],[2,"confirmed_zero",1],[3,"confirmed_zero",1]]);assert.deepEqual(context.attempts.map(item=>item.ordinal),[1,2,3]);});
 

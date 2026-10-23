@@ -335,7 +335,9 @@ async function generateWithGeminiPolicy(
           responsePromise = fetchImplementation(GEMINI_INTERACTIONS_URL, {
             method: "POST",
             headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
-            body: JSON.stringify({ model, input }),
+            body: JSON.stringify(batchContext
+              ? { model, input, generation_config: { thinking_level: "low" } }
+              : { model, input }),
             signal: controller.signal,
           });
         } catch (error) { synchronousDispatchError = error; }
