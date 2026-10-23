@@ -16,6 +16,24 @@ export interface CycleDeliverySnapshot {
   historyOutcome: "not_required" | "recorded" | "unavailable" | "persistence_failed";
   finalizationReached: boolean;
 }
+export interface GeminiAttemptTiming {
+  ordinal: 1 | 2 | 3;
+  requestStartedAt: string | null;
+  elapsedMs: number | null;
+}
+export interface CycleLatencyV1 {
+  version: 1;
+  preFilterInputCount: number | null;
+  selectedCount: number | null;
+  selectorExcluded: number | null;
+  byteExcluded: number | null;
+  submittedCount: number | null;
+  promptBytes: number | null;
+  snippetBytesLimit: 192 | 128 | 96 | 0 | null;
+  thinkingMode: "low" | null;
+  executionMode: "synchronous" | null;
+  attemptTimings: GeminiAttemptTiming[];
+}
 export interface CycleSnapshotV1 {
   version: 1;
   braveHealth: BraveDiscoverySourceHealth | null;
@@ -25,6 +43,7 @@ export interface CycleSnapshotV1 {
   geminiDispatchCount: number | null;
   delivery: CycleDeliverySnapshot | null;
   accounting: { reserved: number; exact: number; confirmedZero: number; ambiguous: number; unavailable: boolean };
+  latency?: CycleLatencyV1;
 }
 export interface AttemptEvidence { failureClass: GeminiFailureClass; httpStatus: number | null; accountingError: boolean; observedAt: string; }
 export type AttemptSettlement =
@@ -61,6 +80,10 @@ const exactKeys = (value: Record<string, unknown>, keys: readonly string[]) => {
 const isObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 const count = (value: unknown, max: number, nullable = false): boolean => (nullable && value === null) || (Number.isSafeInteger(value) && (value as number) >= 0 && (value as number) <= max);
 const member = <T extends string>(value: unknown, values: readonly T[]): value is T => typeof value === "string" && values.includes(value as T);
+const validUtcInstant = (value: string): boolean => {
+  if (!isoUtc.test(value)) return false;
+  try { return new Date(value).toISOString() === value; } catch { return false; }
+};
 
 export function validateCycleStart(value: unknown): CycleStart {
   if (!isObject(value) || !exactKeys(value, ["cycleId", "scheduledAt", "startedAt", "sourceSha", "workerVersion"]) ||
@@ -82,8 +105,36 @@ function validDelivery(value: unknown): value is CycleDeliverySnapshot {
     member(value.historyOutcome, ["not_required", "recorded", "unavailable", "persistence_failed"]) && typeof value.finalizationReached === "boolean";
 }
 
+function validLatency(value: unknown): value is CycleLatencyV1 {
+  if (!isObject(value) || !exactKeys(value, ["version", "preFilterInputCount", "selectedCount", "selectorExcluded", "byteExcluded", "submittedCount", "promptBytes", "snippetBytesLimit", "thinkingMode", "executionMode", "attemptTimings"]) ||
+    value.version !== 1 || !count(value.preFilterInputCount, 50, true) || !count(value.selectedCount, 24, true) ||
+    !count(value.selectorExcluded, 50, true) || !count(value.byteExcluded, 24, true) || !count(value.submittedCount, 24, true) ||
+    !count(value.promptBytes, 12_288, true) || !(value.snippetBytesLimit === null || [192, 128, 96, 0].includes(value.snippetBytesLimit as number)) ||
+    !(value.thinkingMode === null || value.thinkingMode === "low") ||
+    !(value.executionMode === null || value.executionMode === "synchronous") || !Array.isArray(value.attemptTimings) || value.attemptTimings.length > 3) return false;
+  let priorOrdinal = 0;
+  for (const timing of value.attemptTimings) {
+    if (!isObject(timing) || !exactKeys(timing, ["ordinal", "requestStartedAt", "elapsedMs"]) ||
+      ![1, 2, 3].includes(timing.ordinal as number) || (timing.ordinal as number) <= priorOrdinal ||
+      !(timing.requestStartedAt === null || (typeof timing.requestStartedAt === "string" && validUtcInstant(timing.requestStartedAt))) ||
+      !count(timing.elapsedMs, 180_000, true)) return false;
+    priorOrdinal = timing.ordinal as number;
+  }
+  const preFilterInputCount = value.preFilterInputCount as number | null;
+  const selectedCount = value.selectedCount as number | null;
+  const selectorExcluded = value.selectorExcluded as number | null;
+  const submittedCount = value.submittedCount as number | null;
+  const byteExcluded = value.byteExcluded as number | null;
+  if (preFilterInputCount !== null && selectedCount !== null && selectorExcluded !== null &&
+    selectedCount + selectorExcluded !== preFilterInputCount) return false;
+  if (selectedCount !== null && submittedCount !== null && byteExcluded !== null &&
+    submittedCount + byteExcluded !== selectedCount) return false;
+  return true;
+}
+
 export function validateCycleSnapshot(value: unknown): CycleSnapshotV1 {
-  if (!isObject(value) || !exactKeys(value, ["version", "braveHealth", "rssHealth", "outage", "candidateCounts", "geminiDispatchCount", "delivery", "accounting"]) || value.version !== 1 ||
+  const keys = ["version", "braveHealth", "rssHealth", "outage", "candidateCounts", "geminiDispatchCount", "delivery", "accounting"];
+  if (!isObject(value) || !(exactKeys(value, keys) || exactKeys(value, [...keys, "latency"])) || value.version !== 1 ||
     !(value.braveHealth === null || member(value.braveHealth, ["healthy", "degraded", "unavailable", "quota_blocked"])) ||
     !(value.rssHealth === null || member(value.rssHealth, ["healthy", "degraded", "unavailable"])) ||
     !(value.outage === null || typeof value.outage === "boolean") || !isObject(value.candidateCounts) ||
@@ -92,7 +143,8 @@ export function validateCycleSnapshot(value: unknown): CycleSnapshotV1 {
     !count(value.geminiDispatchCount, 3, true) || !(value.delivery === null || validDelivery(value.delivery)) ||
     !isObject(value.accounting) || !exactKeys(value.accounting, ["reserved", "exact", "confirmedZero", "ambiguous", "unavailable"]) ||
     !count(value.accounting.reserved, 3) || !count(value.accounting.exact, 3) || !count(value.accounting.confirmedZero, 3) ||
-    !count(value.accounting.ambiguous, 3) || typeof value.accounting.unavailable !== "boolean") {
+    !count(value.accounting.ambiguous, 3) || typeof value.accounting.unavailable !== "boolean" ||
+    ("latency" in value && !validLatency(value.latency))) {
     throw new Error("Monitoring cycle snapshot is invalid.");
   }
   const encoded = JSON.stringify(value);

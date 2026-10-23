@@ -1,4 +1,5 @@
 import type { GeminiBlockedReason, GeminiTimeoutAccountingDiagnostic } from "../services/geminiUsageGuard.js";
+import type { CycleLatencyV1 } from "../services/monitoringTelemetry.js";
 
 export interface SearchResult {
   title: string;
@@ -300,6 +301,7 @@ export interface BatchCycleMetrics {
   retryEligible?: boolean;
   retryAttempted?: boolean;
   retrySkipReason?: GeminiBatchRetrySkipReason;
+  latency?: CycleLatencyV1;
 }
 
 export interface MonitoringCycleResult {
