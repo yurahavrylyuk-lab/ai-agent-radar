@@ -1,16 +1,16 @@
 # AI Agent Radar — Architecture and roadmap
 
-## 2026-10-23 — RSS BODY_LIMIT reliability design and plan
+## 2026-10-23 — RSS BODY_LIMIT reliability implementation
 
-**RSS BODY_LIMIT RELIABILITY = DESIGNED / PLANNED / NOT IMPLEMENTED YET.** Human-approved bounded target: global RSS bodyBytes262144→1048576 only; complete-document XML validation, sequential feeds and every other acquisition/parser limit remain unchanged. Current runtime remains262144 bytes.
+**RSS BODY_LIMIT RELIABILITY = IMPLEMENTED / OFFLINE-TESTED / AWAITING INDEPENDENT REVIEW.** The feature branch changes only global RSS `bodyBytes` from `262144` to `1048576`; complete-document XML validation, sequential feeds, and every other acquisition/parser limit remain unchanged. Production remains on the deployed `262144`-byte source until a later explicit release approval.
 
-[Design amendment](docs/superpowers/specs/2026-10-23-rss-body-limit-reliability-design.md) and [TDD plan](docs/superpowers/plans/2026-10-23-rss-body-limit-reliability.md) define size/stream/cancellation/full-document/structure/isolation tests and a local Workerd safety gate. No new migration.
+[Design amendment](docs/superpowers/specs/2026-10-23-rss-body-limit-reliability-design.md) and [TDD plan](docs/superpowers/plans/2026-10-23-rss-body-limit-reliability.md) are implemented with exact-boundary, streaming, cancellation, full-document, structure, and isolation tests plus a local Workerd sequential safety gate. Focused Node RSS tests passed 23/23; focused RSS/Batch/Worker tests passed 82/82; the full suite passed 713/713; build, Worker typecheck, Workerd, and Wrangler dry-run gates passed. No new migration.
 
 Local docs-only main baseline353c718a146252be47a2d6fbf926fdfbf3e81598 is preserved as the parent of branch codex/rss-body-limit-reliability. Production remains source223a1b90b9d64483b47717bd02a9d9c334fd3e0d, Worker b8f02106-f558-43a2-a428-529b2051512f, deployment44a6b945-07ba-4154-877a-433949ce4e5f. **Gemini Latency Reliability = DEPLOYED / AWAITING NATURAL PRODUCTION VALIDATION.**
 
 **Release hold:** no RSS deployment2026-10-23. First validate2026-10-24 natural Cron from exact deployed Gemini-only source223a1b90b9d64483b47717bd02a9d9c334fd3e0d; a later separate explicit human approval is required to deploy RSS. Building/testing/review and later authorized push/merge may precede that gate; merge alone is not deployment approval. Future Cron has not been claimed as completed.
 
-Documentation-only work; no runtime edit, test execution, feed/provider call, D1/migration action, push, PR, merge or deployment. Protected untracked design remains byte-identical and excluded. Permanent Backlog/Plan Actualization Checkpoint remains in force. Older entries below retain their historical context.
+Implementation and offline verification only; no feed/provider call, D1/migration action, push, PR, merge or deployment. Protected untracked design remains byte-identical and excluded. Permanent Backlog/Plan Actualization Checkpoint remains in force. Older entries below retain their historical context.
 
 ## Current authority — 2026-10-23
 
@@ -29,6 +29,8 @@ V2 is production authority: same-model unavailable_503 plus durable confirmed_ze
 Analyzed Batch selections support scores1–10, label below7 `It could be relevant`; raw fallback has no invented score/analysis. Replay, notification dedupe and one-email guard stay unchanged. No promise of exactly-once delivery across provider acceptance/history ambiguity or platform termination.
 
 ## Active architecture phase
+
+RSS BODY_LIMIT reliability is implemented and offline-tested on `codex/rss-body-limit-reliability`, awaiting independent review. The feature branch raises only the source-controlled global streamed-body cap to 1 MiB; feed count/order, five-item extraction, five-second timeout, structural limits, complete-document validation, sequential isolation, and no-secondary-fetch behavior remain unchanged. Local Workerd evidence covered three exact-limit tree-heavy successes around one streamed overflow with one active flow maximum. This feature is not deployed or naturally validated.
 
 Gemini latency reliability is **DEPLOYED / AWAITING NATURAL PRODUCTION VALIDATION** at source `223a1b90b9d64483b47717bd02a9d9c334fd3e0d`. The approved [latency design](docs/superpowers/specs/2026-10-23-gemini-latency-reliability-design.md) has a deterministic max-24 analysis subset after unchanged discovery/history, a <=12 KiB compact prompt, and `generation_config.thinking_level=low` on the existing synchronous Interactions path. Round-robin query/feed queues use a 3:1 Brave/RSS slot pattern and a soft two-per-host cap; the full original pool and aliases remain available for degraded fallback and notification evidence. Background execution and model fallback remain deferred. Acquisition, the current 75s cutoff, all V2 accounting protections, replay and one-email finalization are unchanged. Applied 0008 JSON accepts a bounded optional latency extension through compatible readers; no migration was added. Natural validation is the next step: first 3 eligible dispatched cycles, at most 5 scheduled cycles initially; goals median successful Gemini<=45s and comparable total cycle<=110s are not SLAs. Deployment does not establish that the timeout is fixed or success rate improved.
 
