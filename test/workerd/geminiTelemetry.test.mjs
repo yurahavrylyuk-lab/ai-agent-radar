@@ -39,8 +39,24 @@ try {
   const firstPort = await unusedPort(); const first = start(firstPort); await first.ready;
   const result = await (await fetch(`http://127.0.0.1:${firstPort}/test`)).json();
   assert.equal(result.rollbackError, true, first.output.text);
-  assert.deepEqual(result.rolledBack, { usage: { value: "reserved" }, attempt: { value: "pending" } });
-  assert.deepEqual(result.settled, { usage: { value: "confirmed_zero" }, attempt: { value: "settled" } });
+  const expectedSnapshots = {
+    extended: {
+      version: 1, braveHealth: "healthy", rssHealth: "degraded", outage: false,
+      candidateCounts: { received: 60, unique: 41, submitted: 24 }, geminiDispatchCount: 1, delivery: null,
+      accounting: { reserved: 0, exact: 1, confirmedZero: 0, ambiguous: 0, unavailable: false },
+      latency: { version: 1, preFilterInputCount: 47, selectedCount: 24, selectorExcluded: 23, byteExcluded: 0,
+        submittedCount: 24, promptBytes: 11234, snippetBytesLimit: 192, thinkingMode: "low", executionMode: "synchronous",
+        attemptTimings: [{ ordinal: 1, requestStartedAt: "2026-10-23T08:00:02.125Z", elapsedMs: 75331 }] },
+    },
+    legacy: {
+      version: 1, braveHealth: "healthy", rssHealth: "degraded", outage: false,
+      candidateCounts: { received: 60, unique: 41, submitted: 24 }, geminiDispatchCount: 1, delivery: null,
+      accounting: { reserved: 0, exact: 1, confirmedZero: 0, ambiguous: 0, unavailable: false },
+    },
+  };
+  assert.deepEqual(result.rolledBack, { usage: { value: "reserved" }, attempt: { value: "pending" }, snapshots: expectedSnapshots });
+  assert.deepEqual(result.settled, { usage: { value: "confirmed_zero" }, attempt: { value: "settled" }, snapshots: expectedSnapshots });
+  assert.equal(result.oldStrictRejectsExtended, true);
   assert.deepEqual(result.changes, [1, 1]);
   assert.deepEqual(result.returned, [[{ id: 1 }], [{ id: 1 }]]);
   await stop(first.child);

@@ -3,7 +3,9 @@ import Database from "better-sqlite3";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { D1MonitoringTelemetry } from "../src/services/d1MonitoringTelemetry.js";
-import { serializeCycleSnapshot, validateCycleSnapshot, validateCycleStart } from "../src/services/monitoringTelemetry.js";
+import { parseCycleSnapshot, serializeCycleSnapshot, validateCycleSnapshot, validateCycleStart } from "../src/services/monitoringTelemetry.js";
+
+const encoder = new TextEncoder();
 
 const start = {
   cycleId: "6d46738d-d269-4f9a-9f8f-1f615340fea8",
@@ -24,6 +26,23 @@ const snapshot = {
   accounting: { reserved: 1, exact: 1, confirmedZero: 0, ambiguous: 0, unavailable: false },
 };
 
+const latency = {
+  version: 1 as const,
+  preFilterInputCount: 47,
+  selectedCount: 24,
+  selectorExcluded: 23,
+  byteExcluded: 1,
+  submittedCount: 23,
+  promptBytes: 11_234,
+  snippetBytesLimit: 128 as const,
+  thinkingMode: "low" as const,
+  executionMode: "synchronous" as const,
+  attemptTimings: [
+    { ordinal: 1 as const, requestStartedAt: "2026-10-22T08:00:02.125Z", elapsedMs: 75_331 },
+    { ordinal: 2 as const, requestStartedAt: null, elapsedMs: null },
+  ],
+};
+
 test("cycle start accepts trusted null release metadata and rejects malformed identity", () => {
   assert.deepEqual(validateCycleStart(start), start);
   assert.throws(() => validateCycleStart({ ...start, cycleId: "not-uuid" }), /cycle start/i);
@@ -39,6 +58,42 @@ test("cycle snapshot is exact, bounded, and free of arbitrary provider text", ()
   assert.throws(() => validateCycleSnapshot({ ...snapshot, geminiDispatchCount: 4 }), /snapshot/i);
   assert.throws(() => validateCycleSnapshot({ ...snapshot, providerMessage: "UNIQUE_PRIVATE_PROVIDER_TEXT" }), /snapshot/i);
   assert.throws(() => serializeCycleSnapshot({ ...snapshot, delivery: { arbitrary: "x".repeat(9000) } } as never), /snapshot/i);
+});
+
+test("reads legacy and bounded latency snapshots without rewriting legacy shape", () => {
+  const legacyJson = JSON.stringify(snapshot);
+  assert.deepEqual(parseCycleSnapshot(legacyJson), snapshot);
+  assert.equal(serializeCycleSnapshot(parseCycleSnapshot(legacyJson)), legacyJson);
+  assert.equal(parseCycleSnapshot(legacyJson).latency, undefined);
+
+  const extended = { ...snapshot, latency };
+  const serialized = serializeCycleSnapshot(extended);
+  assert.ok(encoder.encode(serialized).byteLength <= 8192);
+  assert.deepEqual(parseCycleSnapshot(serialized), extended);
+});
+
+test("rejects unknown, inconsistent, unbounded, or sensitive latency fields", () => {
+  const extended = { ...snapshot, latency };
+  for (const badLatency of [
+    { ...latency, prompt: "private prompt" },
+    { ...latency, body: "provider body" },
+    { ...latency, message: "provider message" },
+    { ...latency, headers: { authorization: "secret" } },
+    { ...latency, arbitrary: true },
+    { ...latency, preFilterInputCount: 51 },
+    { ...latency, selectedCount: 25 },
+    { ...latency, submittedCount: 25 },
+    { ...latency, promptBytes: 12_289 },
+    { ...latency, snippetBytesLimit: 64 },
+    { ...latency, thinkingMode: "high" },
+    { ...latency, executionMode: "background" },
+    { ...latency, selectorExcluded: 22 },
+    { ...latency, byteExcluded: 0 },
+    { ...latency, attemptTimings: [...latency.attemptTimings, { ordinal: 3, requestStartedAt: null, elapsedMs: null }, { ordinal: 3, requestStartedAt: null, elapsedMs: null }] },
+    { ...latency, attemptTimings: [{ ordinal: 2, requestStartedAt: null, elapsedMs: 180_001 }] },
+    { ...latency, attemptTimings: [{ ordinal: 2, requestStartedAt: "not-iso", elapsedMs: 1 }] },
+    { ...latency, attemptTimings: [{ ordinal: 2, requestStartedAt: "2026-99-23T08:00:02.125Z", elapsedMs: 1 }] },
+  ]) assert.throws(() => validateCycleSnapshot({ ...extended, latency: badLatency }), /snapshot/i);
 });
 
 test("delivery snapshot allowlists only bounded finalizer evidence", () => {

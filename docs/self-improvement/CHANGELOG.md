@@ -1,5 +1,25 @@
 # Self-improvement changelog
 
+## 2026-10-23 — Gemini latency reliability implementation
+
+- Added deterministic bounded candidate selection (maximum 24), compact prompt packing (maximum 12,288 bytes), and scheduled low-thinking Gemini input without changing the V2 provider/accounting state machine.
+- Preserved the complete discovery pool and alias evidence for degraded fallback, replay and no-resend protection; selector and byte exclusions are tracked separately.
+- Extended the existing 0008 cycle snapshot JSON compatibly with optional bounded latency evidence and added independently allowlisted scheduled serialization. No migration or configuration change was added.
+- Offline implementation only: focused integration 231/231 and focused acceptance 350/350 passed; final release gates are recorded with the acceptance commit. No production/provider/D1 action occurred.
+
+## 2026-10-23 — Production governance reconciliation before latency design
+
+Production/main `4eb3cf049f222b1193d827b94b93f88196b03880`; Worker `04ffb752-0e5e-4e15-be37-26af010fa503`; deployment `309f3faf-72b7-4c09-bbd1-ad839efa2155`; production D1 `9fb545e2-2f43-4922-8b21-2d79a8de9556`. These are verified facts supplied by the human 2026-10-23 handoff, not a live production query by this task. Local main matches the supplied source.
+
+Daily email guarantee, durable cycle telemetry, durable attempt telemetry and degraded email redesign are **COMPLETED / NATURALLY VALIDATED** (styling is deployed). Gemini Reliability V2 is **DEPLOYED / PARTIALLY NATURALLY VALIDATED**: timeout/accounting/fallback paths exercised, deployed 503 retry path not naturally exercised. Migration `0008_monitoring_cycle_observability.sql` is **APPLIED**; `0004_x_discovery.sql` remains intentionally **UNAPPLIED**, X disabled.
+
+Natural cycle scheduled `2026-10-23T08:00:49.466Z`, completed `2026-10-23T08:03:06.914Z`; reported runtime ~136.4s (scheduled-to-completed wall interval 137.448s; execution start was not supplied). Brave healthy, 10/10, 50 results; RSS degraded, 2/4 feeds succeeded; 60 raw observations, 47 submitted candidates, 24,303 prompt bytes. One gemini-3.8-flash dispatch lasted 75.331s, ended timeout/transport_ambiguous, correctly no retry. Polished degraded email: one attempt, accepted.
+
+- Reconciled five authoritative documents before latency design. Older entries below are historical evidence, not current release status. The measured timeout does not prove whether queueing, input, thinking or output generation dominated.
+- Designed optimized synchronous Gemini: max 24 analysis candidates, deterministic source/query/feed/host diversity, <=12 KiB compact prompt and documented low thinking. Full-pool fallback unchanged; background and second-model fallback deferred. Bounded optional 0008 JSON telemetry extension, no new migration;3–5 natural cycles for later validation. New 13-item roadmap recorded. Public official documentation was read; no inference/provider operation performed.
+- Documentation self-review/scoped whitespace and preservation checks only; runtime tests not run (docs-only). Design awaits human review; no implementation plan.
+- Architecture/docs only on codex/gemini-latency-reliability-design; no runtime, provider, D1, migration, secret, deployment, push or merge action.
+
 ## 2026-10-22 — Gemini Reliability V2 implementation ready for review
 
 - Implemented the approved closed V2 failure contract, durable D1 cycle/attempt telemetry, atomic accounting settlement, and bounded same-model retry policy: reviewed proven-zero 503 may reach three total dispatches; 429, timeout, ambiguity, malformed/semantic and accounting failures do not retry.
@@ -13,7 +33,7 @@
 - Architecture/docs only from main `0df2c2399c76b4c7c518119b6a8511a300ef9aee`, branch `codex/gemini-reliability-v2-design`. Added V2 spec; no implementation plan or runtime changes.
 - Human production handoff supersedes prior review-pending deployment status: Worker `6129de15-115c-4f61-9a3b-488d26baf301`, deployment `77fbd332-da4a-4862-9608-78cb963883f9`. Natural 2026-10-22 degraded email: four raw fresh stories, zero replay, one acceptance, no resend/crash. Daily delivery guarantee COMPLETED / NATURALLY VALIDATED.
 - Rows29/30 confirmed_zero with safe separate accounting prove deployed retry only partially: exact 429/503 is unknown, final summary not durable. Outage telemetry not fully naturally validated; low-score/timeout fallback not exercised.
-- Designed conservative closed classification, max3 only for proven-zero 503, bounded exponential jitter/shared time budget, additive D1 cycle/attempt evidence with atomic zero outcome and human migration gate. Current 429 evidence cannot prove a transient window. No quota changes.
+- Designed conservative closed classification, max 3 only for proven-zero 503, bounded exponential jitter/shared time budget, additive D1 cycle/attempt evidence with atomic zero outcome and human migration gate. Current 429 evidence cannot prove a transient window. No quota changes.
 - Priority2 reuses existing email design system and safely cleaned snippets. Rewrote exact ten-item roadmap and preserved/expanded the permanent five-document actualization checkpoint. Older entries below remain historical, not current release status.
 - Validation: scoped documentation consistency and whitespace checks; runtime tests not run (documentation-only). Unrelated untracked design preserved byte-identically. No monitoring, provider, D1, migration, deployment, push or merge. Design awaits human review before implementation planning.
 

@@ -77,7 +77,7 @@ function fixture() {
         result: { title: `Query ${searchCalls} result ${index + 1}`, url: `https://example.test/query${searchCalls}/story${index + 1}`, snippet: "Useful evidence" } })) };
     },
     geminiPreflight: async () => { events.push("admission"); return { allowed: true, counts, limits }; },
-    analyze: async batch => { analyzeCalls++; events.push("analysis"); return selection(batch, [49, 0, 1, 2]); },
+    analyze: async batch => { analyzeCalls++; events.push("analysis"); return selection(batch, [23, 0, 1, 2]); },
   };
   return { dependencies, discoveries, notifications, events, sent, history, notificationHistory, searchCalls: () => searchCalls, analyzeCalls: () => analyzeCalls };
 }
@@ -104,15 +104,20 @@ async function run(dependencies: monitor.BatchMonitoringDependencies) {
   return monitor.runBatchMonitoringCycle(dependencies);
 }
 
-test("all fifty observations reach one batch after all ten searches, including a selectable query10 story", async () => {
+test("all fifty observations reach one bounded analysis subset after all ten searches", async () => {
   const f = fixture();
+  const checkpoints: Array<{ phase: string; latency: unknown }> = [];
+  f.dependencies.onTelemetryCheckpoint = async (phase, snapshot) => {
+    checkpoints.push({ phase, latency: snapshot.latency });
+  };
   f.dependencies.analyze = async batch => {
     f.events.push("analysis");
-    assert.equal(batch.candidates.length, 50);
-    assert.equal(batch.candidates[49]?.source.url, "https://example.test/query10/story5");
+    assert.equal(batch.candidates.length, 24);
+    assert.equal(batch.candidates[9]?.source.url, "https://example.test/query10/story1");
     assert.ok(f.events.indexOf("rss") > f.events.lastIndexOf("search:10"));
     assert.ok(f.events.indexOf("admission") > f.events.indexOf("rss"));
-    return selection(batch, [49, 0, 1, 2]);
+    f.dependencies.geminiCycleContext.attemptTimings.push({ ordinal: 1, requestStartedAt: "2026-10-14T08:00:01.000Z", elapsedMs: 1234 });
+    return selection(batch, [9, 0, 1, 2]);
   };
   const result = await run(f.dependencies);
   assert.equal(f.searchCalls(), 10);
@@ -123,8 +128,53 @@ test("all fifty observations reach one batch after all ten searches, including a
   assert.equal(f.sent.length, 1);
   assert.equal(f.discoveries.size, 4);
   assert.ok(f.events.indexOf("send") > f.events.lastIndexOf("persist:https://example.test/query1/story3"));
-  assert.ok(f.sent[0]!.text.indexOf("Query 10 result 5") < f.sent[0]!.text.indexOf("Query 1 result 1"));
-  assert.equal(result.batch?.submittedCandidates, 50);
+  assert.ok(f.sent[0]!.text.indexOf("Query 10 result 1") < f.sent[0]!.text.indexOf("Query 1 result 1"));
+  assert.equal(result.batch?.submittedCandidates, 24);
+  assert.deepEqual(result.batch?.latency, {
+    version: 1, preFilterInputCount: 50, selectedCount: 24, selectorExcluded: 26,
+    byteExcluded: 0, submittedCount: 24, promptBytes: result.batch?.promptBytes ?? null,
+    snippetBytesLimit: 192, thinkingMode: "low", executionMode: "synchronous",
+    attemptTimings: [{ ordinal: 1, requestStartedAt: "2026-10-14T08:00:01.000Z", elapsedMs: 1234 }],
+  });
+  assert.deepEqual(checkpoints.map(checkpoint => checkpoint.phase), ["sources_complete", "gemini_complete"]);
+  assert.deepEqual((checkpoints[0]?.latency as { attemptTimings: unknown[] }).attemptTimings, []);
+  assert.deepEqual((checkpoints[1]?.latency as { attemptTimings: unknown[] }).attemptTimings, [
+    { ordinal: 1, requestStartedAt: "2026-10-14T08:00:01.000Z", elapsedMs: 1234 },
+  ]);
+});
+
+test("excluded_analysis_candidate_remains_in_raw_fallback", async () => {
+  const f = fixture();
+  let queryOrdinal = 0;
+  let analyzedIds: readonly string[] = [];
+  f.dependencies.searchPage = async () => {
+    queryOrdinal += 1;
+    const count = queryOrdinal === 10 ? 2 : 5;
+    return { rawCount: count, positions: Array.from({ length: count }, (_, index) => ({
+      resultOrdinal: index + 1,
+      result: { title: `Query ${queryOrdinal} result ${index + 1}`, url: `https://example.test/query${queryOrdinal}/story${index + 1}`, snippet: "Useful evidence" },
+    })) };
+  };
+  f.dependencies.analyze = async batch => {
+    analyzedIds = batch.candidates.map(candidate => candidate.candidateId);
+    assert.equal(batch.candidates.length, 24);
+    assert.equal(batch.candidates.some(candidate => candidate.source.url === "https://example.test/query1/story4"), false);
+    f.dependencies.geminiCycleContext.providerDispatches = 1;
+    throw new Error("terminal reviewed provider failure");
+  };
+
+  const result = await run(f.dependencies);
+  assert.equal(result.batch?.acceptedObservations, 47);
+  assert.equal(result.batch?.latency?.preFilterInputCount, 47);
+  assert.equal(result.batch?.latency?.selectedCount, 24);
+  assert.equal(result.batch?.latency?.selectorExcluded, 23);
+  assert.equal(analyzedIds.includes("c004"), false);
+  assert.equal(result.delivery?.deliveryMode, "degraded");
+  assert.equal(result.delivery?.rawStories, 4);
+  assert.equal(result.batch?.emailCount, 1);
+  assert.equal(f.sent.length, 1);
+  assert.match(f.sent[0]!.text, /Query 1 result 4/);
+  assert.equal(f.discoveries.size, 0, "raw fallback must not fabricate analyzed discoveries");
 });
 
 test("source checkpoint failure prevents Gemini but preserves one guarded degraded delivery", async () => {
@@ -390,13 +440,14 @@ test("known groups, prompt exclusions and truncation diagnostics describe the ac
     return { resultOrdinal: i + 1, result: { title: "title ".repeat(100), snippet: "snippet ".repeat(200), url: ordinal === 0 ? old.normalizedUrl : `https://example.test/${ordinal}/${"x".repeat(1800)}` } };
   }) });
   f.dependencies.analyze = async batch => {
-    assert.equal(batch.truncationStage, "tail"); assert.ok(batch.candidates.length < 49);
+    assert.equal(batch.truncationStage, "snippet128"); assert.equal(batch.candidates.length, 24);
     return { returnedCount: 0, selections: [] };
   };
   const result = await run(f.dependencies);
   assert.equal(result.batch?.acceptedObservations, 50); assert.equal(result.batch?.known, 1);
-  assert.equal(result.batch?.sizeExcluded! + result.batch?.submittedCandidates!, 49);
-  assert.equal(result.batch?.truncationStage, "tail"); assert.ok(result.batch!.promptBytes <= 32768);
+  assert.equal(result.batch?.sizeExcluded! + result.batch?.submittedCandidates!, 24);
+  assert.equal(result.batch?.latency?.selectorExcluded, 25);
+  assert.equal(result.batch?.truncationStage, "snippet128"); assert.ok(result.batch!.promptBytes <= 12_288);
 });
 
 test("quota cutoff stops later queries but analyzes already collected positions once", async () => {
@@ -412,11 +463,11 @@ test("non-quota partial failure preserves successes and later search positions",
   const f = fixture(); let calls = 0; const search = f.dependencies.searchPage;
   f.dependencies.searchPage = async (...args) => { calls++; if (calls === 2) throw new Error("temporary error"); return search(...args); };
   f.dependencies.analyze = async batch => {
-    assert.equal(batch.candidates.length, 45);
-    const provenance = batch.candidates[5]?.provenance[0];
+    assert.equal(batch.candidates.length, 24);
+    const provenance = batch.candidates[1]?.provenance[0];
     assert.equal(provenance?.kind, "brave");
     assert.equal(provenance?.kind === "brave" ? provenance.queryOrdinal : undefined, 3);
-    return selection(batch, [44]);
+    return selection(batch, [23]);
   };
   const result = await run(f.dependencies);
   assert.equal(calls, 10); assert.equal(result.searchFailures[0]?.queryOrdinal, 2); assert.equal(result.failures, 1); assert.equal(result.newDiscoveries, 1);
@@ -538,7 +589,7 @@ test("RF5 failed persistence and late-notified lead promote fresh stories and fi
   f.dependencies.analyze = async batch => selection(batch, [0, 1, 2]);
   const insert = f.history.recordDiscoveryWithOutcome!;
   f.history.recordDiscoveryWithOutcome = async (value, at) => {
-    if (value.sourceUrl.endsWith("story2")) throw new Error("write failed");
+    if (value.sourceUrl.endsWith("query2/story1")) throw new Error("write failed");
     return insert(value, at);
   };
   let leadReads = 0;
@@ -551,8 +602,8 @@ test("RF5 failed persistence and late-notified lead promote fresh stories and fi
   const result = await run(f.dependencies);
   assert.equal(result.analysesAttempted, 1); assert.equal(result.newDiscoveries, 2); assert.equal(result.failures, 1);
   assert.equal(f.sent.length, 1); assert.equal(result.freshStoriesSent, 1); assert.equal(result.replayStoriesSent, 1);
-  assert.ok(!f.sent[0]!.text.includes("Query 1 result 1")); assert.ok(!f.sent[0]!.text.includes("Query 1 result 2"));
-  assert.ok(f.sent[0]!.text.includes("Query 1 result 3")); assert.ok(f.sent[0]!.text.includes("replay"));
+  assert.ok(!f.sent[0]!.text.includes("Query 1 result 1")); assert.ok(!f.sent[0]!.text.includes("Query 2 result 1"));
+  assert.ok(f.sent[0]!.text.includes("Query 3 result 1")); assert.ok(f.sent[0]!.text.includes("replay"));
 });
 
 test("existing-row race outside immutable replay window is not a fresh delivery", async () => {
@@ -742,6 +793,7 @@ test("complete Worker D1 batch composition has one provider dispatch for four se
       RESEND_API_KEY: "offline-resend", NOTIFICATION_EMAIL: "offline@example.test", X_DISCOVERY_ENABLED: "false",
     };
     const requests: string[] = [];
+    const observedTimings: unknown[] = [];
     const originalFetch = globalThis.fetch;
     let sourceUrls: string[] = [];
     try {
@@ -760,9 +812,12 @@ test("complete Worker D1 batch composition has one provider dispatch for four se
           const body = JSON.parse(String(options?.body));
           assert.equal(body.model, "gemini-3.8-flash");
           const data = JSON.parse(body.input.slice(body.input.indexOf('\n\n{"schemaVersion"') + 2));
-          assert.equal(data.candidates.length, 50);
-          const selected = [data.candidates[49], data.candidates[0], data.candidates[1], data.candidates[2]];
-          sourceUrls = selected.map(candidate => candidate.url);
+          assert.equal(data.candidates.length, 24);
+          const selected = [data.candidates[23], data.candidates[0], data.candidates[1], data.candidates[2]];
+          sourceUrls = selected.map(candidate => {
+            const position = Number(candidate.candidateId.slice(1)) - 1;
+            return `https://example.test/q${Math.floor(position / 5) + 1}/story${position % 5 + 1}`;
+          });
           return new Response(JSON.stringify({ output_text: JSON.stringify({ schemaVersion: 1, stories: selected.map((candidate, index) => ({
             candidateId: candidate.candidateId, relevanceScore: [9, 8, 6, 5][index], category: "developer_tool", name: candidate.title,
             summary: "What changed", whyItMatters: "Practical use", educationalValue: "Learning", technologies: [], projectOpportunities: [],
@@ -771,12 +826,15 @@ test("complete Worker D1 batch composition has one provider dispatch for four se
         assert.equal(url.hostname, "api.resend.com");
         const email = JSON.parse(String(options?.body));
         assert.equal(email.subject, "AI Agent Radar — Daily Digest");
-        assert.ok(email.text.includes("Original query10 source5"));
+        assert.ok(email.text.includes("Original query4 source3"));
         assert.equal((email.text.match(/It could be relevant/g) ?? []).length, 2);
         assert.equal((email.html.match(/It could be relevant/g) ?? []).length, 2);
         return new Response(JSON.stringify({ id: "one-offline-email" }));
       };
-      const dependencies = createWorkerMonitoringDependencies(env, { collectRss: async () => emptyRss() });
+      const dependencies = createWorkerMonitoringDependencies(env, {
+        collectRss: async () => emptyRss(),
+        onAttemptTiming: async timing => { observedTimings.push({ ...timing }); },
+      });
       const result = await run(dependencies);
       assert.equal(result.failures, 0, JSON.stringify(result.outcomes.length ? result.outcomes : result.searchFailures));
       assert.deepEqual(requests, [...Array.from({ length: 10 }, () => "api.search.brave.com"), "generativelanguage.googleapis.com", "api.resend.com"]);
@@ -784,8 +842,10 @@ test("complete Worker D1 batch composition has one provider dispatch for four se
       assert.equal(result.newDiscoveries, 4); assert.equal(result.notificationsSent, 1); assert.equal(result.freshStoriesSent, 4);
       assert.equal(result.batch?.reservationAttempts, 1); assert.equal(result.batch?.reservations, 1); assert.equal(result.batch?.providerDispatches, 1);
       assert.equal(result.batch?.returnedStories, 4); assert.equal(result.batch?.acceptedStories, 4);
-      assert.deepEqual(result.batch?.selected.map(entry => entry.candidateId), ["c050", "c001", "c002", "c003"]);
-      assert.deepEqual(result.batch?.selected[0]?.provenance, [{ kind: "brave", queryOrdinal: 10, resultOrdinal: 5 }]);
+      assert.equal(observedTimings.length, 1);
+      assert.deepEqual(result.batch?.latency?.attemptTimings, observedTimings);
+      assert.deepEqual(result.batch?.selected.map(entry => entry.candidateId), ["c018", "c001", "c006", "c011"]);
+      assert.deepEqual(result.batch?.selected[0]?.provenance, [{ kind: "brave", queryOrdinal: 4, resultOrdinal: 3 }]);
       assert.equal(result.batch?.freshDelivered, 4); assert.equal(result.batch?.emailCount, 1);
       assert.deepEqual(database.prepare("SELECT normalized_url FROM discoveries ORDER BY normalized_url").all().map(row => row.normalized_url), [...sourceUrls].sort());
       assert.equal(database.prepare("SELECT COUNT(*) AS n FROM notifications").get()!.n, 4);

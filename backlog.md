@@ -1,61 +1,49 @@
 # AI Agent Radar — Backlog
 
-## Current authority — 2026-10-22
+## Current authority — 2026-10-23
 
-Current production/main source `0df2c2399c76b4c7c518119b6a8511a300ef9aee`, Worker `6129de15-115c-4f61-9a3b-488d26baf301`, deployment `77fbd332-da4a-4862-9608-78cb963883f9`, from the human-verified 2026-10-22 handoff. No live production query was performed by this architecture task.
+Production/main `4eb3cf049f222b1193d827b94b93f88196b03880`; Worker `04ffb752-0e5e-4e15-be37-26af010fa503`; deployment `309f3faf-72b7-4c09-bbd1-ad839efa2155`; production D1 `9fb545e2-2f43-4922-8b21-2d79a8de9556`. These are verified facts supplied by the human 2026-10-23 handoff, not a live production query by this task. Local main matches the supplied source.
 
-## Authoritative priority order
+Daily email guarantee, durable cycle telemetry, durable attempt telemetry and degraded email redesign are **COMPLETED / NATURALLY VALIDATED** (styling is deployed). Gemini Reliability V2 is **DEPLOYED / PARTIALLY NATURALLY VALIDATED**: timeout/accounting/fallback paths exercised, deployed 503 retry path not naturally exercised. Migration `0008_monitoring_cycle_observability.sql` is **APPLIED**; `0004_x_discovery.sql` remains intentionally **UNAPPLIED**, X disabled.
 
-1. **GEMINI RELIABILITY V2**
-2. **DEGRADED EMAIL VISUAL REDESIGN**
-3. **PRODUCTION VALIDATION**
-4. **RSS BODY_LIMIT RELIABILITY**
-5. **THREADS**
-6. **BRAVE + RSS + THREADS PRODUCTION PROOF**
-7. **LEGACY CLEANUP**
-8. **CENTRALIZE PIPELINE LIMITS**
-9. **P7 / RELEVANCE + FEEDBACK**
-10. **FINAL STABILIZATION / V1.0**
+Natural cycle scheduled `2026-10-23T08:00:49.466Z`, completed `2026-10-23T08:03:06.914Z`; reported runtime ~136.4s (scheduled-to-completed wall interval 137.448s; execution start was not supplied). Brave healthy, 10/10, 50 results; RSS degraded, 2/4 feeds succeeded; 60 raw observations, 47 submitted candidates, 24,303 prompt bytes. One gemini-3.8-flash dispatch lasted 75.331s, ended timeout/transport_ambiguous, correctly no retry. Polished degraded email: one attempt, accepted.
 
-## Active work and completion criteria
+## Authoritative active priority order
 
-1. **IMPLEMENTED / TESTED; AWAITING REVIEW AND RELEASE:** durable bounded Gemini classifications and cycle summaries; failure-aware maximum-three-attempt policy for proven-zero 503 with bounded exponential backoff/jitter. Current 429 evidence cannot establish transient rate exhaustion, so V2 does not retry it. Timeout/ambiguity never retries. Additive migration `0008_monitoring_cycle_observability.sql` is ready for separate human approval and remains unapplied.
-2. **IMPLEMENTED / TESTED; NOT DEPLOYED:** normal dark inline-CSS/table email shell, degraded banner, styled cards and safely cleaned bounded snippets; plain text and truthful raw/replay provenance are preserved.
-3. **NEXT RELEASE GATE:** independent review, human-approved migration `0008`, compatible Worker deployment, then natural validation of V2 evidence, retry policy, styling, source health, accounting and one email; record unexercised paths separately.
-4. **TODO:** smallest safe OpenAI/Cloudflare AI RSS body_limit correction; do not blindly increase limits.
-5. **TODO:** official Meta API Threads only, shared candidate pool, no per-source Gemini call.
-6. **TODO:** real combined Brave/RSS/Threads proof after their releases.
-7. **DEFERRED:** retire/isolate old runMonitoringCycle; remove obsolete X runtime/config/tests; keep 0004 intentionally unapplied.
-8. **DEFERRED:** centralize existing limits without increasing quotas.
-9. **TODO, later:** P7 relevance/feedback with separately reviewed boundaries.
-10. **TODO, last:** final stabilization/V1.0 against actual evidence.
+1. **GEMINI LATENCY RELIABILITY**
+2. **GEMINI LATENCY NATURAL PRODUCTION VALIDATION**
+3. **RSS BODY_LIMIT RELIABILITY**
+4. **THREADS**
+5. **BRAVE + RSS + THREADS PRODUCTION PROOF**
+6. **IDEMPOTENT EMAIL DELIVERY**
+7. **CROSS-SOURCE EVENT DEDUPLICATION**
+8. **TELEMETRY-DEGRADED CONTENT CONTINUITY**
+9. **WORKERD CI RUNTIME GATE**
+10. **LEGACY CLEANUP**
+11. **CENTRALIZE PIPELINE LIMITS**
+12. **P7 / RELEVANCE + FEEDBACK**
+13. **FINAL STABILIZATION / V1.0**
 
-## Completed / naturally validated and partial milestones
+## Scope and completion criteria
 
-- **COMPLETED / NATURALLY VALIDATED:** daily email delivery guarantee on natural Cron `2026-10-22T08:00:49.466Z`: four fresh raw stories, zero replay, one accepted degraded email, no resend/crash. It is no longer active priority 1. Platform termination/provider rejection remain possible.
-- **IMPLEMENTED / DEPLOYED / PARTIALLY NATURALLY VALIDATED:** existing coarse Gemini hardening: rows 29/30 confirmed_zero, two actual dispatches, approximately 1.5-second gap, no new ambiguity. Exact 429/503 class unavailable; V2 smarter policy is not implemented.
-- Low-score and timeout fallback were not naturally exercised on this cycle. Source outage telemetry remains only partially evidenced because the final structured summary was not durably retained.
+1. **IMPLEMENTED / TESTED / AWAITING INDEPENDENT REVIEW:** approved [optimized synchronous Gemini](docs/superpowers/specs/2026-10-23-gemini-latency-reliability-design.md): deterministic max 24 selected candidates, <=12 KiB compact prompt, scheduled low thinking, and bounded latency telemetry. V2 accounting, the full raw fallback pool, alias evidence, replay and one-email finalization remain unchanged. No deployment or natural production validation has occurred.
+2. **TODO after approved release:** 3–5 natural Cron cycles measuring completion/timeout rate, latency, payload, quality, accounting and one email; no manual cycles.
+3. **TODO:** smallest bounded OpenAI/Cloudflare RSS body_limit fix; no blind limit increase.
+4. **TODO:** official Meta API only, shared source pool, no per-source Gemini request.
+5. **TODO:** natural combined-source proof after Threads release.
+6. **DEFERRED:** idempotent email and ambiguous-send recovery; do not claim current send-before-history ambiguity is solved.
+7. **DEFERRED:** conservative cross-source event dedupe: same event group, distinct preserve both, uncertain preserve both. Current URL/alias dedupe remains unchanged; no semantic matching now.
+8. **DEFERRED:** telemetry-degraded content continuity; existing telemetry admission behavior remains authoritative.
+9. **DEFERRED:** Workerd CI runtime gate; no workflow change now.
+10. **DEFERRED:** retire/isolate legacy runMonitoringCycle and obsolete X code; migration 0004 remains unapplied.
+11. **DEFERRED:** centralize limits without raising quotas.
+12. **TODO later:** relevance and feedback.
+13. **TODO last:** final stabilization/V1.0.
 
-## Earlier completed milestones and historical policy
+## Historical milestones
 
+P0–P5 and Batch are completed historical milestones. The 2026-10-16 cycle proved one exact Batch response/four stories/one email. The 2026-10-20 RSS proof admitted GitHub/Chrome items; OpenAI/Cloudflare body_limit remains outstanding. The 2026-10-22 cycle proved daily raw fallback with two confirmed-zero attempts but lost exact429/503 class; V2 now preserves classes durably. Older V2 review-pending/0008-unapplied status is superseded by the current handoff, not current production authority.
 
-- **DONE:** P0 legacy 503 retries, P1 digest, P2 Brave 10/day–100/week–350/month, P3 broader coverage, P4 legacy trusted fallback, P5 discovery reliability. P0 retry counts/model fallback and P4 send-nothing rules are historical legacy behavior, not scheduled Batch authority.
-- **DONE / NATURALLY VALIDATED:** Batch delivery on 2026-10-16: one exact Gemini dispatch, four fresh stories, one accepted email.
-- **DONE / DEPLOYED; partial NATURALLY VALIDATED:** RSS integration. On 2026-10-20 GitHub Changelog and Chrome RSS entered the shared pool; OpenAI/Cloudflare AI body_limit remains priority 4. Do not claim all feeds healthy.
-- **DONE / DEPLOYED:** Batch-selected scores 1–10 delivery and provenance-qualified low-score replay. Do not infer natural low-score delivery proof from deployment or a zero-selection cycle.
-- **DONE / DEPLOYED:** Gemini failure classification; the 2026-10-21 f53acb cycle timed out (row 28), yielded zero selections/eligible replay and no email. This is historical evidence; the later 2026-10-22 degraded cycle validated delivery.
-- **DEPLOYED / not fully NATURALLY VALIDATED:** multi-source outage telemetry, retained in current production; final summary was not durably recoverable.
-- **DONE historically / DEPRECATED activation:** P6 X implementation; disabled, zero production dependency, migration 0004 unapplied.
+## Backlog/Plan Actualization Checkpoint
 
-
-Implementation authority: [Gemini Reliability V2 design](docs/superpowers/specs/2026-10-22-gemini-reliability-v2-design.md) and [implementation plan](docs/superpowers/plans/2026-10-22-gemini-reliability-v2.md). The feature is implemented and offline-tested on `codex/gemini-reliability-v2-implementation`, but is not merged or deployed. Migration `0008` is not applied; review and explicit human release approval remain mandatory.
-
-### Backlog/Plan Actualization Checkpoint
-
-After every major merged, deployed or production-validated milestone, before beginning the next major roadmap item:
-
-1. Update `backlog.md` with completed/implemented/deployed/naturally validated/partially validated/TODO/deferred status and actual priority.
-2. Update `plan.md` with current architecture and target rules, superseding obsolete instructions explicitly.
-3. Update `docs/self-improvement/PROJECT_STATE.md` only with verified facts and evidence provenance.
-4. Reconcile `docs/self-improvement/DAILY_SUMMARY.md` and `docs/self-improvement/CHANGELOG.md` with the same milestone.
-5. Do not begin the next major item while these five documents materially contradict each other or shipped behavior.
+After every major merged/deployed/validated milestone, reconcile backlog.md, plan.md, docs/self-improvement/PROJECT_STATE.md, DAILY_SUMMARY.md and CHANGELOG.md before the next major roadmap item. Distinguish designed, implemented/tested, deployed, partially naturally validated and naturally validated. Record only actual evidence; historical entries retain their original context. Architecture acceptance never authorizes production mutation.

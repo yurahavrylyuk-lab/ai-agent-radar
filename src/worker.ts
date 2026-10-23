@@ -3,7 +3,7 @@ import { D1DiscoveryHistory } from "./services/d1DiscoveryHistory.js";
 import { D1GeminiUsageStore } from "./services/d1GeminiUsageStore.js";
 import { D1NotificationHistory } from "./services/d1NotificationHistory.js";
 import { D1MonitoringTelemetry } from "./services/d1MonitoringTelemetry.js";
-import type { CycleSnapshotV1, MonitoringTelemetry } from "./services/monitoringTelemetry.js";
+import type { CycleLatencyV1, CycleSnapshotV1, GeminiAttemptTiming, MonitoringTelemetry } from "./services/monitoringTelemetry.js";
 import { inspectGeminiAvailability } from "./services/geminiUsageGuard.js";
 import { analyzeBatch, BatchAnalysisError } from "./services/analysisAgent.js";
 import { createMonitoringRuntimeConfiguration } from "./services/radarRuntimeConfiguration.js";
@@ -186,6 +186,38 @@ function summarizeBatch(batch: BatchCycleMetrics, env: RadarWorkerEnv): BatchCyc
     return ordinal === undefined || accountingOutcome === undefined ? [] : [{ ordinal, accountingOutcome,
       elapsedMs: boundedCount(attempt.elapsedMs, 90_000), ...(providerClass === undefined ? {} : { providerFailureClass: providerClass }) }];
   });
+  const latency: CycleLatencyV1 | undefined = (() => {
+    const value = batch.latency;
+    if (!value || value.version !== 1) return undefined;
+    const nullableCount = (entry: unknown, maximum: number): number | null => entry === null ? null
+      : typeof entry === "number" && Number.isSafeInteger(entry) && entry >= 0 ? Math.min(entry, maximum) : null;
+    const snippetBytesLimit = value.snippetBytesLimit === null || [192, 128, 96, 0].includes(value.snippetBytesLimit)
+      ? value.snippetBytesLimit : null;
+    const safeUtcInstant = (entry: unknown): string | null => {
+      if (typeof entry !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(entry)) return null;
+      try { return new Date(entry).toISOString() === entry ? entry : null; }
+      catch { return null; }
+    };
+    const attemptTimings = (Array.isArray(value.attemptTimings) ? value.attemptTimings : []).slice(0, 3).flatMap(timing => {
+      const ordinal = timing?.ordinal === 1 || timing?.ordinal === 2 || timing?.ordinal === 3 ? timing.ordinal : undefined;
+      if (ordinal === undefined) return [];
+      const requestStartedAt = timing.requestStartedAt === null ? null : safeUtcInstant(timing.requestStartedAt);
+      return [{ ordinal, requestStartedAt, elapsedMs: nullableCount(timing.elapsedMs, 180_000) }];
+    });
+    return {
+      version: 1,
+      preFilterInputCount: nullableCount(value.preFilterInputCount, 50),
+      selectedCount: nullableCount(value.selectedCount, 24),
+      selectorExcluded: nullableCount(value.selectorExcluded, 50),
+      byteExcluded: nullableCount(value.byteExcluded, 24),
+      submittedCount: nullableCount(value.submittedCount, 24),
+      promptBytes: nullableCount(value.promptBytes, 12_288),
+      snippetBytesLimit,
+      thinkingMode: value.thinkingMode === "low" ? "low" : null,
+      executionMode: value.executionMode === "synchronous" ? "synchronous" : null,
+      attemptTimings,
+    };
+  })();
   return {
     searchAttempts: boundedCount(batch.searchAttempts, 10), searchSuccesses: boundedCount(batch.searchSuccesses, 10), searchFailures: boundedCount(batch.searchFailures, 10),
     rawObservations: boundedCount(batch.rawObservations, 75), acceptedObservations: boundedCount(batch.acceptedObservations, 75),
@@ -208,6 +240,7 @@ function summarizeBatch(batch: BatchCycleMetrics, env: RadarWorkerEnv): BatchCyc
     retryEligible: batch.retryEligible === true,
     retryAttempted: batch.retryAttempted === true,
     retrySkipReason: allowedString(batch.retrySkipReason, ["none", "not_eligible", "accounting", "admission", "budget", "exhausted"] as const) ?? "not_eligible",
+    ...(latency === undefined ? {} : { latency }),
   };
 }
 
@@ -334,6 +367,7 @@ export interface WorkerMonitoringDependencyOverrides {
   readonly searchPage?: typeof searchWebPage;
   readonly collectRss?: BatchMonitoringDependencies["collectRss"];
   readonly attemptTelemetry?: { repository: MonitoringTelemetry; cycleId: string };
+  readonly onAttemptTiming?: (timing: GeminiAttemptTiming) => Promise<void>;
 }
 
 export const workerdRssFetch: typeof fetch = (input, init) => globalThis.fetch(input, init);
@@ -371,6 +405,7 @@ export function createWorkerMonitoringDependencies(
                 settle: (ref, reservation, outcome) => persistence.geminiUsageStore.settleObservedAttempt(ref, reservation, outcome),
               },
             }),
+            ...(overrides.onAttemptTiming === undefined ? {} : { onAttemptTiming: overrides.onAttemptTiming }),
           }),
         });
       } catch (error) {
@@ -419,7 +454,22 @@ export async function runScheduledMonitoring(
         context, content => sendWithResend(content, { environment: env as unknown as Record<string, string | undefined> }),
         startedAt.toISOString(), "preparation_unavailable",
       );
-      const cycleDependencies = createWorkerMonitoringDependencies(env, { attemptTelemetry: { repository: telemetry, cycleId } });
+      const onAttemptTiming = async (timing: GeminiAttemptTiming) => {
+        if (!latestSnapshot?.latency) throw new Error("Gemini timing cannot be checkpointed before source telemetry.");
+        const attemptTimings = [
+          ...latestSnapshot.latency.attemptTimings.filter(entry => entry.ordinal !== timing.ordinal),
+          { ...timing },
+        ].sort((left, right) => left.ordinal - right.ordinal);
+        latestSnapshot = {
+          ...latestSnapshot,
+          latency: { ...latestSnapshot.latency, attemptTimings },
+        };
+        await telemetry.checkpoint(cycleId, "sources_complete", latestSnapshot);
+      };
+      const cycleDependencies = createWorkerMonitoringDependencies(env, {
+        attemptTelemetry: { repository: telemetry, cycleId },
+        onAttemptTiming,
+      });
       cycleDependencies.onTelemetryCheckpoint = async (phase, snapshot) => {
         latestSnapshot = snapshot;
         await telemetry.checkpoint(cycleId, phase, snapshot);

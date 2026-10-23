@@ -201,7 +201,8 @@ test("slow_retry_admission_cannot_dispatch_inside_last_10_seconds", async () => 
       usageTracker: usage,
       environment: { GEMINI_API_KEY: "test", GEMINI_DAILY_REQUEST_LIMIT: "5", GEMINI_WEEKLY_REQUEST_LIMIT: "20", GEMINI_MONTHLY_REQUEST_LIMIT: "50", GEMINI_DAILY_TOKEN_LIMIT: "10000", GEMINI_WEEKLY_TOKEN_LIMIT: "30000", GEMINI_MONTHLY_TOKEN_LIMIT: "100000" },
       cycleContext: context,
-      now: () => new Date("2026-10-23T08:00:01.000Z"),
+      // D1 reservations use SQLite's current UTC clock, so keep the injected application clock in the same windows.
+      now: () => new Date(),
       monotonicNow: () => clock,
       random: () => 0,
       sleep: async milliseconds => { clock += milliseconds; },
