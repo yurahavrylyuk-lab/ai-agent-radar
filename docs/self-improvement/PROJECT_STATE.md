@@ -1,5 +1,35 @@
 # AI Agent Radar project state
 
+## 2026-10-24 — Cross-provider analyzer failover implementation checkpoint
+
+Cross-provider analyzer failover is **IMPLEMENTED / OFFLINE-TESTED / AWAITING RE-REVIEW**, not deployed. Source now permits one synchronous native-fetch `gpt-6-luna` attempt only after all three Gemini V2 attempts are durably `unavailable_503` and `confirmed_zero`, D1 grants the single reservation, configured OpenAI request/token limits pass, and the shared cycle-time gate remains safe. The review correction allowlists the known-safe Responses reasoning auxiliary while requiring exactly one assistant `output_text`, and publishes OpenAI analyzer success only after the strict shared result validator passes. Validation failures retain exact provider accounting, report bounded `invalid_response`/no final analyzer, and use the unchanged degraded fallback and one-email finalizer.
+
+Migration `0009_openai_fallback_usage.sql` is present and **UNAPPLIED**. `OPENAI_API_KEY` is **NOT PROVISIONED**. Production remains source `a1024cb72b1e08c7433e0f954da81f6283f106d3`, Worker `6304ec6a-1fe0-425f-9e0c-3ebd7ba760fa`, deployment `cf8b0acd-1451-4706-b3c4-2040fbf1a60d`; no production query or mutation was performed by this implementation. The optional bounded analyzer-failover snapshot extension requires a compatible-reader rollback check before release. Natural cap/failover evidence is pending a separately authorized release. Older dated entries below are historical where superseded.
+
+## 2026-10-24 — Failover design approved and implementation planned
+
+**CROSS-PROVIDER ANALYZER FAILOVER = DESIGN APPROVED / PLANNED / NOT IMPLEMENTED.** Human approved Gemini → one GPT-6 Luna → existing degraded delivery, with low reasoning, max_output_tokens=12,288 (including reasoning), and a pessimistic12,288+12,288=24,576 spending reservation. This is not a byte-to-token equivalence. [Finalized design](../superpowers/specs/2026-10-24-cross-provider-analyzer-failover-design.md); [five-task TDD implementation plan](../superpowers/plans/2026-10-24-cross-provider-analyzer-failover.md). Structured JSON shape supplements the authoritative shared Batch validator. Proposed0009 accounting migration is specified only in Markdown, not created/applied.
+
+Failover remains the next active build item before Threads. Gemini Latency remains **DEPLOYED / NATURAL VALIDATION CYCLE 1 MIXED**; RSS BODY_LIMIT remains **DEPLOYED / AWAITING NATURAL PRODUCTION VALIDATION**. Production remains `a1024cb72b1e08c7433e0f954da81f6283f106d3`, Worker `6304ec6a-1fe0-425f-9e0c-3ebd7ba760fa`, deployment `cf8b0acd-1451-4706-b3c4-2040fbf1a60d`. Observation continues in parallel; no new natural evidence is claimed.
+
+Documentation-only checkpoint: no runtime/test execution, migration creation/application, D1 access, provider inference/feed calls, credentials, push or deployment. Protected untracked SHA remains `67ebe90fdda67d9312f952cb477d38e5c78fff69396f8e4bbbc6bc6405d09a66`. Plan approval and later release permissions remain separate. Earlier dated design-only entries are historical; the actualization checkpoint remains in force.
+
+## 2026-10-24 — Cross-provider analyzer failover designed
+
+[Cross-provider design](../superpowers/specs/2026-10-24-cross-provider-analyzer-failover-design.md) is **DESIGNED / AWAITING HUMAN REVIEW**, next active build item before Threads. No implementation plan yet. Proposed Gemini → one GPT-6 Luna attempt → existing degraded finalizer requires all three Gemini503 attempts durably confirmed_zero, sufficient shared time and D1-backed OpenAI quota admission. Proposed new accounting migration is not created/applied; production zero-OpenAI policy is not activated or silently rewritten.
+
+Local main baseline `aaa0543ab1b37f4e64a52231136d9787d8845ca5` preserved on design branch `codex/cross-provider-analyzer-failover-design`. Production source remains `a1024cb72b1e08c7433e0f954da81f6283f106d3`, Worker `6304ec6a-1fe0-425f-9e0c-3ebd7ba760fa`, deployment `cf8b0acd-1451-4706-b3c4-2040fbf1a60d`. Gemini: **DEPLOYED / NATURAL VALIDATION CYCLE 1 MIXED**; RSS: **DEPLOYED / AWAITING NATURAL PRODUCTION VALIDATION**. Natural validation continues in parallel, with source attribution. 0004 stays unapplied.
+
+Read-only source inspection and official OpenAI documentation informed the design. No runtime tests were run for documentation-only work. No implementation, provider inference/feed call, D1 access, migration, secret change, push or deployment occurred. Protected untracked design stays excluded and byte-identical at `67ebe90fdda67d9312f952cb477d38e5c78fff69396f8e4bbbc6bc6405d09a66`. Backlog/Plan Actualization Checkpoint retained; historical entries below are not new verification claims.
+
+## 2026-10-24 — RSS BODY_LIMIT production release
+
+Production now runs exact source `a1024cb72b1e08c7433e0f954da81f6283f106d3`, Worker version `6304ec6a-1fe0-425f-9e0c-3ebd7ba760fa`, deployment `cf8b0acd-1451-4706-b3c4-2040fbf1a60d`, created `2026-10-24T08:19:22.895645Z`, with 100% traffic. Source annotation, Cron `0 8 * * *`, D1 binding `DB` to `9fb545e2-2f43-4922-8b21-2d79a8de9556`, and exact health response `AI Agent Radar worker ready` were verified. No migration or D1 mutation occurred; `0004_x_discovery.sql` remains intentionally unapplied.
+
+**RSS BODY_LIMIT Reliability = DEPLOYED / AWAITING NATURAL PRODUCTION VALIDATION.** The deployed limit is 1 MiB; all other reviewed RSS safeguards remain unchanged. **Gemini Latency Reliability = DEPLOYED / NATURAL VALIDATION CYCLE 1 MIXED.** Cycle 1 ran on preceding source `223a1b90b9d64483b47717bd02a9d9c334fd3e0d`: 24 submitted candidates, 11,191 prompt bytes, low thinking, three reviewed `unavailable_503` attempts settled `confirmed_zero`, no timeout or ambiguity, one degraded email accepted, and 55.441-second runtime. Successful-Gemini latency is not yet naturally validated. Subsequent evidence must identify the new source boundary. No manual monitoring, provider, or RSS call occurred during release.
+
+This section is current production authority; older entries below remain historical point-in-time records.
+
 ## 2026-10-23 — RSS BODY_LIMIT reliability implementation
 
 **RSS BODY_LIMIT RELIABILITY = IMPLEMENTED / OFFLINE-TESTED / AWAITING INDEPENDENT REVIEW.** The feature branch changes only global RSS `bodyBytes` from `262144` to `1048576`; complete-document XML validation, sequential feeds, and every other acquisition/parser limit remain unchanged. Production remains on the deployed `262144`-byte source until a later explicit release approval.
@@ -90,7 +120,7 @@ Maximum per autonomous monitoring cycle:
 - Gemini: normally one fresh-batch dispatch, at most three under the reviewed 503 confirmed-zero retry gate, returning at most four selected stories; known/duplicate URLs do not enter the submitted batch.
 - Gemini provider attempts: three maximum for scheduled Batch, separate durable reservations/settlements and unchanged quota guards. Timeout/transport ambiguity never retries. Legacy multi-model retry is not scheduled authority. V2 max 3 is deployed.
 - Resend: 1 email.
-- OpenAI: 0 calls.
+- OpenAI: current production remains 0 calls. The reviewed-but-not-deployed source permits at most one `gpt-6-luna` call only after the exact Gemini/D1/quota/timing failover gate; it adds no SDK retry or second OpenAI attempt.
 - X: 0 calls. The implementation remains disabled and its production activation is deprecated.
 
 Approved repository Brave request limits for P2:
@@ -170,7 +200,7 @@ Never commit Brave, Gemini, Resend, or X credentials, the notification email add
 
 P6/X production activation is abandoned/deprecated. `0004_x_discovery.sql` remains intentionally unapplied, X stays disabled with zero production dependency, and no X credential or paid provider capacity is authorized. The replacement source roadmap is Brave + RSS + Threads.
 
-The production Worker bundle must not include local JSON persistence, Node filesystem modules, dotenv, or an OpenAI cloud dependency. Production must not expose a public/manual monitoring endpoint.
+The production Worker bundle must not include local JSON persistence, Node filesystem modules, dotenv, or an OpenAI SDK/cloud package dependency. The bounded failover uses native Worker `fetch` only. Production must not expose a public/manual monitoring endpoint.
 
 ## Gemini blocked-state recovery
 

@@ -1,5 +1,38 @@
 # Self-improvement changelog
 
+## 2026-10-24 — Cross-provider analyzer failover implemented offline
+
+- Added an exact fail-closed Gemini-exhaustion gate and one synchronous `gpt-6-luna` Batch attempt using the existing prepared prompt, shared validator and finalizer.
+- Added fixed OpenAI fallback limits, durable D1 reservation/dispatch/exact-or-unknown accounting in unapplied migration `0009_openai_fallback_usage.sql`, and bounded optional scheduled telemetry.
+- Added offline Node and real Workerd/D1 coverage. Workerd required native-fetch-compatible `redirect: "manual"`; redirects are still never followed and remain failures.
+- Verification passed: focused failover tests 51/51, full suite 738/738, build, Worker typecheck, real Workerd OpenAI/Gemini telemetry and RSS harnesses, Wrangler dry-run/bundle audit, and diff checks.
+- Review correction allowlists Responses reasoning output without accepting unknown/tool/refusal/ambiguous items, and defers `success`/`finalAnalyzer=openai` telemetry until authoritative Batch validation. Invalid application output remains exactly billed but reports bounded `invalid_response` with no successful final analyzer and no retry.
+- Review-fix verification passed: focused cross-provider suite 120/120, full suite 743/743, build, Worker typecheck, all three Workerd harnesses, Wrangler dry-run/bundle audit, and diff checks.
+- Implementation only: production remains `a1024cb72b1e08c7433e0f954da81f6283f106d3`; migration `0009` is unapplied, `OPENAI_API_KEY` is unprovisioned, and no provider/production action occurred.
+
+## 2026-10-24 — Failover design approved and implementation planned
+
+**CROSS-PROVIDER ANALYZER FAILOVER = DESIGN APPROVED / PLANNED / NOT IMPLEMENTED.** Human approved Gemini → one GPT-6 Luna → existing degraded delivery, with low reasoning, max_output_tokens=12,288 (including reasoning), and a pessimistic12,288+12,288=24,576 spending reservation. This is not a byte-to-token equivalence. [Finalized design](../superpowers/specs/2026-10-24-cross-provider-analyzer-failover-design.md); [five-task TDD implementation plan](../superpowers/plans/2026-10-24-cross-provider-analyzer-failover.md). Structured JSON shape supplements the authoritative shared Batch validator. Proposed0009 accounting migration is specified only in Markdown, not created/applied.
+
+Failover remains the next active build item before Threads. Gemini Latency remains **DEPLOYED / NATURAL VALIDATION CYCLE 1 MIXED**; RSS BODY_LIMIT remains **DEPLOYED / AWAITING NATURAL PRODUCTION VALIDATION**. Production remains `a1024cb72b1e08c7433e0f954da81f6283f106d3`, Worker `6304ec6a-1fe0-425f-9e0c-3ebd7ba760fa`, deployment `cf8b0acd-1451-4706-b3c4-2040fbf1a60d`. Observation continues in parallel; no new natural evidence is claimed.
+
+Documentation-only checkpoint: no runtime/test execution, migration creation/application, D1 access, provider inference/feed calls, credentials, push or deployment. Protected untracked SHA remains `67ebe90fdda67d9312f952cb477d38e5c78fff69396f8e4bbbc6bc6405d09a66`. Plan approval and later release permissions remain separate. Earlier dated design-only entries are historical; the actualization checkpoint remains in force.
+
+## 2026-10-24 — Cross-provider analyzer failover designed
+
+[Cross-provider design](../superpowers/specs/2026-10-24-cross-provider-analyzer-failover-design.md) is **DESIGNED / AWAITING HUMAN REVIEW**, next active build item before Threads. No implementation plan yet. Proposed Gemini → one GPT-6 Luna attempt → existing degraded finalizer requires all three Gemini503 attempts durably confirmed_zero, sufficient shared time and D1-backed OpenAI quota admission. Proposed new accounting migration is not created/applied; production zero-OpenAI policy is not activated or silently rewritten.
+
+Local main baseline `aaa0543ab1b37f4e64a52231136d9787d8845ca5` preserved on design branch `codex/cross-provider-analyzer-failover-design`. Production source remains `a1024cb72b1e08c7433e0f954da81f6283f106d3`, Worker `6304ec6a-1fe0-425f-9e0c-3ebd7ba760fa`, deployment `cf8b0acd-1451-4706-b3c4-2040fbf1a60d`. Gemini: **DEPLOYED / NATURAL VALIDATION CYCLE 1 MIXED**; RSS: **DEPLOYED / AWAITING NATURAL PRODUCTION VALIDATION**. Natural validation continues in parallel, with source attribution. 0004 stays unapplied.
+
+Read-only source inspection and official OpenAI documentation informed the design. No runtime tests were run for documentation-only work. No implementation, provider inference/feed call, D1 access, migration, secret change, push or deployment occurred. Protected untracked design stays excluded and byte-identical at `67ebe90fdda67d9312f952cb477d38e5c78fff69396f8e4bbbc6bc6405d09a66`. Backlog/Plan Actualization Checkpoint retained; historical entries below are not new verification claims.
+
+## 2026-10-24 — RSS BODY_LIMIT reliability production release
+
+- Deployed exact source `a1024cb72b1e08c7433e0f954da81f6283f106d3` as Worker `6304ec6a-1fe0-425f-9e0c-3ebd7ba760fa`, deployment `cf8b0acd-1451-4706-b3c4-2040fbf1a60d`, at `2026-10-24T08:19:22.895645Z` with 100% traffic.
+- Verified unchanged Cron `0 8 * * *`, production D1 binding `9fb545e2-2f43-4922-8b21-2d79a8de9556`, source annotation, and exact ready health response. No migration was applied; `0004_x_discovery.sql` remains intentionally unapplied.
+- RSS BODY_LIMIT Reliability is **DEPLOYED / AWAITING NATURAL PRODUCTION VALIDATION**. Gemini Latency Reliability remains **DEPLOYED / NATURAL VALIDATION CYCLE 1 MIXED**; cycle 1 ran on the preceding production source and did not demonstrate successful-Gemini latency.
+- Release checks passed 713/713 tests, build, Worker typecheck, Wrangler dry-run, and `git diff --check`. No manual monitoring, provider, RSS, D1, or migration action occurred.
+
 ## 2026-10-23 — RSS BODY_LIMIT reliability implementation
 
 **RSS BODY_LIMIT RELIABILITY = IMPLEMENTED / OFFLINE-TESTED / AWAITING INDEPENDENT REVIEW.** The feature branch changes only global RSS `bodyBytes` from `262144` to `1048576`; complete-document XML validation, sequential feeds, and every other acquisition/parser limit remain unchanged. Production remains on the deployed `262144`-byte source until a later explicit release approval.

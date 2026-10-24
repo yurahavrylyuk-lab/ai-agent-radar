@@ -3,9 +3,12 @@ import { D1DiscoveryHistory } from "./services/d1DiscoveryHistory.js";
 import { D1GeminiUsageStore } from "./services/d1GeminiUsageStore.js";
 import { D1NotificationHistory } from "./services/d1NotificationHistory.js";
 import { D1MonitoringTelemetry } from "./services/d1MonitoringTelemetry.js";
-import type { CycleLatencyV1, CycleSnapshotV1, GeminiAttemptTiming, MonitoringTelemetry } from "./services/monitoringTelemetry.js";
+import { D1OpenAIFallbackUsageStore } from "./services/d1OpenAIFallbackUsageStore.js";
+import { validateAnalyzerFailoverObservation, type AnalyzerFailoverObservation, type CycleLatencyV1, type CycleSnapshotV1, type GeminiAttemptTiming, type MonitoringTelemetry } from "./services/monitoringTelemetry.js";
 import { inspectGeminiAvailability } from "./services/geminiUsageGuard.js";
 import { analyzeBatch, BatchAnalysisError } from "./services/analysisAgent.js";
+import { analyzeBatchWithFailover } from "./services/batchAnalyzerFailover.js";
+import { parseOpenAIFallbackLimits } from "./config/openaiFallback.js";
 import { createMonitoringRuntimeConfiguration } from "./services/radarRuntimeConfiguration.js";
 import { createGeminiBatchCycleContext, generateBatchWithGemini } from "./tools/llm/gemini.js";
 import { sendWithResend } from "./tools/email/resend.js";
@@ -41,6 +44,13 @@ export interface RadarWorkerEnv {
   CONTROLLED_EXECUTION_TOKEN?: string;
   X_DISCOVERY_ENABLED?: string;
   X_BEARER_TOKEN?: string;
+  OPENAI_API_KEY?: string;
+  OPENAI_DAILY_REQUEST_LIMIT?: string;
+  OPENAI_WEEKLY_REQUEST_LIMIT?: string;
+  OPENAI_MONTHLY_REQUEST_LIMIT?: string;
+  OPENAI_DAILY_TOKEN_LIMIT?: string;
+  OPENAI_WEEKLY_TOKEN_LIMIT?: string;
+  OPENAI_MONTHLY_TOKEN_LIMIT?: string;
 }
 
 export interface ScheduledCycleSummary {
@@ -121,6 +131,7 @@ function redactScheduledError(error: string, env: RadarWorkerEnv, maximumLength 
     env.NOTIFICATION_EMAIL,
     env.CONTROLLED_EXECUTION_TOKEN,
     env.X_BEARER_TOKEN,
+    env.OPENAI_API_KEY,
   ]
     .filter((value): value is string => typeof value === "string" && value.length > 0)
     .sort((left, right) => right.length - left.length);
@@ -218,6 +229,7 @@ function summarizeBatch(batch: BatchCycleMetrics, env: RadarWorkerEnv): BatchCyc
       attemptTimings,
     };
   })();
+  const analyzerFailover:AnalyzerFailoverObservation|undefined=(()=>{try{return validateAnalyzerFailoverObservation(batch.analyzerFailover);}catch{return undefined;}})();
   return {
     searchAttempts: boundedCount(batch.searchAttempts, 10), searchSuccesses: boundedCount(batch.searchSuccesses, 10), searchFailures: boundedCount(batch.searchFailures, 10),
     rawObservations: boundedCount(batch.rawObservations, 75), acceptedObservations: boundedCount(batch.acceptedObservations, 75),
@@ -241,6 +253,7 @@ function summarizeBatch(batch: BatchCycleMetrics, env: RadarWorkerEnv): BatchCyc
     retryAttempted: batch.retryAttempted === true,
     retrySkipReason: allowedString(batch.retrySkipReason, ["none", "not_eligible", "accounting", "admission", "budget", "exhausted"] as const) ?? "not_eligible",
     ...(latency === undefined ? {} : { latency }),
+    ...(analyzerFailover===undefined?{}:{analyzerFailover:{...analyzerFailover,usage:analyzerFailover.usage?{...analyzerFailover.usage}:null}}),
   };
 }
 
@@ -359,6 +372,7 @@ export function createWorkerPersistence(env: RadarWorkerEnv) {
     notificationHistory: new D1NotificationHistory(env.DB),
     braveUsageStore: new D1BraveUsageStore(env.DB),
     geminiUsageStore: new D1GeminiUsageStore(env.DB),
+    openaiFallbackUsageStore: new D1OpenAIFallbackUsageStore(env.DB),
   };
 }
 
@@ -368,6 +382,8 @@ export interface WorkerMonitoringDependencyOverrides {
   readonly collectRss?: BatchMonitoringDependencies["collectRss"];
   readonly attemptTelemetry?: { repository: MonitoringTelemetry; cycleId: string };
   readonly onAttemptTiming?: (timing: GeminiAttemptTiming) => Promise<void>;
+  readonly cycleStartedAtMonotonic?: number;
+  readonly monotonicNow?: () => number;
 }
 
 export const workerdRssFetch: typeof fetch = (input, init) => globalThis.fetch(input, init);
@@ -379,6 +395,9 @@ export function createWorkerMonitoringDependencies(
   const configuration = createMonitoringRuntimeConfiguration(env as unknown as Record<string, string | undefined>);
   const persistence = createWorkerPersistence(env);
   const geminiCycleContext = createGeminiBatchCycleContext();
+  const failoverConsumed = { consumed: false };
+  let analyzerFailover: AnalyzerFailoverObservation | undefined;
+  const monotonicNow = overrides.monotonicNow ?? (() => performance.now());
   const workerSearchPage = overrides.searchPage ?? searchWebPage;
 
   return {
@@ -391,13 +410,16 @@ export function createWorkerMonitoringDependencies(
       freshness: options?.freshness,
     }),
     collectRss: overrides.collectRss ?? (now => collectRss({ now, fetch: workerdRssFetch })),
+    getAnalyzerFailoverObservation: () => analyzerFailover,
     analyze: async batch => {
       try {
-        return await analyzeBatch(batch, {
-          generate: input => generateBatchWithGemini(input, {
+        return await analyzeBatchWithFailover(batch, {
+          primary: () => analyzeBatch(batch, {
+            generate: input => generateBatchWithGemini(input, {
             usageTracker: persistence.geminiUsageStore,
             environment: configuration.environment,
             cycleContext: geminiCycleContext,
+            monotonicNow,
             ...(overrides.attemptTelemetry === undefined ? {} : {
               attemptTelemetry: {
                 repository: overrides.attemptTelemetry.repository,
@@ -406,7 +428,17 @@ export function createWorkerMonitoringDependencies(
               },
             }),
             ...(overrides.onAttemptTiming === undefined ? {} : { onAttemptTiming: overrides.onAttemptTiming }),
+            }),
           }),
+          geminiContext: geminiCycleContext,
+          cycleId: overrides.attemptTelemetry?.cycleId ?? "",
+          cycleStartedAtMonotonic: overrides.cycleStartedAtMonotonic ?? Number.NaN,
+          monotonicNow,
+          store: persistence.openaiFallbackUsageStore,
+          limits: parseOpenAIFallbackLimits(env as unknown as Record<string, string | undefined>),
+          apiKey: env.OPENAI_API_KEY,
+          consumed: failoverConsumed,
+          onObservation: value => { analyzerFailover = validateAnalyzerFailoverObservation(value); },
         });
       } catch (error) {
         const last = geminiCycleContext.attempts.at(-1);
@@ -435,6 +467,7 @@ export async function runScheduledMonitoring(
   dependencies: ScheduledMonitoringDependencies = {},
 ): Promise<MonitoringCycleResult> {
   const runCycle = dependencies.runCycle ?? (async () => {
+    const cycleStartedAtMonotonic = performance.now();
     const context = createDailyEmailContext();
     const telemetry = dependencies.telemetry ?? new D1MonitoringTelemetry(env.DB);
     const scheduledAt = dependencies.scheduledAt ?? new Date();
@@ -469,6 +502,7 @@ export async function runScheduledMonitoring(
       const cycleDependencies = createWorkerMonitoringDependencies(env, {
         attemptTelemetry: { repository: telemetry, cycleId },
         onAttemptTiming,
+        cycleStartedAtMonotonic,
       });
       cycleDependencies.onTelemetryCheckpoint = async (phase, snapshot) => {
         latestSnapshot = snapshot;

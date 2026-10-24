@@ -14,7 +14,7 @@ import { createGeminiCycleContext, getGeminiProviderFailureClass, type GeminiBat
 import { xPostIdFromUrl, type XDiscoveryResult } from "./xDiscovery.js";
 import { BraveUsageGuardDeniedError } from "../tools/webSearch.js";
 import { sendWithResend } from "../tools/email/resend.js";
-import type { CycleSnapshotV1 } from "./monitoringTelemetry.js";
+import type { AnalyzerFailoverObservation, CycleSnapshotV1 } from "./monitoringTelemetry.js";
 import type { BatchAnalysisResult, BatchCycleMetrics, BatchDeliveryCandidate, BatchObservation, BraveSearchPage, DailyEmailContext, DeliveryCandidate, DiscoveryProcessingResult, MonitoringCycleResult, MonitoringSearchFailure, NotificationResult, PreparedBatch, RssDiscoveryResult, SearchResult, StoredDiscovery, XSourceProvenance } from "../types/index.js";
 
 export const MONITORING_QUERY = "new AI agent developer tool framework release";
@@ -61,6 +61,7 @@ export interface BatchMonitoringDependencies {
   /** Shared by the Worker so initialization failures use the same one-shot finalizer guard. */
   dailyEmailContext?: DailyEmailContext;
   onTelemetryCheckpoint?: (phase: "sources_complete" | "gemini_complete", snapshot: CycleSnapshotV1) => Promise<void>;
+  getAnalyzerFailoverObservation?: () => AnalyzerFailoverObservation | undefined;
 }
 
 function cycleSnapshot(result: MonitoringCycleResult): CycleSnapshotV1 {
@@ -89,6 +90,7 @@ function cycleSnapshot(result: MonitoringCycleResult): CycleSnapshotV1 {
       ...batch.latency,
       attemptTimings: batch.latency.attemptTimings.map(timing => ({ ...timing })),
     } }),
+    ...(batch?.analyzerFailover===undefined?{}:{analyzerFailover:{...batch.analyzerFailover,usage:batch.analyzerFailover.usage?{...batch.analyzerFailover.usage}:null}}),
   };
 }
 
@@ -402,6 +404,7 @@ async function runBatchMonitoringCycleInternal(dependencies: BatchMonitoringDepe
   }
 
   batch.reservationAttempts = geminiCycleContext.reservationAttempts;
+  batch.analyzerFailover = dependencies.getAnalyzerFailoverObservation?.();
   batch.reservations = geminiCycleContext.reservations;
   batch.providerDispatches = geminiCycleContext.providerDispatches;
   batch.attempts = geminiCycleContext.attempts.map(attempt => ({ ...attempt }));
