@@ -1,5 +1,11 @@
 # AI Agent Radar — Backlog
 
+## 2026-10-24 — Cross-provider analyzer failover design
+
+**NEXT ACTIVE BUILD ITEM: CROSS-PROVIDER ANALYZER FAILOVER — Gemini → GPT-6 Luna → degraded digest.** Architecture only, ready for human review; no implementation plan or runtime change. [Design](docs/superpowers/specs/2026-10-24-cross-provider-analyzer-failover-design.md). Natural Gemini/RSS observation continues in parallel, before and during offline failover work. Failover precedes Threads; all later roadmap items remain retained.
+
+Production remains `a1024cb72b1e08c7433e0f954da81f6283f106d3`. Gemini Latency: **DEPLOYED / NATURAL VALIDATION CYCLE 1 MIXED**. RSS BODY_LIMIT: **DEPLOYED / AWAITING NATURAL PRODUCTION VALIDATION**. Local docs-only baseline `aaa0543ab1b37f4e64a52231136d9787d8845ca5` is preserved. No production verification was repeated here. Older dated sections below are historical where superseded.
+
 ## 2026-10-24 — RSS BODY_LIMIT production release
 
 **Current authority:** RSS BODY_LIMIT Reliability is **DEPLOYED / AWAITING NATURAL PRODUCTION VALIDATION**. Exact runtime source `a1024cb72b1e08c7433e0f954da81f6283f106d3` is deployed as Worker version `6304ec6a-1fe0-425f-9e0c-3ebd7ba760fa`, deployment `cf8b0acd-1451-4706-b3c4-2040fbf1a60d`, created `2026-10-24T08:19:22.895645Z`, at 100% traffic. Cron remains `0 8 * * *`; D1 remains `DB` → `ai-agent-radar` → `9fb545e2-2f43-4922-8b21-2d79a8de9556`; health returned exactly `AI Agent Radar worker ready`. No migration was applied and `0004_x_discovery.sql` remains intentionally unapplied.
@@ -28,9 +34,9 @@ Natural cycle scheduled `2026-10-23T08:00:49.466Z`, completed `2026-10-23T08:03:
 
 ## Authoritative active priority order
 
-1. **GEMINI LATENCY RELIABILITY**
-2. **GEMINI LATENCY NATURAL PRODUCTION VALIDATION**
-3. **RSS BODY_LIMIT RELIABILITY**
+1. **CROSS-PROVIDER ANALYZER FAILOVER — NEXT ACTIVE BUILD ITEM:** Gemini → GPT-6 Luna → degraded digest; designed for human review, not implemented or planned for implementation yet.
+2. **GEMINI LATENCY RELIABILITY — DEPLOYED / NATURAL VALIDATION CYCLE 1 MIXED:** observation continues in parallel.
+3. **RSS BODY_LIMIT RELIABILITY — DEPLOYED / AWAITING NATURAL PRODUCTION VALIDATION:** observation continues in parallel.
 4. **THREADS**
 5. **BRAVE + RSS + THREADS PRODUCTION PROOF**
 6. **IDEMPOTENT EMAIL DELIVERY**
@@ -44,9 +50,9 @@ Natural cycle scheduled `2026-10-23T08:00:49.466Z`, completed `2026-10-23T08:03:
 
 ## Scope and completion criteria
 
-1. **DEPLOYED / AWAITING NATURAL PRODUCTION VALIDATION:** approved [optimized synchronous Gemini](docs/superpowers/specs/2026-10-23-gemini-latency-reliability-design.md): deterministic max 24 selected candidates, <=12 KiB compact prompt, scheduled low thinking, and bounded latency telemetry. V2 accounting, the full raw fallback pool, alias evidence, replay and one-email finalization remain unchanged. Deployment alone does not prove latency or success-rate improvement.
-2. **ACTIVE NEXT VALIDATION:** observe 3 eligible natural Cron cycles, extending to at most 5 scheduled cycles if evidence remains inconclusive. Measure completion/timeout rate, latency, payload, quality, accounting and one email; no manual cycles.
-3. **IMPLEMENTED / OFFLINE-TESTED / AWAITING INDEPENDENT REVIEW:** global RSS body cap raised from 256 KiB to 1 MiB with all existing structural, timeout, streaming, isolation, and no-secondary-fetch safeguards retained. Not deployed or naturally validated.
+1. **DESIGNED / HUMAN REVIEW:** [Cross-provider failover](docs/superpowers/specs/2026-10-24-cross-provider-analyzer-failover-design.md), only after three durably confirmed-zero Gemini503 dispatches exhaust V2; one bounded Luna attempt, shared validator, D1 accounting, same finalizer. No implementation plan yet.
+2. **DEPLOYED / NATURAL VALIDATION CYCLE 1 MIXED:** optimized synchronous Gemini, <=24 candidates/12 KiB, low thinking. Continue the existing natural observation window; successful-Gemini latency remains unproven. No manual cycles.
+3. **DEPLOYED / AWAITING NATURAL PRODUCTION VALIDATION:** 1 MiB RSS complete-document cap, unchanged structural/timeout/isolation guards. Natural Gemini/RSS observation does not block offline failover work.
 4. **TODO:** official Meta API only, shared source pool, no per-source Gemini request.
 5. **TODO:** natural combined-source proof after Threads release.
 6. **DEFERRED:** idempotent email and ambiguous-send recovery; do not claim current send-before-history ambiguity is solved.

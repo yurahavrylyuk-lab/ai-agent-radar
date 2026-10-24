@@ -1,5 +1,13 @@
 # AI Agent Radar project state
 
+## 2026-10-24 — Cross-provider analyzer failover designed
+
+[Cross-provider design](../superpowers/specs/2026-10-24-cross-provider-analyzer-failover-design.md) is **DESIGNED / AWAITING HUMAN REVIEW**, next active build item before Threads. No implementation plan yet. Proposed Gemini → one GPT-6 Luna attempt → existing degraded finalizer requires all three Gemini503 attempts durably confirmed_zero, sufficient shared time and D1-backed OpenAI quota admission. Proposed new accounting migration is not created/applied; production zero-OpenAI policy is not activated or silently rewritten.
+
+Local main baseline `aaa0543ab1b37f4e64a52231136d9787d8845ca5` preserved on design branch `codex/cross-provider-analyzer-failover-design`. Production source remains `a1024cb72b1e08c7433e0f954da81f6283f106d3`, Worker `6304ec6a-1fe0-425f-9e0c-3ebd7ba760fa`, deployment `cf8b0acd-1451-4706-b3c4-2040fbf1a60d`. Gemini: **DEPLOYED / NATURAL VALIDATION CYCLE 1 MIXED**; RSS: **DEPLOYED / AWAITING NATURAL PRODUCTION VALIDATION**. Natural validation continues in parallel, with source attribution. 0004 stays unapplied.
+
+Read-only source inspection and official OpenAI documentation informed the design. No runtime tests were run for documentation-only work. No implementation, provider inference/feed call, D1 access, migration, secret change, push or deployment occurred. Protected untracked design stays excluded and byte-identical at `67ebe90fdda67d9312f952cb477d38e5c78fff69396f8e4bbbc6bc6405d09a66`. Backlog/Plan Actualization Checkpoint retained; historical entries below are not new verification claims.
+
 ## 2026-10-24 — RSS BODY_LIMIT production release
 
 Production now runs exact source `a1024cb72b1e08c7433e0f954da81f6283f106d3`, Worker version `6304ec6a-1fe0-425f-9e0c-3ebd7ba760fa`, deployment `cf8b0acd-1451-4706-b3c4-2040fbf1a60d`, created `2026-10-24T08:19:22.895645Z`, with 100% traffic. Source annotation, Cron `0 8 * * *`, D1 binding `DB` to `9fb545e2-2f43-4922-8b21-2d79a8de9556`, and exact health response `AI Agent Radar worker ready` were verified. No migration or D1 mutation occurred; `0004_x_discovery.sql` remains intentionally unapplied.

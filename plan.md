@@ -1,5 +1,11 @@
 # AI Agent Radar — Architecture and roadmap
 
+## 2026-10-24 — Cross-provider analyzer failover design
+
+**NEXT ACTIVE BUILD ITEM: CROSS-PROVIDER ANALYZER FAILOVER — Gemini → GPT-6 Luna → degraded digest.** Architecture only, ready for human review; no implementation plan or runtime change. [Design](docs/superpowers/specs/2026-10-24-cross-provider-analyzer-failover-design.md). Natural Gemini/RSS observation continues in parallel, before and during offline failover work. Failover precedes Threads; all later roadmap items remain retained.
+
+Production remains `a1024cb72b1e08c7433e0f954da81f6283f106d3`. Gemini Latency: **DEPLOYED / NATURAL VALIDATION CYCLE 1 MIXED**. RSS BODY_LIMIT: **DEPLOYED / AWAITING NATURAL PRODUCTION VALIDATION**. Local docs-only baseline `aaa0543ab1b37f4e64a52231136d9787d8845ca5` is preserved. No production verification was repeated here. Older dated sections below are historical where superseded.
+
 ## 2026-10-24 — RSS BODY_LIMIT production release
 
 **Current authority:** exact source `a1024cb72b1e08c7433e0f954da81f6283f106d3` is deployed at 100% as Worker `6304ec6a-1fe0-425f-9e0c-3ebd7ba760fa`, deployment `cf8b0acd-1451-4706-b3c4-2040fbf1a60d`, created `2026-10-24T08:19:22.895645Z`. RSS BODY_LIMIT Reliability is **DEPLOYED / AWAITING NATURAL PRODUCTION VALIDATION**; the bounded body limit is now 1 MiB while existing feed, timeout, streaming, complete-document, structural, sequential-isolation, and no-redirect/no-retry rules remain authoritative. Cron, D1 binding, and health were verified unchanged; no migration was applied and `0004_x_discovery.sql` remains intentionally unapplied.
@@ -28,7 +34,7 @@ Natural cycle scheduled `2026-10-23T08:00:49.466Z`, completed `2026-10-23T08:03:
 
 ## Deployed architecture
 
-Brave (10 searches) + RSS → shared URL/alias/history dedupe and deterministic source interleaving → max 50 candidates / 32 KiB prompt → synchronous Gemini Batch → analyzed normal digest, or deterministic polished degraded digest, or truthful status_only → max 4 stories / one final email attempt.
+Brave (10 searches) + RSS → shared URL/alias/history dedupe and deterministic source interleaving → bounded raw pool (max 50 candidates / 32 KiB) → max 24 selected analysis candidates / 12,288-byte compact prompt → synchronous low-thinking Gemini Batch → analyzed normal digest, or deterministic polished degraded digest, or truthful status_only → max 4 stories / one final email attempt.
 
 V2 is production authority: same-model unavailable_503 plus durable confirmed_zero may retry to max 3 actual dispatches. Backoff1500–2000ms then3000–4000ms, one shared90s envelope, Gemini cutoff75s; >=10s after delay for retry admission. 429, timeout, transport ambiguity, invalid responses and accounting uncertainty do not retry. Each attempt has independent protected usage evidence. Applied0008 stores bounded cycle/attempt evidence; no prompt/content/raw errors. Old two-attempt429/503 and console-only descriptions are historical.
 
@@ -36,15 +42,15 @@ Analyzed Batch selections support scores1–10, label below7 `It could be releva
 
 ## Active architecture phase
 
-RSS BODY_LIMIT reliability is implemented and offline-tested on `codex/rss-body-limit-reliability`, awaiting independent review. The feature branch raises only the source-controlled global streamed-body cap to 1 MiB; feed count/order, five-item extraction, five-second timeout, structural limits, complete-document validation, sequential isolation, and no-secondary-fetch behavior remain unchanged. Local Workerd evidence covered three exact-limit tree-heavy successes around one streamed overflow with one active flow maximum. This feature is not deployed or naturally validated.
+CROSS-PROVIDER ANALYZER FAILOVER is the next active build item. The [design](docs/superpowers/specs/2026-10-24-cross-provider-analyzer-failover-design.md) is ready for human review; implementation planning has not started. Gemini remains primary; only its fully exhausted three-attempt unavailable_503/confirmed_zero sequence permits one synchronous Luna attempt. Use the same PreparedBatch/validator and finalizer, with separate durable OpenAI admission/accounting. All other Gemini failures retain the existing delivery path.
 
-Gemini latency reliability is **DEPLOYED / AWAITING NATURAL PRODUCTION VALIDATION** at source `223a1b90b9d64483b47717bd02a9d9c334fd3e0d`. The approved [latency design](docs/superpowers/specs/2026-10-23-gemini-latency-reliability-design.md) has a deterministic max-24 analysis subset after unchanged discovery/history, a <=12 KiB compact prompt, and `generation_config.thinking_level=low` on the existing synchronous Interactions path. Round-robin query/feed queues use a 3:1 Brave/RSS slot pattern and a soft two-per-host cap; the full original pool and aliases remain available for degraded fallback and notification evidence. Background execution and model fallback remain deferred. Acquisition, the current 75s cutoff, all V2 accounting protections, replay and one-email finalization are unchanged. Applied 0008 JSON accepts a bounded optional latency extension through compatible readers; no migration was added. Natural validation is the next step: first 3 eligible dispatched cycles, at most 5 scheduled cycles initially; goals median successful Gemini<=45s and comparable total cycle<=110s are not SLAs. Deployment does not establish that the timeout is fixed or success rate improved.
+Gemini latency validation (cycle 1 mixed) and deployed RSS BODY_LIMIT validation proceed in parallel. Retain the latency evidence window of three eligible dispatched cycles, initially at most five scheduled cycles; successful Gemini median <=45s and comparable total cycle <=110s remain targets, not SLAs. Full raw pool/aliases, replay and one-email finalization remain unchanged. No future natural result is claimed. Design approval, later implementation planning/review, and production migration/secret/spend/deployment permissions remain distinct.
 
 ## Authoritative roadmap
 
-1. **GEMINI LATENCY RELIABILITY**
-2. **GEMINI LATENCY NATURAL PRODUCTION VALIDATION**
-3. **RSS BODY_LIMIT RELIABILITY**
+1. **CROSS-PROVIDER ANALYZER FAILOVER — NEXT ACTIVE BUILD ITEM:** Gemini → GPT-6 Luna → degraded digest; designed for human review, not implemented or planned for implementation yet.
+2. **GEMINI LATENCY RELIABILITY — DEPLOYED / NATURAL VALIDATION CYCLE 1 MIXED:** observation continues in parallel.
+3. **RSS BODY_LIMIT RELIABILITY — DEPLOYED / AWAITING NATURAL PRODUCTION VALIDATION:** observation continues in parallel.
 4. **THREADS**
 5. **BRAVE + RSS + THREADS PRODUCTION PROOF**
 6. **IDEMPOTENT EMAIL DELIVERY**
@@ -56,7 +62,7 @@ Gemini latency reliability is **DEPLOYED / AWAITING NATURAL PRODUCTION VALIDATIO
 12. **P7 / RELEVANCE + FEEDBACK**
 13. **FINAL STABILIZATION / V1.0**
 
-Future items are separate bounded work: RSS body_limit; official API Threads and combined proof; idempotent/ambiguous email; conservative event dedupe (uncertain/distinct preserve both); telemetry-degraded continuity; Workerd CI; legacy cleanup; limits; relevance/feedback; stabilization. No semantic dedupe or other future implementation in latency work. HTTP remains health-only; X disabled and0004 unapplied.
+Future items are separate bounded work after failover: official API Threads and combined proof; idempotent/ambiguous email; conservative event dedupe (uncertain/distinct preserve both); telemetry-degraded continuity; Workerd CI; legacy cleanup; limits; relevance/feedback; stabilization. No semantic dedupe or other future implementation in latency work. HTTP remains health-only; X disabled and0004 unapplied.
 
 ## Backlog/Plan Actualization Checkpoint
 
