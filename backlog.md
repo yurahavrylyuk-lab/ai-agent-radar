@@ -1,5 +1,9 @@
 # AI Agent Radar — Backlog
 
+## 2026-10-25 — Cross-provider analyzer failover migration applied
+
+**CROSS-PROVIDER ANALYZER FAILOVER = MERGED / MIGRATION APPLIED / NOT DEPLOYED.** Migration `0009_openai_fallback_usage.sql` is applied to production D1 `9fb545e2-2f43-4922-8b21-2d79a8de9556`; it created the empty, protected `openai_fallback_usage` accounting table. Migration `0004_x_discovery.sql` remains intentionally unapplied. `OPENAI_API_KEY` is **NOT CONFIGURED**, Luna is not active, and production Worker source remains `a1024cb72b1e08c7433e0f954da81f6283f106d3`. Deployment and production validation remain separate human-controlled gates.
+
 ## 2026-10-24 — Cross-provider analyzer failover implemented offline
 
 **CROSS-PROVIDER ANALYZER FAILOVER = IMPLEMENTED / OFFLINE-TESTED / AWAITING RE-REVIEW.** The scheduled Batch coordinator preserves Gemini V2 as primary and admits exactly one synchronous `gpt-6-luna` Responses request only after the exact three-attempt `unavailable_503` / `confirmed_zero` Gemini proof, D1 reservation authority, configured OpenAI quotas, and the shared timing gate all pass. Luna accepts only the known-safe Responses reasoning auxiliary plus exactly one assistant `output_text`; analyzer success is published only after the authoritative shared Batch validator passes. Every other Gemini or Luna outcome follows the existing degraded/status finalizer.

@@ -1,5 +1,9 @@
 # AI Agent Radar — Architecture and roadmap
 
+## 2026-10-25 — Cross-provider analyzer failover release checkpoint
+
+**MERGED / MIGRATION APPLIED / NOT DEPLOYED.** Production D1 now contains the empty `openai_fallback_usage` schema from migration `0009_openai_fallback_usage.sql`, including its reviewed uniqueness and transition protections. Migration `0004_x_discovery.sql` remains intentionally unapplied. `OPENAI_API_KEY` is **NOT CONFIGURED** and the deployed Worker remains source `a1024cb72b1e08c7433e0f954da81f6283f106d3`; therefore Luna is not active and no production validation is claimed. The next release gates are separate secret/spend authorization and exact-source deployment approval.
+
 ## 2026-10-24 — Cross-provider analyzer failover implemented offline
 
 **CROSS-PROVIDER ANALYZER FAILOVER = IMPLEMENTED / OFFLINE-TESTED / AWAITING RE-REVIEW.** The bounded production-target architecture is now represented in source: Gemini V2 remains primary; only an exact exhausted three-attempt `unavailable_503` / `confirmed_zero` sequence can reach one D1-admitted `gpt-6-luna` request. The Luna request reuses the same max-24 / 12,288-byte prepared Batch input, accepts only the known-safe Responses reasoning auxiliary plus exactly one assistant `output_text`, and publishes analyzer success only after the strict shared validator passes. No other Gemini failure can cross the failover boundary.

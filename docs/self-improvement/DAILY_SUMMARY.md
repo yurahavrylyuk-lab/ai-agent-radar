@@ -1,5 +1,12 @@
 # Daily Self-Improvement Summary
 
+## 2026-10-25 — Cross-provider analyzer failover migration applied
+
+- Applied only `0009_openai_fallback_usage.sql` to production D1 `9fb545e2-2f43-4922-8b21-2d79a8de9556` using an isolated migration sequence that omitted intentionally-unapplied `0004_x_discovery.sql`.
+- Verified the ledger entry, empty `openai_fallback_usage` table, reviewed indexes, and three protective triggers. No accounting row was created.
+- State is **MERGED / MIGRATION APPLIED / NOT DEPLOYED**. `OPENAI_API_KEY` remains **NOT CONFIGURED** and production Worker source remains `a1024cb72b1e08c7433e0f954da81f6283f106d3`.
+- No deployment, monitoring/Cron invocation, provider call, secret change, or production data mutation beyond the approved schema migration occurred.
+
 ## 2026-10-24 — Cross-provider analyzer failover implemented offline
 
 - Implemented the approved Gemini → one GPT-6 Luna → existing degraded-delivery flow with an exact three-attempt Gemini proof, D1 reservation/CAS accounting, fixed quotas, one native Responses request, the shared Batch validator and bounded telemetry.

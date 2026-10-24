@@ -1,5 +1,11 @@
 # Self-improvement changelog
 
+## 2026-10-25 — Apply OpenAI fallback accounting schema
+
+- Applied production D1 migration `0009_openai_fallback_usage.sql`, creating the empty `openai_fallback_usage` table, its single-unresolved-owner and accounting-window indexes, and reviewed insert/update/delete protection triggers.
+- Preserved the intentional migration gap: `0004_x_discovery.sql` remains unapplied.
+- Cross-provider failover is merged with its schema ready, but remains not deployed and inactive because `OPENAI_API_KEY` is not configured. Production Worker source remains `a1024cb72b1e08c7433e0f954da81f6283f106d3`.
+
 ## 2026-10-24 — Cross-provider analyzer failover implemented offline
 
 - Added an exact fail-closed Gemini-exhaustion gate and one synchronous `gpt-6-luna` Batch attempt using the existing prepared prompt, shared validator and finalizer.
