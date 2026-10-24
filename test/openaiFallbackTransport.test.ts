@@ -16,7 +16,7 @@ test("Luna sends one fixed strict Responses request and shared validation accept
   assert.equal(calls, 1);
   assert.equal(url, "https://api.openai.com/v1/responses");
   assert.equal(init?.method, "POST");
-  assert.equal(init?.redirect, "error");
+  assert.equal(init?.redirect, "manual");
   const body=JSON.parse(String(init?.body));
   assert.equal(body.model,"gpt-6-luna"); assert.deepEqual(body.reasoning,{effort:"low"}); assert.equal(body.max_output_tokens,12288);
   assert.equal(body.store,false); assert.equal(body.stream,false); assert.equal(body.input,batch.prompt);
@@ -43,10 +43,12 @@ test("HTTP failures, transport errors, and timeout remain one-attempt bounded", 
   let calls=0;
   const http=await requestLuna(batch,{apiKey:"x",monotonicNow:()=>0,fetch:async()=>{calls++;return new Response("provider private text",{status:503});}});
   assert.deepEqual([http.outcome,http.httpStatus,http.usage,calls],["http_failure",503,null,1]);
+  const redirect=await requestLuna(batch,{apiKey:"x",monotonicNow:()=>0,fetch:async(_input,init)=>{calls++;assert.equal(init?.redirect,"manual");return new Response(null,{status:302,headers:{location:"https://unfollowed.invalid"}});}});
+  assert.deepEqual([redirect.outcome,redirect.httpStatus,redirect.usage,calls],["http_failure",302,null,2]);
   const transport=await requestLuna(batch,{apiKey:"x",monotonicNow:()=>0,fetch:async()=>{calls++;throw new Error("private");}});
-  assert.deepEqual([transport.outcome,transport.httpStatus,transport.usage,calls],["transport_error",null,null,2]);
+  assert.deepEqual([transport.outcome,transport.httpStatus,transport.usage,calls],["transport_error",null,null,3]);
   const timeout=await requestLuna(batch,{apiKey:"x",monotonicNow:()=>0,timeoutMs:5,fetch:async(_i,init)=>{calls++;await new Promise<void>((_resolve,reject)=>init?.signal?.addEventListener("abort",()=>reject(new DOMException("aborted","AbortError"))));return new Response();}});
-  assert.deepEqual([timeout.outcome,timeout.httpStatus,timeout.usage,calls],["timeout",null,null,3]);
+  assert.deepEqual([timeout.outcome,timeout.httpStatus,timeout.usage,calls],["timeout",null,null,4]);
 });
 
 test("body cap and cancellation cannot extend the deadline", async () => {

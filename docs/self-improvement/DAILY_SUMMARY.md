@@ -1,5 +1,13 @@
 # Daily Self-Improvement Summary
 
+## 2026-10-24 — Cross-provider analyzer failover implemented offline
+
+- Implemented the approved Gemini → one GPT-6 Luna → existing degraded-delivery flow with an exact three-attempt Gemini proof, D1 reservation/CAS accounting, fixed quotas, one native Responses request, the shared Batch validator and bounded telemetry.
+- Added unapplied migration `0009_openai_fallback_usage.sql`. `OPENAI_API_KEY` was not provisioned or made a source-controlled value; no migration, provider call, D1 action, push, merge or deployment occurred.
+- Local Workerd proof exercises one winner under concurrent reservation, reservation-before-fetch, one provider-shaped loopback request, exact settlement and telemetry persistence across restart. A real-runtime deviation replaced unsupported `redirect: "error"` with `redirect: "manual"`; redirects remain unfollowed and non-successful.
+- Offline verification passed: focused failover tests 51/51, full suite 738/738, build, Worker typecheck, real Workerd OpenAI/Gemini telemetry and RSS harnesses, Wrangler dry-run/bundle audit, and diff checks. The bundle audit found no Node filesystem, local JSON, or OpenAI SDK/cloud dependency.
+- Production remains `a1024cb72b1e08c7433e0f954da81f6283f106d3`. Independent review and separate migration/secret/spend/deployment approval are still required; natural validation is pending.
+
 ## 2026-10-24 — Failover design approved and implementation planned
 
 **CROSS-PROVIDER ANALYZER FAILOVER = DESIGN APPROVED / PLANNED / NOT IMPLEMENTED.** Human approved Gemini → one GPT-6 Luna → existing degraded delivery, with low reasoning, max_output_tokens=12,288 (including reasoning), and a pessimistic12,288+12,288=24,576 spending reservation. This is not a byte-to-token equivalence. [Finalized design](../superpowers/specs/2026-10-24-cross-provider-analyzer-failover-design.md); [five-task TDD implementation plan](../superpowers/plans/2026-10-24-cross-provider-analyzer-failover.md). Structured JSON shape supplements the authoritative shared Batch validator. Proposed0009 accounting migration is specified only in Markdown, not created/applied.

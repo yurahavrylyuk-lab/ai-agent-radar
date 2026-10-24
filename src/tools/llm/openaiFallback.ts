@@ -82,7 +82,7 @@ export async function requestLuna(batch:PreparedBatch,deps:{apiKey:string;fetch:
   let timedOut=false;
   const timer=setTimeout(()=>{timedOut=true;controller.abort();},timeoutMs);
   const operation=(async()=>{
-    const response=await deps.fetch(endpoint,{method:"POST",redirect:"error",signal:controller.signal,headers:{authorization:`Bearer ${deps.apiKey}`,"content-type":"application/json"},body});
+    const response=await deps.fetch(endpoint,{method:"POST",redirect:"manual",signal:controller.signal,headers:{authorization:`Bearer ${deps.apiKey}`,"content-type":"application/json"},body});
     let text:string;
     try{text=await boundedBody(response,OPENAI_FALLBACK.responseBodyBytes);}
     catch{if(controller.signal.aborted)throw new DOMException("deadline","AbortError");return {outcome:"invalid_response" as const,usage:null,httpStatus:response.status};}

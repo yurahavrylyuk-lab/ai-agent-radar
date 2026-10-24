@@ -1,0 +1,12 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "openai-fallback-regression",
+  "main": "openaiFallback.worker.ts",
+  "compatibility_date": "2026-09-20",
+  "rules": [{ "type": "Text", "globs": ["**/*.sql"], "fallthrough": true }],
+  "d1_databases": [{
+    "binding": "DB",
+    "database_name": "openai-fallback-regression",
+    "database_id": "22222222-2222-4222-8222-222222222222"
+  }]
+}

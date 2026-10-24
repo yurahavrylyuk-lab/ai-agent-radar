@@ -1,5 +1,11 @@
 # AI Agent Radar — Architecture and roadmap
 
+## 2026-10-24 — Cross-provider analyzer failover implemented offline
+
+**CROSS-PROVIDER ANALYZER FAILOVER = IMPLEMENTED / OFFLINE-TESTED / AWAITING INDEPENDENT REVIEW.** The bounded production-target architecture is now represented in source: Gemini V2 remains primary; only an exact exhausted three-attempt `unavailable_503` / `confirmed_zero` sequence can reach one D1-admitted `gpt-6-luna` request. The Luna request reuses the same max-24 / 12,288-byte prepared Batch input, strict shared validator and one-email finalizer. No other Gemini failure can cross the failover boundary.
+
+The source adds unapplied migration `0009_openai_fallback_usage.sql`, fixed optional quota variables, durable reservation/dispatch/settlement evidence and bounded optional telemetry. `OPENAI_API_KEY` is not source-required or provisioned. This is not deployed: production remains `a1024cb72b1e08c7433e0f954da81f6283f106d3`. Independent review plus separate migration, secret/spend and deployment authorization remain mandatory; rollback compatibility for the optional snapshot extension is a release gate. Threads follows this release gate. Older design/planning entries below retain historical context.
+
 ## 2026-10-24 — Failover design approved and implementation planned
 
 **CROSS-PROVIDER ANALYZER FAILOVER = DESIGN APPROVED / PLANNED / NOT IMPLEMENTED.** Human approved Gemini → one GPT-6 Luna → existing degraded delivery, with low reasoning, max_output_tokens=12,288 (including reasoning), and a pessimistic12,288+12,288=24,576 spending reservation. This is not a byte-to-token equivalence. [Finalized design](docs/superpowers/specs/2026-10-24-cross-provider-analyzer-failover-design.md); [five-task TDD implementation plan](docs/superpowers/plans/2026-10-24-cross-provider-analyzer-failover.md). Structured JSON shape supplements the authoritative shared Batch validator. Proposed0009 accounting migration is specified only in Markdown, not created/applied.

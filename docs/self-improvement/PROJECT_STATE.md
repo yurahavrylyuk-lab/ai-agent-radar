@@ -1,5 +1,11 @@
 # AI Agent Radar project state
 
+## 2026-10-24 — Cross-provider analyzer failover implementation checkpoint
+
+Cross-provider analyzer failover is **IMPLEMENTED / OFFLINE-TESTED / AWAITING INDEPENDENT REVIEW**, not deployed. Source now permits one synchronous native-fetch `gpt-6-luna` attempt only after all three Gemini V2 attempts are durably `unavailable_503` and `confirmed_zero`, D1 grants the single reservation, configured OpenAI request/token limits pass, and the shared cycle-time gate remains safe. It reuses the exact prepared Batch prompt, strict shared result validator, existing degraded fallback and one-email finalizer. All other Gemini failures remain terminal for analyzer failover.
+
+Migration `0009_openai_fallback_usage.sql` is present and **UNAPPLIED**. `OPENAI_API_KEY` is **NOT PROVISIONED**. Production remains source `a1024cb72b1e08c7433e0f954da81f6283f106d3`, Worker `6304ec6a-1fe0-425f-9e0c-3ebd7ba760fa`, deployment `cf8b0acd-1451-4706-b3c4-2040fbf1a60d`; no production query or mutation was performed by this implementation. The optional bounded analyzer-failover snapshot extension requires a compatible-reader rollback check before release. Natural cap/failover evidence is pending a separately authorized release. Older dated entries below are historical where superseded.
+
 ## 2026-10-24 — Failover design approved and implementation planned
 
 **CROSS-PROVIDER ANALYZER FAILOVER = DESIGN APPROVED / PLANNED / NOT IMPLEMENTED.** Human approved Gemini → one GPT-6 Luna → existing degraded delivery, with low reasoning, max_output_tokens=12,288 (including reasoning), and a pessimistic12,288+12,288=24,576 spending reservation. This is not a byte-to-token equivalence. [Finalized design](../superpowers/specs/2026-10-24-cross-provider-analyzer-failover-design.md); [five-task TDD implementation plan](../superpowers/plans/2026-10-24-cross-provider-analyzer-failover.md). Structured JSON shape supplements the authoritative shared Batch validator. Proposed0009 accounting migration is specified only in Markdown, not created/applied.
@@ -114,7 +120,7 @@ Maximum per autonomous monitoring cycle:
 - Gemini: normally one fresh-batch dispatch, at most three under the reviewed 503 confirmed-zero retry gate, returning at most four selected stories; known/duplicate URLs do not enter the submitted batch.
 - Gemini provider attempts: three maximum for scheduled Batch, separate durable reservations/settlements and unchanged quota guards. Timeout/transport ambiguity never retries. Legacy multi-model retry is not scheduled authority. V2 max 3 is deployed.
 - Resend: 1 email.
-- OpenAI: 0 calls.
+- OpenAI: current production remains 0 calls. The reviewed-but-not-deployed source permits at most one `gpt-6-luna` call only after the exact Gemini/D1/quota/timing failover gate; it adds no SDK retry or second OpenAI attempt.
 - X: 0 calls. The implementation remains disabled and its production activation is deprecated.
 
 Approved repository Brave request limits for P2:
@@ -194,7 +200,7 @@ Never commit Brave, Gemini, Resend, or X credentials, the notification email add
 
 P6/X production activation is abandoned/deprecated. `0004_x_discovery.sql` remains intentionally unapplied, X stays disabled with zero production dependency, and no X credential or paid provider capacity is authorized. The replacement source roadmap is Brave + RSS + Threads.
 
-The production Worker bundle must not include local JSON persistence, Node filesystem modules, dotenv, or an OpenAI cloud dependency. Production must not expose a public/manual monitoring endpoint.
+The production Worker bundle must not include local JSON persistence, Node filesystem modules, dotenv, or an OpenAI SDK/cloud package dependency. The bounded failover uses native Worker `fetch` only. Production must not expose a public/manual monitoring endpoint.
 
 ## Gemini blocked-state recovery
 
