@@ -26,11 +26,21 @@ test("Luna sends one fixed strict Responses request and shared validation accept
   assert.equal(parseBatchAnalysis(result.outputText!,batch).selections.length,1);
 });
 
+test("Luna accepts one reasoning item before exactly one assistant output_text", async () => {
+  const result=await requestLuna(batch,{apiKey:"x",monotonicNow:()=>0,fetch:async()=>new Response(JSON.stringify(envelope({output:[
+    {type:"reasoning",id:"reasoning_1",summary:[]},
+    {type:"message",role:"assistant",content:[{type:"output_text",text:output}]},
+  ]})))});
+  assert.deepEqual(result,{outcome:"success",outputText:output,usage:{inputTokens:10,outputTokens:20,totalTokens:30},httpStatus:200,durationMs:0});
+});
+
 test("incomplete and malformed outputs retain exact usage but never become success", async (t) => {
   for (const [name, value] of [
     ["incomplete", envelope({status:"incomplete",incomplete_details:{reason:"max_output_tokens"}})],
     ["refusal", envelope({output:[{type:"message",role:"assistant",content:[{type:"refusal",refusal:"no"}]}]})],
     ["multiple", envelope({output:[{type:"message",role:"assistant",content:[{type:"output_text",text:output},{type:"output_text",text:output}]}]})],
+    ["unknown output", envelope({output:[{type:"private_provider_item",text:output},{type:"message",role:"assistant",content:[{type:"output_text",text:output}]}]})],
+    ["tool call", envelope({output:[{type:"function_call",name:"tool",arguments:"{}"},{type:"message",role:"assistant",content:[{type:"output_text",text:output}]}]})],
   ] as const) await t.test(name,async()=>{
     const result=await requestLuna(batch,{apiKey:"x",monotonicNow:()=>0,fetch:async()=>new Response(JSON.stringify(value))});
     assert.equal(result.outcome,"invalid_response"); assert.deepEqual(result.usage,{inputTokens:10,outputTokens:20,totalTokens:30});

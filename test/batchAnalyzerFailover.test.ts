@@ -27,6 +27,25 @@ test("exact three durable reviewed Gemini failures permit one Luna analysis in s
   assert.deepEqual(observations.at(-1),{version:1,provider:"openai",model:"gpt-6-luna",eligible:true,eligibilityReason:"eligible",attempted:true,dispatchCount:1,startedAt:null,endedAt:null,durationMs:5,outcome:"success",httpStatus:200,usage:{inputTokens:1,outputTokens:2,totalTokens:3},accountingState:"exact",finalAnalyzer:"openai"});
 });
 
+test("Luna transport success is not analyzer success when authoritative Batch validation fails",async()=>{
+  const events:string[]=[]; const observations:unknown[]=[]; let calls=0;
+  const invalid=JSON.stringify({schemaVersion:1,stories:[{candidateId:"unknown",relevanceScore:8,category:"major_update",name:"Name",summary:"Summary",whyItMatters:"Why",educationalValue:"Learn",technologies:[],projectOpportunities:[]}]});
+  await assert.rejects(analyzeBatchWithFailover(batch,{primary:async()=>{throw new Error("Gemini unavailable");},geminiContext:context(),cycleId:ref.cycleId,cycleStartedAtMonotonic:-20_000,monotonicNow:()=>60_000,store:store(events),limits,apiKey:"key",consumed:{consumed:false},
+    onObservation:value=>observations.push(value),requestLuna:async()=>{calls++;return {outcome:"success",outputText:invalid,usage:{inputTokens:1,outputTokens:2,totalTokens:3},httpStatus:200,durationMs:5};}}),/OpenAI fallback analysis failed/);
+  assert.equal(calls,1);
+  assert.deepEqual(events,["reserve","intent","observed","settle"]);
+  assert.deepEqual(observations.at(-1),{version:1,provider:"openai",model:"gpt-6-luna",eligible:true,eligibilityReason:"eligible",attempted:true,dispatchCount:1,startedAt:null,endedAt:null,durationMs:5,outcome:"invalid_response",httpStatus:200,usage:{inputTokens:1,outputTokens:2,totalTokens:3},accountingState:"exact",finalAnalyzer:"none"});
+});
+
+test("Luna field-contract rejection keeps exact billing but reports no successful analyzer",async()=>{
+  const events:string[]=[]; const observations:unknown[]=[];
+  const invalid=JSON.stringify({schemaVersion:1,stories:[{candidateId:"c001",relevanceScore:8,category:"major_update",name:"n".repeat(241),summary:"Summary",whyItMatters:"Why",educationalValue:"Learn",technologies:[],projectOpportunities:[]}]});
+  await assert.rejects(analyzeBatchWithFailover(batch,{primary:async()=>{throw new Error("Gemini unavailable");},geminiContext:context(),cycleId:ref.cycleId,cycleStartedAtMonotonic:-20_000,monotonicNow:()=>60_000,store:store(events),limits,apiKey:"key",consumed:{consumed:false},
+    onObservation:value=>observations.push(value),requestLuna:async()=>({outcome:"success",outputText:invalid,usage:{inputTokens:4,outputTokens:5,totalTokens:9},httpStatus:200,durationMs:6})}),/OpenAI fallback analysis failed/);
+  assert.deepEqual(events,["reserve","intent","observed","settle"]);
+  assert.deepEqual(observations.at(-1),{version:1,provider:"openai",model:"gpt-6-luna",eligible:true,eligibilityReason:"eligible",attempted:true,dispatchCount:1,startedAt:null,endedAt:null,durationMs:6,outcome:"invalid_response",httpStatus:200,usage:{inputTokens:4,outputTokens:5,totalTokens:9},accountingState:"exact",finalAnalyzer:"none"});
+});
+
 test("success and every non-eligible Gemini terminal state perform zero Luna dispatches",async(t)=>{
   const success={returnedCount:0,selections:[]}; let calls=0;
   assert.equal(await analyzeBatchWithFailover(batch,{primary:async()=>success,geminiContext:context(),cycleId:ref.cycleId,cycleStartedAtMonotonic:0,monotonicNow:()=>1,store:store([]),limits,apiKey:"key",consumed:{consumed:false},requestLuna:async()=>{calls++;throw new Error();}}),success);

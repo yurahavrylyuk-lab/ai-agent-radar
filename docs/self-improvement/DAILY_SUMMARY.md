@@ -6,6 +6,8 @@
 - Added unapplied migration `0009_openai_fallback_usage.sql`. `OPENAI_API_KEY` was not provisioned or made a source-controlled value; no migration, provider call, D1 action, push, merge or deployment occurred.
 - Local Workerd proof exercises one winner under concurrent reservation, reservation-before-fetch, one provider-shaped loopback request, exact settlement and telemetry persistence across restart. A real-runtime deviation replaced unsupported `redirect: "error"` with `redirect: "manual"`; redirects remain unfollowed and non-successful.
 - Offline verification passed: focused failover tests 51/51, full suite 738/738, build, Worker typecheck, real Workerd OpenAI/Gemini telemetry and RSS harnesses, Wrangler dry-run/bundle audit, and diff checks. The bundle audit found no Node filesystem, local JSON, or OpenAI SDK/cloud dependency.
+- Review correction: the Responses parser now accepts only the known-safe reasoning auxiliary before exactly one assistant `output_text`; unknown/tool/refusal/ambiguous output remains invalid. OpenAI analyzer success is emitted only after shared Batch validation, while invalid application output retains exact billing, reports `invalid_response` with no final analyzer, and takes the unchanged degraded path. Status is awaiting independent re-review.
+- Review-fix verification passed: focused cross-provider suite 120/120, full suite 743/743, build, Worker typecheck, OpenAI/Gemini/RSS Workerd harnesses, Wrangler dry-run/bundle audit, and diff checks.
 - Production remains `a1024cb72b1e08c7433e0f954da81f6283f106d3`. Independent review and separate migration/secret/spend/deployment approval are still required; natural validation is pending.
 
 ## 2026-10-24 — Failover design approved and implementation planned

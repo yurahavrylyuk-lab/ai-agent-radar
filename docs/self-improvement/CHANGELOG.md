@@ -6,6 +6,8 @@
 - Added fixed OpenAI fallback limits, durable D1 reservation/dispatch/exact-or-unknown accounting in unapplied migration `0009_openai_fallback_usage.sql`, and bounded optional scheduled telemetry.
 - Added offline Node and real Workerd/D1 coverage. Workerd required native-fetch-compatible `redirect: "manual"`; redirects are still never followed and remain failures.
 - Verification passed: focused failover tests 51/51, full suite 738/738, build, Worker typecheck, real Workerd OpenAI/Gemini telemetry and RSS harnesses, Wrangler dry-run/bundle audit, and diff checks.
+- Review correction allowlists Responses reasoning output without accepting unknown/tool/refusal/ambiguous items, and defers `success`/`finalAnalyzer=openai` telemetry until authoritative Batch validation. Invalid application output remains exactly billed but reports bounded `invalid_response` with no successful final analyzer and no retry.
+- Review-fix verification passed: focused cross-provider suite 120/120, full suite 743/743, build, Worker typecheck, all three Workerd harnesses, Wrangler dry-run/bundle audit, and diff checks.
 - Implementation only: production remains `a1024cb72b1e08c7433e0f954da81f6283f106d3`; migration `0009` is unapplied, `OPENAI_API_KEY` is unprovisioned, and no provider/production action occurred.
 
 ## 2026-10-24 — Failover design approved and implementation planned

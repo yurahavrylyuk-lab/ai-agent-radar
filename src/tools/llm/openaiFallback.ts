@@ -43,11 +43,13 @@ function exactUsage(value:unknown):OpenAIExactUsage|null {
 }
 function outputText(value:unknown):string|null {
   if(!Array.isArray(value))return null;
-  const texts:string[]=[];
+  const texts:string[]=[]; let assistantMessages=0;
   for(const item of value){
     if(!item||typeof item!=="object"||Array.isArray(item))return null;
     const message=item as Record<string,unknown>;
+    if(message.type==="reasoning")continue;
     if(message.type!=="message"||message.role!=="assistant"||!Array.isArray(message.content))return null;
+    assistantMessages++;
     for(const part of message.content){
       if(!part||typeof part!=="object"||Array.isArray(part))return null;
       const content=part as Record<string,unknown>;
@@ -55,7 +57,7 @@ function outputText(value:unknown):string|null {
       texts.push(content.text);
     }
   }
-  return texts.length===1&&texts[0]!.length>0?texts[0]!:null;
+  return assistantMessages===1&&texts.length===1&&texts[0]!.length>0?texts[0]!:null;
 }
 
 async function boundedBody(response:Response, limit:number):Promise<string> {

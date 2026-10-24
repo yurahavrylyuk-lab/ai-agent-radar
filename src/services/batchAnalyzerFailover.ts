@@ -57,7 +57,10 @@ export async function analyzeBatchWithFailover(batch:PreparedBatch,deps:Failover
   const endedAt=new Date().toISOString();
   if(result.usage)await deps.store.settleExact(reservation,result.usage,evidence(result,endedAt));
   else await deps.store.markUnknown(reservation,evidence(result,endedAt));
-  deps.onObservation?.({version:1,provider:"openai",model:"gpt-6-luna",eligible:true,eligibilityReason:"eligible",attempted:true,dispatchCount:1,startedAt:null,endedAt:null,durationMs:result.durationMs,outcome:result.outcome,httpStatus:result.httpStatus,usage:result.usage,accountingState:result.usage?"exact":"unknown",finalAnalyzer:result.outcome==="success"?"openai":"none"});
-  if(result.outcome!=="success"||!result.outputText)throw new Error("OpenAI fallback analysis failed.");
-  return parseBatchAnalysis(result.outputText,batch);
+  const observation={version:1 as const,provider:"openai" as const,model:"gpt-6-luna" as const,eligible:true,eligibilityReason:"eligible" as const,attempted:true,dispatchCount:1 as const,startedAt:null,endedAt:null,durationMs:result.durationMs,httpStatus:result.httpStatus,usage:result.usage,accountingState:result.usage?"exact" as const:"unknown" as const};
+  if(result.outcome!=="success"||!result.outputText){deps.onObservation?.({...observation,outcome:result.outcome,finalAnalyzer:"none"});throw new Error("OpenAI fallback analysis failed.");}
+  let analysis:BatchAnalysisResult;
+  try{analysis=parseBatchAnalysis(result.outputText,batch);}catch{deps.onObservation?.({...observation,outcome:"invalid_response",finalAnalyzer:"none"});throw new Error("OpenAI fallback analysis failed.");}
+  deps.onObservation?.({...observation,outcome:"success",finalAnalyzer:"openai"});
+  return analysis;
 }
