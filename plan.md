@@ -1,5 +1,13 @@
 # AI Agent Radar — Architecture and roadmap
 
+## 2026-10-24 — Failover design approved and implementation planned
+
+**CROSS-PROVIDER ANALYZER FAILOVER = DESIGN APPROVED / PLANNED / NOT IMPLEMENTED.** Human approved Gemini → one GPT-6 Luna → existing degraded delivery, with low reasoning, max_output_tokens=12,288 (including reasoning), and a pessimistic12,288+12,288=24,576 spending reservation. This is not a byte-to-token equivalence. [Finalized design](docs/superpowers/specs/2026-10-24-cross-provider-analyzer-failover-design.md); [five-task TDD implementation plan](docs/superpowers/plans/2026-10-24-cross-provider-analyzer-failover.md). Structured JSON shape supplements the authoritative shared Batch validator. Proposed0009 accounting migration is specified only in Markdown, not created/applied.
+
+Failover remains the next active build item before Threads. Gemini Latency remains **DEPLOYED / NATURAL VALIDATION CYCLE 1 MIXED**; RSS BODY_LIMIT remains **DEPLOYED / AWAITING NATURAL PRODUCTION VALIDATION**. Production remains `a1024cb72b1e08c7433e0f954da81f6283f106d3`, Worker `6304ec6a-1fe0-425f-9e0c-3ebd7ba760fa`, deployment `cf8b0acd-1451-4706-b3c4-2040fbf1a60d`. Observation continues in parallel; no new natural evidence is claimed.
+
+Documentation-only checkpoint: no runtime/test execution, migration creation/application, D1 access, provider inference/feed calls, credentials, push or deployment. Protected untracked SHA remains `67ebe90fdda67d9312f952cb477d38e5c78fff69396f8e4bbbc6bc6405d09a66`. Plan approval and later release permissions remain separate. Earlier dated design-only entries are historical; the actualization checkpoint remains in force.
+
 ## 2026-10-24 — Cross-provider analyzer failover design
 
 **NEXT ACTIVE BUILD ITEM: CROSS-PROVIDER ANALYZER FAILOVER — Gemini → GPT-6 Luna → degraded digest.** Architecture only, ready for human review; no implementation plan or runtime change. [Design](docs/superpowers/specs/2026-10-24-cross-provider-analyzer-failover-design.md). Natural Gemini/RSS observation continues in parallel, before and during offline failover work. Failover precedes Threads; all later roadmap items remain retained.
@@ -42,13 +50,13 @@ Analyzed Batch selections support scores1–10, label below7 `It could be releva
 
 ## Active architecture phase
 
-CROSS-PROVIDER ANALYZER FAILOVER is the next active build item. The [design](docs/superpowers/specs/2026-10-24-cross-provider-analyzer-failover-design.md) is ready for human review; implementation planning has not started. Gemini remains primary; only its fully exhausted three-attempt unavailable_503/confirmed_zero sequence permits one synchronous Luna attempt. Use the same PreparedBatch/validator and finalizer, with separate durable OpenAI admission/accounting. All other Gemini failures retain the existing delivery path.
+CROSS-PROVIDER ANALYZER FAILOVER is the next active build item. The [design](docs/superpowers/specs/2026-10-24-cross-provider-analyzer-failover-design.md) is human-approved; the five-task implementation plan is ready for review and no implementation has started. Gemini remains primary; only its fully exhausted three-attempt unavailable_503/confirmed_zero sequence permits one synchronous Luna attempt. Use the same PreparedBatch/validator and finalizer, with separate durable OpenAI admission/accounting. All other Gemini failures retain the existing delivery path.
 
 Gemini latency validation (cycle 1 mixed) and deployed RSS BODY_LIMIT validation proceed in parallel. Retain the latency evidence window of three eligible dispatched cycles, initially at most five scheduled cycles; successful Gemini median <=45s and comparable total cycle <=110s remain targets, not SLAs. Full raw pool/aliases, replay and one-email finalization remain unchanged. No future natural result is claimed. Design approval, later implementation planning/review, and production migration/secret/spend/deployment permissions remain distinct.
 
 ## Authoritative roadmap
 
-1. **CROSS-PROVIDER ANALYZER FAILOVER — NEXT ACTIVE BUILD ITEM:** Gemini → GPT-6 Luna → degraded digest; designed for human review, not implemented or planned for implementation yet.
+1. **CROSS-PROVIDER ANALYZER FAILOVER — NEXT ACTIVE BUILD ITEM:** Gemini → GPT-6 Luna → degraded digest; design approved; implementation plan ready; not implemented.
 2. **GEMINI LATENCY RELIABILITY — DEPLOYED / NATURAL VALIDATION CYCLE 1 MIXED:** observation continues in parallel.
 3. **RSS BODY_LIMIT RELIABILITY — DEPLOYED / AWAITING NATURAL PRODUCTION VALIDATION:** observation continues in parallel.
 4. **THREADS**
