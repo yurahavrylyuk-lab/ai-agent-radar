@@ -67,6 +67,8 @@ export interface GeminiBatchCycleContext extends GeminiCycleContext {
   retryAttempted: boolean;
   retrySkipReason: GeminiBatchRetrySkipReason;
   attemptTimings: GeminiAttemptTiming[];
+  /** Original first-dispatch clock used by the bounded cross-provider admission gate. */
+  deadlineStartedAtMonotonic?: number;
 }
 
 /** Create once per cycle; never replace this context to retry a consumed batch. */
@@ -220,7 +222,6 @@ async function generateWithGeminiPolicy(
   const models = batchContext ? [APPROVED_GEMINI_MODELS[0]] : APPROVED_GEMINI_MODELS;
   const timeoutMs = dependencies.timeoutMs ?? GEMINI_TIMEOUT_MS;
   const monotonicNow = dependencies.monotonicNow ?? (() => performance.now());
-  let batchDeadlineStartedAt: number | undefined;
 
   if (context.dispatchBlockedByTimeout) {
     throw new Error("Gemini requests stopped for this cycle after a timeout.");
@@ -229,7 +230,7 @@ async function generateWithGeminiPolicy(
   for (const [modelIndex, model] of models.entries()) {
     for (let attempt = 1; attempt <= maxAttemptsPerModel; attempt++) {
       const batchCutoffMs = Math.min(timeoutMs, GEMINI_BATCH_CUTOFF_MS);
-      if (batchContext && batchDeadlineStartedAt !== undefined && monotonicNow() - batchDeadlineStartedAt >= batchCutoffMs) {
+      if (batchContext && batchContext.deadlineStartedAtMonotonic !== undefined && monotonicNow() - batchContext.deadlineStartedAtMonotonic >= batchCutoffMs) {
         batchContext.retrySkipReason = "budget";
         throw new Error("Gemini batch retry was not dispatched because its provider cutoff expired.");
       }
@@ -284,8 +285,8 @@ async function generateWithGeminiPolicy(
         } }),
       );
       const requireRetryDispatchReserve = async (): Promise<void> => {
-        if (batchContext && attempt > 1 && batchDeadlineStartedAt !== undefined &&
-          monotonicNow() - batchDeadlineStartedAt > batchCutoffMs - 10_000) {
+        if (batchContext && attempt > 1 && batchContext.deadlineStartedAtMonotonic !== undefined &&
+          monotonicNow() - batchContext.deadlineStartedAtMonotonic > batchCutoffMs - 10_000) {
           batchContext.retrySkipReason = "budget";
           await rejectBoundBeforeDispatch("Gemini batch retry was not dispatched because its finalization reserve was exhausted.");
         }
@@ -310,7 +311,9 @@ async function generateWithGeminiPolicy(
 
       await requireRetryDispatchReserve();
       const controller = new AbortController();
-      const deadlineStartedAt = batchContext ? (batchDeadlineStartedAt ??= monotonicNow()) : monotonicNow();
+      const deadlineStartedAt = batchContext
+        ? (batchContext.deadlineStartedAtMonotonic ??= monotonicNow())
+        : monotonicNow();
       const providerDeadlineMs = batchContext ? batchCutoffMs : timeoutMs;
       const deadlineExpired = () => controller.signal.aborted || monotonicNow() - deadlineStartedAt >= providerDeadlineMs;
       const remainingTimeoutMs = Math.max(1, providerDeadlineMs - (monotonicNow() - deadlineStartedAt));
