@@ -1,5 +1,11 @@
 # AI Agent Radar — Backlog
 
+## 2026-10-24 — RSS BODY_LIMIT production release
+
+**Current authority:** RSS BODY_LIMIT Reliability is **DEPLOYED / AWAITING NATURAL PRODUCTION VALIDATION**. Exact runtime source `a1024cb72b1e08c7433e0f954da81f6283f106d3` is deployed as Worker version `6304ec6a-1fe0-425f-9e0c-3ebd7ba760fa`, deployment `cf8b0acd-1451-4706-b3c4-2040fbf1a60d`, created `2026-10-24T08:19:22.895645Z`, at 100% traffic. Cron remains `0 8 * * *`; D1 remains `DB` → `ai-agent-radar` → `9fb545e2-2f43-4922-8b21-2d79a8de9556`; health returned exactly `AI Agent Radar worker ready`. No migration was applied and `0004_x_discovery.sql` remains intentionally unapplied.
+
+Gemini Latency Reliability remains **DEPLOYED / NATURAL VALIDATION CYCLE 1 MIXED**. Cycle 1 ran on the preceding runtime source `223a1b90b9d64483b47717bd02a9d9c334fd3e0d`; it met the 24-candidate, 12,288-byte prompt and 110-second total-cycle bounds but ended in three reviewed `unavailable_503` responses rather than a successful Gemini result. Continue the planned natural validation window without claiming full validation. The next natural cycle is also the first production validation opportunity for the 1 MiB RSS limit. Older entries below retain historical point-in-time status and are superseded where they conflict with this section.
+
 ## 2026-10-23 — RSS BODY_LIMIT reliability implementation
 
 **RSS BODY_LIMIT RELIABILITY = IMPLEMENTED / OFFLINE-TESTED / AWAITING INDEPENDENT REVIEW.** The feature branch changes only global RSS `bodyBytes` from `262144` to `1048576`; complete-document XML validation, sequential feeds, and every other acquisition/parser limit remain unchanged. Production remains on the deployed `262144`-byte source until a later explicit release approval.
