@@ -20,10 +20,11 @@ test("timing gate accepts exact boundary and rejects one millisecond below or mi
 });
 
 test("exact three durable reviewed Gemini failures permit one Luna analysis in strict order",async()=>{
-  const events:string[]=[]; const consumed:FailoverConsumed={consumed:false}; let calls=0;
+  const events:string[]=[]; const consumed:FailoverConsumed={consumed:false}; let calls=0; const observations:unknown[]=[];
   const result=await analyzeBatchWithFailover(batch,{primary:async()=>{throw new Error("Gemini unavailable");},geminiContext:context(),cycleId:ref.cycleId,cycleStartedAtMonotonic:-20_000,monotonicNow:()=>60_000,store:store(events),limits,apiKey:"key",consumed,
-    requestLuna:async()=>{events.push("fetch");calls++;return {outcome:"success",outputText:output,usage:{inputTokens:1,outputTokens:2,totalTokens:3},httpStatus:200,durationMs:5};}});
+    onObservation:value=>observations.push(value),requestLuna:async()=>{events.push("fetch");calls++;return {outcome:"success",outputText:output,usage:{inputTokens:1,outputTokens:2,totalTokens:3},httpStatus:200,durationMs:5};}});
   assert.equal(result.selections.length,1); assert.equal(calls,1); assert.deepEqual(events,["reserve","intent","observed","fetch","settle"]); assert.equal(consumed.consumed,true);
+  assert.deepEqual(observations.at(-1),{version:1,provider:"openai",model:"gpt-6-luna",eligible:true,eligibilityReason:"eligible",attempted:true,dispatchCount:1,startedAt:null,endedAt:null,durationMs:5,outcome:"success",httpStatus:200,usage:{inputTokens:1,outputTokens:2,totalTokens:3},accountingState:"exact",finalAnalyzer:"openai"});
 });
 
 test("success and every non-eligible Gemini terminal state perform zero Luna dispatches",async(t)=>{

@@ -34,6 +34,18 @@ export interface CycleLatencyV1 {
   executionMode: "synchronous" | null;
   attemptTimings: GeminiAttemptTiming[];
 }
+export type AnalyzerFailoverEligibilityReason = "eligible" | "gemini_not_exhausted" | "configuration" | "timing" | "accounting" | "consumed";
+export type AnalyzerFailoverOutcome = "not_attempted" | "success" | "timeout" | "transport_error" | "http_failure" | "invalid_response" | "usage_unknown" | "accounting_failure";
+export interface AnalyzerFailoverObservation {
+  version: 1; provider: "openai"; model: "gpt-6-luna";
+  eligible: boolean; eligibilityReason: AnalyzerFailoverEligibilityReason;
+  attempted: boolean; dispatchCount: 0 | 1;
+  startedAt: string | null; endedAt: string | null; durationMs: number | null;
+  outcome: AnalyzerFailoverOutcome; httpStatus: number | null;
+  usage: { inputTokens:number; outputTokens:number; totalTokens:number } | null;
+  accountingState: "none" | "reserved" | "exact" | "unknown" | "cancelled_pre_dispatch";
+  finalAnalyzer: "gemini" | "openai" | "none";
+}
 export interface CycleSnapshotV1 {
   version: 1;
   braveHealth: BraveDiscoverySourceHealth | null;
@@ -44,6 +56,7 @@ export interface CycleSnapshotV1 {
   delivery: CycleDeliverySnapshot | null;
   accounting: { reserved: number; exact: number; confirmedZero: number; ambiguous: number; unavailable: boolean };
   latency?: CycleLatencyV1;
+  analyzerFailover?: AnalyzerFailoverObservation;
 }
 export interface AttemptEvidence { failureClass: GeminiFailureClass; httpStatus: number | null; accountingError: boolean; observedAt: string; }
 export type AttemptSettlement =
@@ -132,9 +145,23 @@ function validLatency(value: unknown): value is CycleLatencyV1 {
   return true;
 }
 
+export function validateAnalyzerFailoverObservation(value: unknown): AnalyzerFailoverObservation {
+  const keys=["version","provider","model","eligible","eligibilityReason","attempted","dispatchCount","startedAt","endedAt","durationMs","outcome","httpStatus","usage","accountingState","finalAnalyzer"];
+  if(!isObject(value)||!exactKeys(value,keys)||value.version!==1||value.provider!=="openai"||value.model!=="gpt-6-luna"||typeof value.eligible!=="boolean"||
+    !member(value.eligibilityReason,["eligible","gemini_not_exhausted","configuration","timing","accounting","consumed"])||typeof value.attempted!=="boolean"||!count(value.dispatchCount,1)||
+    !(value.startedAt===null||(typeof value.startedAt==="string"&&validUtcInstant(value.startedAt)))||!(value.endedAt===null||(typeof value.endedAt==="string"&&validUtcInstant(value.endedAt)))||
+    !count(value.durationMs,110_000,true)||!(value.httpStatus===null||(Number.isInteger(value.httpStatus)&&Number(value.httpStatus)>=100&&Number(value.httpStatus)<=599))||
+    !member(value.outcome,["not_attempted","success","timeout","transport_error","http_failure","invalid_response","usage_unknown","accounting_failure"])||
+    !member(value.accountingState,["none","reserved","exact","unknown","cancelled_pre_dispatch"])||!member(value.finalAnalyzer,["gemini","openai","none"]))throw new Error("Monitoring analyzer failover snapshot is invalid.");
+  if(value.usage!==null){if(!isObject(value.usage)||!exactKeys(value.usage,["inputTokens","outputTokens","totalTokens"])||!count(value.usage.inputTokens,Number.MAX_SAFE_INTEGER)||!count(value.usage.outputTokens,Number.MAX_SAFE_INTEGER)||!count(value.usage.totalTokens,Number.MAX_SAFE_INTEGER)||value.usage.totalTokens!==Number(value.usage.inputTokens)+Number(value.usage.outputTokens))throw new Error("Monitoring analyzer failover snapshot is invalid.");}
+  if((value.attempted&&value.dispatchCount!==1)||(!value.attempted&&value.dispatchCount!==0)||(value.outcome==="success"&&(value.accountingState!=="exact"||value.finalAnalyzer!=="openai"||value.usage===null)))throw new Error("Monitoring analyzer failover snapshot is invalid.");
+  if(encoder.encode(JSON.stringify(value)).byteLength>1024)throw new Error("Monitoring analyzer failover snapshot exceeds its byte limit.");
+  return value as unknown as AnalyzerFailoverObservation;
+}
+
 export function validateCycleSnapshot(value: unknown): CycleSnapshotV1 {
   const keys = ["version", "braveHealth", "rssHealth", "outage", "candidateCounts", "geminiDispatchCount", "delivery", "accounting"];
-  if (!isObject(value) || !(exactKeys(value, keys) || exactKeys(value, [...keys, "latency"])) || value.version !== 1 ||
+  if (!isObject(value) || !exactKeys(value, [...keys, ...(Object.hasOwn(value,"latency")?["latency"]:[]), ...(Object.hasOwn(value,"analyzerFailover")?["analyzerFailover"]:[])]) || value.version !== 1 ||
     !(value.braveHealth === null || member(value.braveHealth, ["healthy", "degraded", "unavailable", "quota_blocked"])) ||
     !(value.rssHealth === null || member(value.rssHealth, ["healthy", "degraded", "unavailable"])) ||
     !(value.outage === null || typeof value.outage === "boolean") || !isObject(value.candidateCounts) ||
@@ -144,7 +171,7 @@ export function validateCycleSnapshot(value: unknown): CycleSnapshotV1 {
     !isObject(value.accounting) || !exactKeys(value.accounting, ["reserved", "exact", "confirmedZero", "ambiguous", "unavailable"]) ||
     !count(value.accounting.reserved, 3) || !count(value.accounting.exact, 3) || !count(value.accounting.confirmedZero, 3) ||
     !count(value.accounting.ambiguous, 3) || typeof value.accounting.unavailable !== "boolean" ||
-    ("latency" in value && !validLatency(value.latency))) {
+    ("latency" in value && !validLatency(value.latency)) || ("analyzerFailover" in value && (()=>{try{validateAnalyzerFailoverObservation(value.analyzerFailover);return false;}catch{return true;}})())) {
     throw new Error("Monitoring cycle snapshot is invalid.");
   }
   const encoded = JSON.stringify(value);

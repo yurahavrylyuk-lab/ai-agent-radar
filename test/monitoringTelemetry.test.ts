@@ -43,6 +43,14 @@ const latency = {
   ],
 };
 
+const analyzerFailover = {
+  version: 1 as const, provider: "openai" as const, model: "gpt-6-luna" as const,
+  eligible: true, eligibilityReason: "eligible" as const, attempted: true, dispatchCount: 1 as const,
+  startedAt: "2026-10-22T08:01:02.000Z", endedAt: "2026-10-22T08:01:03.000Z", durationMs: 1000,
+  outcome: "success" as const, httpStatus: 200, usage: { inputTokens: 10, outputTokens: 20, totalTokens: 30 },
+  accountingState: "exact" as const, finalAnalyzer: "openai" as const,
+};
+
 test("cycle start accepts trusted null release metadata and rejects malformed identity", () => {
   assert.deepEqual(validateCycleStart(start), start);
   assert.throws(() => validateCycleStart({ ...start, cycleId: "not-uuid" }), /cycle start/i);
@@ -94,6 +102,18 @@ test("rejects unknown, inconsistent, unbounded, or sensitive latency fields", ()
     { ...latency, attemptTimings: [{ ordinal: 2, requestStartedAt: "not-iso", elapsedMs: 1 }] },
     { ...latency, attemptTimings: [{ ordinal: 2, requestStartedAt: "2026-99-23T08:00:02.125Z", elapsedMs: 1 }] },
   ]) assert.throws(() => validateCycleSnapshot({ ...extended, latency: badLatency }), /snapshot/i);
+});
+
+test("bounded analyzer failover snapshot round-trips and rejects arbitrary provider content", () => {
+  const extended={...snapshot,analyzerFailover};
+  const serialized=serializeCycleSnapshot(extended);
+  assert.ok(encoder.encode(JSON.stringify(analyzerFailover)).byteLength<=1024);
+  assert.deepEqual(parseCycleSnapshot(serialized),extended);
+  for(const bad of [
+    {...analyzerFailover,model:"attacker"}, {...analyzerFailover,outcome:"private provider body"},
+    {...analyzerFailover,prompt:"secret"}, {...analyzerFailover,usage:{inputTokens:1,outputTokens:2,totalTokens:4}},
+    {...analyzerFailover,dispatchCount:2}, {...analyzerFailover,startedAt:"not-utc"},
+  ]) assert.throws(()=>validateCycleSnapshot({...snapshot,analyzerFailover:bad}),/snapshot/i);
 });
 
 test("delivery snapshot allowlists only bounded finalizer evidence", () => {

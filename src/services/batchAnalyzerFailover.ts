@@ -4,6 +4,7 @@ import type { D1OpenAIFallbackUsageStore, LunaEvidence } from "./d1OpenAIFallbac
 import type { GeminiBatchCycleContext } from "../tools/llm/gemini.js";
 import { requestLuna as defaultRequestLuna, type LunaTransportResult } from "../tools/llm/openaiFallback.js";
 import type { BatchAnalysisResult, PreparedBatch } from "../types/index.js";
+import type { AnalyzerFailoverObservation, AnalyzerFailoverEligibilityReason } from "./monitoringTelemetry.js";
 
 export interface FailoverConsumed { consumed:boolean; }
 export interface FailoverDependencies {
@@ -17,6 +18,7 @@ export interface FailoverDependencies {
   apiKey?:string;
   consumed:FailoverConsumed;
   requestLuna?:typeof defaultRequestLuna;
+  onObservation?:(value:AnalyzerFailoverObservation)=>void;
 }
 
 export function lunaTimingAllowed(now:number,firstGeminiStart:number|undefined,cycleStart:number):boolean {
@@ -35,13 +37,16 @@ function evidence(result:LunaTransportResult,endedAt:string):LunaEvidence {
 
 export async function analyzeBatchWithFailover(batch:PreparedBatch,deps:FailoverDependencies):Promise<BatchAnalysisResult>{
   let primaryError:unknown;
-  try{return await deps.primary();}catch(error){primaryError=error;}
+  try{const result=await deps.primary();deps.onObservation?.({version:1,provider:"openai",model:"gpt-6-luna",eligible:false,eligibilityReason:"gemini_not_exhausted",attempted:false,dispatchCount:0,startedAt:null,endedAt:null,durationMs:null,outcome:"not_attempted",httpStatus:null,usage:null,accountingState:"none",finalAnalyzer:"gemini"});return result;}catch(error){primaryError=error;}
   const apiKey=deps.apiKey?.trim();
-  if(!apiKey||!deps.limits||deps.consumed.consumed||!eligible(deps.geminiContext)||
-    !lunaTimingAllowed(deps.monotonicNow(),deps.geminiContext.deadlineStartedAtMonotonic,deps.cycleStartedAtMonotonic))throw primaryError;
+  const limits=deps.limits;
+  let reason:AnalyzerFailoverEligibilityReason="eligible";
+  if(!apiKey||!deps.limits)reason="configuration";else if(deps.consumed.consumed)reason="consumed";else if(!eligible(deps.geminiContext))reason="gemini_not_exhausted";else if(!lunaTimingAllowed(deps.monotonicNow(),deps.geminiContext.deadlineStartedAtMonotonic,deps.cycleStartedAtMonotonic))reason="timing";
+  if(reason!=="eligible"){deps.onObservation?.({version:1,provider:"openai",model:"gpt-6-luna",eligible:false,eligibilityReason:reason,attempted:false,dispatchCount:0,startedAt:null,endedAt:null,durationMs:null,outcome:"not_attempted",httpStatus:null,usage:null,accountingState:"none",finalAnalyzer:"none"});throw primaryError;}
+  if(!apiKey||!limits)throw primaryError;
   deps.consumed.consumed=true;
-  const reservation=await deps.store.reserve(deps.cycleId,deps.limits);
-  if(!reservation)throw primaryError;
+  const reservation=await deps.store.reserve(deps.cycleId,limits);
+  if(!reservation){deps.onObservation?.({version:1,provider:"openai",model:"gpt-6-luna",eligible:false,eligibilityReason:"accounting",attempted:false,dispatchCount:0,startedAt:null,endedAt:null,durationMs:null,outcome:"not_attempted",httpStatus:null,usage:null,accountingState:"none",finalAnalyzer:"none"});throw primaryError;}
   try{await deps.store.markIntent(reservation);}catch{throw new Error("OpenAI fallback accounting intent could not be confirmed safely.");}
   if(!lunaTimingAllowed(deps.monotonicNow(),deps.geminiContext.deadlineStartedAtMonotonic,deps.cycleStartedAtMonotonic)){
     try{await deps.store.cancelBeforeDispatch(reservation);}catch{/* surviving reservation blocks later dispatch */}
@@ -52,6 +57,7 @@ export async function analyzeBatchWithFailover(batch:PreparedBatch,deps:Failover
   const endedAt=new Date().toISOString();
   if(result.usage)await deps.store.settleExact(reservation,result.usage,evidence(result,endedAt));
   else await deps.store.markUnknown(reservation,evidence(result,endedAt));
+  deps.onObservation?.({version:1,provider:"openai",model:"gpt-6-luna",eligible:true,eligibilityReason:"eligible",attempted:true,dispatchCount:1,startedAt:null,endedAt:null,durationMs:result.durationMs,outcome:result.outcome,httpStatus:result.httpStatus,usage:result.usage,accountingState:result.usage?"exact":"unknown",finalAnalyzer:result.outcome==="success"?"openai":"none"});
   if(result.outcome!=="success"||!result.outputText)throw new Error("OpenAI fallback analysis failed.");
   return parseBatchAnalysis(result.outputText,batch);
 }

@@ -5,6 +5,7 @@ import { D1DiscoveryHistory } from "../src/services/d1DiscoveryHistory.js";
 import { D1GeminiUsageStore } from "../src/services/d1GeminiUsageStore.js";
 import { D1NotificationHistory } from "../src/services/d1NotificationHistory.js";
 import { MONITORING_FRESHNESS } from "../src/config/discoveryQueries.js";
+import { parseOpenAIFallbackLimits } from "../src/config/openaiFallback.js";
 import { createMonitoringRuntimeConfiguration, createRadarRuntimeConfiguration } from "../src/services/radarRuntimeConfiguration.js";
 import type { BatchCycleMetrics, MonitoringCycleResult } from "../src/types/index.js";
 import worker, {
@@ -104,6 +105,13 @@ test("Worker runtime configuration preserves configured limits and rejects missi
   const missingBrave = environment();
   missingBrave.BRAVE_SEARCH_API_KEY = "";
   assert.throws(() => createMonitoringRuntimeConfiguration(missingBrave), /BRAVE_SEARCH_API_KEY is required/);
+});
+
+test("optional Luna configuration is independently bounded and never uses OPENAI_MODEL",()=>{
+  const env={...environment(),OPENAI_API_KEY:"luna-secret",OPENAI_MODEL:"attacker",OPENAI_DAILY_REQUEST_LIMIT:"1",OPENAI_WEEKLY_REQUEST_LIMIT:"7",OPENAI_MONTHLY_REQUEST_LIMIT:"31",OPENAI_DAILY_TOKEN_LIMIT:"24576",OPENAI_WEEKLY_TOKEN_LIMIT:"172032",OPENAI_MONTHLY_TOKEN_LIMIT:"761856"};
+  assert.deepEqual(parseOpenAIFallbackLimits(env),{dailyRequests:1,weeklyRequests:7,monthlyRequests:31,dailyTokens:24576,weeklyTokens:172032,monthlyTokens:761856});
+  assert.doesNotThrow(()=>createMonitoringRuntimeConfiguration({...env,OPENAI_API_KEY:""}));
+  assert.equal(parseOpenAIFallbackLimits({...env,OPENAI_DAILY_REQUEST_LIMIT:"2"}),null);
 });
 
 test("Worker composition uses D1 stores and exposes a scheduled handler without invoking it from fetch", async () => {
