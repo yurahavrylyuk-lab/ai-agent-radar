@@ -1,8 +1,8 @@
 # AI Agent Radar — Backlog
 
-## 2026-10-25 — Threads discovery design
+## 2026-10-25 — Threads discovery design approved and planned
 
-**THREADS = DESIGN READY / AWAITING HUMAN APPROVAL.** [Design](docs/superpowers/specs/2026-10-25-threads-discovery-design.md): official public keyword-search collector into the shared Batch pool; no implementation or implementation plan. Meta public-search approval/token setup remains an external release dependency. This entry supersedes older active-priority descriptions: Threads → Brave + RSS + Threads production proof → Idempotent Email Delivery → Cross-source Event Deduplication → Telemetry-degraded Content Continuity → Workerd CI Runtime Gate → Legacy Cleanup → Centralize Pipeline Limits → P7 / Relevance + Feedback → Final Stabilization / V1.0. Gemini Latency, RSS BODY_LIMIT and Cross-provider Analyzer Failover natural validation continue independently and do not block offline Threads work. Production state below is unchanged; this checkpoint is documentation only.
+**THREADS = DESIGN APPROVED / IMPLEMENTATION PLANNED / NOT IMPLEMENTED.** [Design](docs/superpowers/specs/2026-10-25-threads-discovery-design.md): official public keyword-search collector into the shared Batch pool; [five-task TDD implementation plan](docs/superpowers/plans/2026-10-25-threads-discovery.md) ready for human review; no runtime implementation. Meta public-search approval/token setup remains an external release dependency. This entry supersedes older active-priority descriptions: Threads → Brave + RSS + Threads production proof → Idempotent Email Delivery → Cross-source Event Deduplication → Telemetry-degraded Content Continuity → Workerd CI Runtime Gate → Legacy Cleanup → Centralize Pipeline Limits → P7 / Relevance + Feedback → Final Stabilization / V1.0. Gemini Latency, RSS BODY_LIMIT and Cross-provider Analyzer Failover natural validation continue independently and do not block offline Threads work. Production state below is unchanged; this checkpoint is documentation only.
 
 ## 2026-10-25 — Cross-provider analyzer failover deployed
 

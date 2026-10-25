@@ -1,8 +1,8 @@
 # AI Agent Radar — Architecture and roadmap
 
-## 2026-10-25 — Threads discovery design
+## 2026-10-25 — Threads discovery design approved and planned
 
-**THREADS = DESIGN READY / AWAITING HUMAN APPROVAL.** [Design](docs/superpowers/specs/2026-10-25-threads-discovery-design.md) defines official public keyword search → shared Brave/RSS/Threads observations → bounded dedupe/selection → one PreparedBatch → existing Gemini/Luna admission → existing finalizer. No implementation or implementation plan yet; Meta public-search approval and token setup are external release gates. This entry supersedes older active-phase statements: Threads is next, followed by combined-source production proof and the remaining roadmap recorded in backlog.md. Gemini Latency, RSS BODY_LIMIT and Cross-provider Analyzer Failover natural validation proceed independently. No production state, runtime limits, migrations, credentials or deployment changed.
+**THREADS = DESIGN APPROVED / IMPLEMENTATION PLANNED / NOT IMPLEMENTED.** [Design](docs/superpowers/specs/2026-10-25-threads-discovery-design.md) defines official public keyword search → shared Brave/RSS/Threads observations → bounded dedupe/selection → one PreparedBatch → existing Gemini/Luna admission → existing finalizer. [Five-task TDD implementation plan](docs/superpowers/plans/2026-10-25-threads-discovery.md) ready for human review; no runtime implementation; Meta public-search approval and token setup are external release gates. This entry supersedes older active-phase statements: Threads is next, followed by combined-source production proof and the remaining roadmap recorded in backlog.md. Gemini Latency, RSS BODY_LIMIT and Cross-provider Analyzer Failover natural validation proceed independently. No production state, runtime limits, migrations, credentials or deployment changed.
 
 ## 2026-10-25 — Cross-provider analyzer failover production release
 
