@@ -1,5 +1,9 @@
 # AI Agent Radar — Architecture and roadmap
 
+## 2026-10-25 — Threads discovery design
+
+**THREADS = DESIGN READY / AWAITING HUMAN APPROVAL.** [Design](docs/superpowers/specs/2026-10-25-threads-discovery-design.md) defines official public keyword search → shared Brave/RSS/Threads observations → bounded dedupe/selection → one PreparedBatch → existing Gemini/Luna admission → existing finalizer. No implementation or implementation plan yet; Meta public-search approval and token setup are external release gates. This entry supersedes older active-phase statements: Threads is next, followed by combined-source production proof and the remaining roadmap recorded in backlog.md. Gemini Latency, RSS BODY_LIMIT and Cross-provider Analyzer Failover natural validation proceed independently. No production state, runtime limits, migrations, credentials or deployment changed.
+
 ## 2026-10-25 — Cross-provider analyzer failover production release
 
 **DEPLOYED / AWAITING NATURAL PRODUCTION VALIDATION.** The existing Worker version `6a1dcef4-e5cc-414a-aa89-6bf194fa5b60` for source `bd2a3220611e5992b226e6cf7c0f9ec0b92c18ac` was promoted to 100% traffic as deployment `f0dbb968-a9b0-4719-9614-035571b1e917` at `2026-10-25T08:31:00.482237Z`; no build/upload occurred. Production D1 retains the protected `0009_openai_fallback_usage.sql` schema and zero accounting rows/dispatches at release time. `0004_x_discovery.sql` remains intentionally unapplied. The deployed version binds `OPENAI_API_KEY` without recording its value. Cron remains `0 8 * * *`, the health endpoint returned `AI Agent Radar worker ready`, X remains disabled, and a natural scheduled cycle is still required before claiming failover-path validation.
