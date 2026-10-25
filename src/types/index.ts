@@ -26,6 +26,7 @@ export interface ThreadsProvenance {
   postId: string | null;
   resultOrdinal: number;
 }
+export type DiscoveryProvenanceSummary = Exclude<DiscoveryProvenance, ThreadsProvenance> | Omit<ThreadsProvenance, "postId">;
 
 export type ThreadsHealth = "healthy" | "degraded" | "unavailable" | "disabled";
 export type ThreadsReason = "ok" | "disabled" | "configuration" | "expired"
@@ -354,7 +355,7 @@ export interface BatchCycleMetrics {
   returnedStories: number; acceptedStories: number;
   selected: Array<{
     candidateId: string; hostname: string; score: number;
-    provenance: DiscoveryProvenance[];
+    provenance: DiscoveryProvenanceSummary[];
   }>;
   freshDelivered: number; replayDelivered: number; emailCount: number;
   attempts?: GeminiBatchAttemptSummary[];

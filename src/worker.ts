@@ -4,7 +4,7 @@ import { D1GeminiUsageStore } from "./services/d1GeminiUsageStore.js";
 import { D1NotificationHistory } from "./services/d1NotificationHistory.js";
 import { D1MonitoringTelemetry } from "./services/d1MonitoringTelemetry.js";
 import { D1OpenAIFallbackUsageStore } from "./services/d1OpenAIFallbackUsageStore.js";
-import { validateAnalyzerFailoverObservation, type AnalyzerFailoverObservation, type CycleLatencyV1, type CycleSnapshotV1, type GeminiAttemptTiming, type MonitoringTelemetry } from "./services/monitoringTelemetry.js";
+import { isTotalDiscoveryOutage, validateAnalyzerFailoverObservation, validateThreadsCycleMetrics, type AnalyzerFailoverObservation, type CycleLatencyV1, type CycleSnapshotV1, type GeminiAttemptTiming, type MonitoringTelemetry } from "./services/monitoringTelemetry.js";
 import { inspectGeminiAvailability } from "./services/geminiUsageGuard.js";
 import { analyzeBatch, BatchAnalysisError } from "./services/analysisAgent.js";
 import { analyzeBatchWithFailover } from "./services/batchAnalyzerFailover.js";
@@ -17,7 +17,9 @@ import { createMonitoringCycleSnapshot, finalizeStatusOnlyMonitoringCycle, runBa
 import { createDailyEmailContext } from "./services/notificationOrchestrator.js";
 import { collectRss } from "./services/rssDiscovery.js";
 import { RSS_FEEDS } from "./config/rssSources.js";
-import type { BatchCycleMetrics, MonitoringCycleResult, RssCycleMetrics } from "./types/index.js";
+import { collectThreads } from "./services/threadsDiscovery.js";
+import { THREADS_QUERIES } from "./config/threadsSources.js";
+import type { BatchCycleMetrics, MonitoringCycleResult, RssCycleMetrics, ThreadsCycleMetrics } from "./types/index.js";
 
 export const MAX_SCHEDULED_OUTCOMES_LOGGED = 10;
 export const MAX_SCHEDULED_SEARCH_FAILURES_LOGGED = 10;
@@ -51,11 +53,16 @@ export interface RadarWorkerEnv {
   OPENAI_DAILY_TOKEN_LIMIT?: string;
   OPENAI_WEEKLY_TOKEN_LIMIT?: string;
   OPENAI_MONTHLY_TOKEN_LIMIT?: string;
+  THREADS_DISCOVERY_ENABLED?: string;
+  THREADS_PUBLIC_SEARCH_APPROVED?: string;
+  THREADS_TOKEN_EXPIRES_AT?: string;
+  THREADS_ACCESS_TOKEN?: string;
 }
 
 export interface ScheduledCycleSummary {
   batch?: BatchCycleMetrics;
   rss?: RssCycleMetrics;
+  threads?: ThreadsCycleMetrics;
   event: "scheduled_monitoring_cycle_completed";
   searchResultsReceived: number;
   searchFailuresTotal: number;
@@ -132,8 +139,10 @@ function redactScheduledError(error: string, env: RadarWorkerEnv, maximumLength 
     env.CONTROLLED_EXECUTION_TOKEN,
     env.X_BEARER_TOKEN,
     env.OPENAI_API_KEY,
+    env.THREADS_ACCESS_TOKEN,
   ]
     .filter((value): value is string => typeof value === "string" && value.length > 0)
+    .flatMap(value => [value, encodeURIComponent(value)])
     .sort((left, right) => right.length - left.length);
 
   let safeError = error
@@ -174,16 +183,19 @@ function summarizeBatch(batch: BatchCycleMetrics, env: RadarWorkerEnv): BatchCyc
       const valid = pair.kind === "brave"
         ? Number.isInteger(pair.queryOrdinal) && pair.queryOrdinal >= 1 && pair.queryOrdinal <= 10
           && Number.isInteger(pair.resultOrdinal) && pair.resultOrdinal >= 1 && pair.resultOrdinal <= 5
-        : pair.kind === "rss" && typeof pair.feedId === "string" && approvedFeedIds.has(pair.feedId)
-          && Number.isInteger(pair.itemOrdinal) && pair.itemOrdinal >= 1 && pair.itemOrdinal <= 5;
+        : pair.kind === "rss" ? typeof pair.feedId === "string" && approvedFeedIds.has(pair.feedId)
+          && Number.isInteger(pair.itemOrdinal) && pair.itemOrdinal >= 1 && pair.itemOrdinal <= 5
+          : pair.kind === "threads" && THREADS_QUERIES.some(query => query.id === pair.queryId)
+            && Number.isInteger(pair.resultOrdinal) && pair.resultOrdinal >= 1 && pair.resultOrdinal <= 5;
       if (!valid) continue;
-      if (pair.kind !== "brave" && pair.kind !== "rss") continue;
-      const key = pair.kind === "brave" ? `b:${pair.queryOrdinal}:${pair.resultOrdinal}` : `r:${pair.feedId}:${pair.itemOrdinal}`;
+      const key = pair.kind === "brave" ? `b:${pair.queryOrdinal}:${pair.resultOrdinal}`
+        : pair.kind === "rss" ? `r:${pair.feedId}:${pair.itemOrdinal}` : `t:${pair.queryId}:${pair.resultOrdinal}`;
       if (seen.has(key)) continue;
       seen.add(key); remainingProvenance--;
       provenance.push(pair.kind === "brave"
         ? { kind: "brave", queryOrdinal: pair.queryOrdinal, resultOrdinal: pair.resultOrdinal }
-        : { kind: "rss", feedId: pair.feedId, itemOrdinal: pair.itemOrdinal });
+        : pair.kind === "rss" ? { kind: "rss", feedId: pair.feedId, itemOrdinal: pair.itemOrdinal }
+          : { kind: "threads", queryId: pair.queryId, resultOrdinal: pair.resultOrdinal });
     }
     selected.push({ candidateId: entry.candidateId, hostname, score: entry.score, provenance });
   }
@@ -191,6 +203,12 @@ function summarizeBatch(batch: BatchCycleMetrics, env: RadarWorkerEnv): BatchCyc
   const providerFailureClass = allowedString(batch.providerFailureClass, ["resource_exhausted_429", "unavailable_503"] as const);
   const braveHealth = allowedString(batch.discoverySourceHealth?.brave, ["healthy", "degraded", "unavailable", "quota_blocked"] as const) ?? "unavailable";
   const rssHealth = allowedString(batch.discoverySourceHealth?.rss, ["healthy", "degraded", "unavailable"] as const) ?? "unavailable";
+  const threadsHealth = allowedString(batch.discoverySourceHealth?.threads, ["healthy", "degraded", "unavailable", "disabled"] as const);
+  const threadsEnabled = batch.discoverySourceHealth?.threadsEnabled === true;
+  const successfulResponses = batch.discoverySourceHealth?.successfulResponses;
+  const safeSuccesses = successfulResponses && typeof successfulResponses === "object" ? {
+    brave: boundedCount(successfulResponses.brave, 10), rss: boundedCount(successfulResponses.rss, 5), threads: boundedCount(successfulResponses.threads, 3),
+  } : undefined;
   const attempts = (Array.isArray(batch.attempts) ? batch.attempts : []).slice(0, 3).flatMap(attempt => {
     const ordinal = attempt?.ordinal === 1 || attempt?.ordinal === 2 || attempt?.ordinal === 3 ? attempt.ordinal : undefined;
     const accountingOutcome = allowedString(attempt?.accountingOutcome, ["exact", "confirmed_zero", "transport_ambiguous", "pre_dispatch_zero"] as const);
@@ -233,17 +251,20 @@ function summarizeBatch(batch: BatchCycleMetrics, env: RadarWorkerEnv): BatchCyc
   const analyzerFailover:AnalyzerFailoverObservation|undefined=(()=>{try{return validateAnalyzerFailoverObservation(batch.analyzerFailover);}catch{return undefined;}})();
   return {
     searchAttempts: boundedCount(batch.searchAttempts, 10), searchSuccesses: boundedCount(batch.searchSuccesses, 10), searchFailures: boundedCount(batch.searchFailures, 10),
-    rawObservations: boundedCount(batch.rawObservations, 75), acceptedObservations: boundedCount(batch.acceptedObservations, 75),
-    invalid: boundedCount(batch.invalid, 75), homepages: boundedCount(batch.homepages, 75), duplicates: boundedCount(batch.duplicates, 75), known: boundedCount(batch.known, 75),
-    poolCapExcluded: boundedCount(batch.poolCapExcluded, 75),
-    sizeExcluded: boundedCount(batch.sizeExcluded, 50), submittedCandidates: boundedCount(batch.submittedCandidates, 50), promptBytes: boundedCount(batch.promptBytes, 32768),
-    submittedBySource: { brave: boundedCount(batch.submittedBySource?.brave, 50), rss: boundedCount(batch.submittedBySource?.rss, 25) },
+    rawObservations: boundedCount(batch.rawObservations, 90), acceptedObservations: boundedCount(batch.acceptedObservations, 90),
+    invalid: boundedCount(batch.invalid, 90), homepages: boundedCount(batch.homepages, 90), duplicates: boundedCount(batch.duplicates, 90), known: boundedCount(batch.known, 90),
+    poolCapExcluded: boundedCount(batch.poolCapExcluded, 90),
+    sizeExcluded: boundedCount(batch.sizeExcluded, 24), submittedCandidates: boundedCount(batch.submittedCandidates, 24), promptBytes: boundedCount(batch.promptBytes, 12_288),
+    submittedBySource: { brave: boundedCount(batch.submittedBySource?.brave, 24), rss: boundedCount(batch.submittedBySource?.rss, 24), ...(batch.submittedBySource?.threads === undefined ? {} : { threads: boundedCount(batch.submittedBySource.threads, 24) }) },
     discoverySourceHealth: {
       brave: braveHealth,
       rss: rssHealth,
-      outage: braveHealth === "unavailable" && rssHealth === "unavailable",
+      ...(threadsHealth === undefined ? {} : { threads: threadsHealth }),
+      ...(safeSuccesses === undefined ? {} : { successfulResponses: safeSuccesses, threadsEnabled }),
+      outage: safeSuccesses === undefined ? braveHealth === "unavailable" && rssHealth === "unavailable"
+        : isTotalDiscoveryOutage(safeSuccesses, threadsEnabled),
     },
-    truncationStage: allowedString(batch.truncationStage, ["initial", "snippet384", "snippet192", "snippet96", "snippet0", "title128", "tail"] as const) ?? null,
+    truncationStage: allowedString(batch.truncationStage, ["initial", "snippet384", "snippet192", "snippet128", "snippet96", "snippet0", "title128", "tail"] as const) ?? null,
     status,
     ...(status === "provider_failed" && providerFailureClass !== undefined ? { providerFailureClass } : {}),
     reservationAttempts: boundedCount(batch.reservationAttempts, 3), reservations: boundedCount(batch.reservations, 3), providerDispatches: boundedCount(batch.providerDispatches, 3),
@@ -276,6 +297,11 @@ function summarizeRss(rss: RssCycleMetrics): RssCycleMetrics {
   };
 }
 
+function summarizeThreads(threads: ThreadsCycleMetrics): ThreadsCycleMetrics | undefined {
+  try { return validateThreadsCycleMetrics(structuredClone(threads)); }
+  catch { return undefined; }
+}
+
 /** Builds the bounded, secret-free payload emitted after a successful scheduled cycle. */
 export function createScheduledCycleSummary(
   result: MonitoringCycleResult,
@@ -302,10 +328,12 @@ export function createScheduledCycleSummary(
   const emailOutcome = allowedString(delivery?.emailOutcome, ["accepted", "failed", "unknown", "not_attempted"] as const) ?? "unknown";
   const historyOutcome = allowedString(delivery?.historyOutcome, ["not_required", "recorded", "unavailable", "persistence_failed"] as const) ?? "unavailable";
 
+  const threads = result.threads === undefined ? undefined : summarizeThreads(result.threads);
   return {
     event: "scheduled_monitoring_cycle_completed",
     ...(result.batch === undefined ? {} : { batch: summarizeBatch(result.batch, env) }),
     ...(result.rss === undefined ? {} : { rss: summarizeRss(result.rss) }),
+    ...(threads === undefined ? {} : { threads }),
     searchResultsReceived: boundedCount(result.searchResultsReceived),
     searchFailuresTotal: result.searchFailures.length,
     searchFailuresOmitted: Math.max(0, result.searchFailures.length - searchFailures.length),
@@ -381,6 +409,7 @@ export function createWorkerPersistence(env: RadarWorkerEnv) {
 export interface WorkerMonitoringDependencyOverrides {
   readonly searchPage?: typeof searchWebPage;
   readonly collectRss?: BatchMonitoringDependencies["collectRss"];
+  readonly collectThreads?: BatchMonitoringDependencies["collectThreads"];
   readonly attemptTelemetry?: { repository: MonitoringTelemetry; cycleId: string };
   readonly onAttemptTiming?: (timing: GeminiAttemptTiming) => Promise<void>;
   readonly cycleStartedAtMonotonic?: number;
@@ -388,6 +417,7 @@ export interface WorkerMonitoringDependencyOverrides {
 }
 
 export const workerdRssFetch: typeof fetch = (input, init) => globalThis.fetch(input, init);
+export const workerdThreadsFetch: typeof fetch = (input, init) => globalThis.fetch(input, init);
 
 export function createWorkerMonitoringDependencies(
   env: RadarWorkerEnv,
@@ -411,6 +441,14 @@ export function createWorkerMonitoringDependencies(
       freshness: options?.freshness,
     }),
     collectRss: overrides.collectRss ?? (now => collectRss({ now, fetch: workerdRssFetch })),
+    collectThreads: overrides.collectThreads ?? (now => collectThreads({
+      enabled: env.THREADS_DISCOVERY_ENABLED === "true",
+      publicSearchApproved: env.THREADS_PUBLIC_SEARCH_APPROVED === "true",
+      accessToken: env.THREADS_ACCESS_TOKEN,
+      tokenExpiresAt: env.THREADS_TOKEN_EXPIRES_AT,
+      now,
+      fetchImpl: workerdThreadsFetch,
+    })),
     getAnalyzerFailoverObservation: () => analyzerFailover,
     analyze: async batch => {
       try {

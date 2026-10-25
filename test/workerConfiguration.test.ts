@@ -18,6 +18,7 @@ import worker, {
   type RadarWorkerEnv,
   type ScheduledCycleSummary,
 } from "../src/worker.js";
+import type { ThreadsCycleMetrics } from "../src/types/index.js";
 
 function environment(): RadarWorkerEnv {
   return {
@@ -112,6 +113,32 @@ test("optional Luna configuration is independently bounded and never uses OPENAI
   assert.deepEqual(parseOpenAIFallbackLimits(env),{dailyRequests:1,weeklyRequests:7,monthlyRequests:31,dailyTokens:24576,weeklyTokens:172032,monthlyTokens:761856});
   assert.doesNotThrow(()=>createMonitoringRuntimeConfiguration({...env,OPENAI_API_KEY:""}));
   assert.equal(parseOpenAIFallbackLimits({...env,OPENAI_DAILY_REQUEST_LIMIT:"2"}),null);
+});
+
+test("worker_threads_gate_is_independent_of_required_provider_config", async () => {
+  const originalFetch = globalThis.fetch;
+  let fetches = 0;
+  try {
+    globalThis.fetch = async () => { fetches++; return new Response(JSON.stringify({ data: [] })); };
+    const disabled = createWorkerMonitoringDependencies(environment());
+    assert.equal((await disabled.collectThreads!(new Date("2026-10-25T08:00:00.000Z"))).metrics.reason, "disabled");
+    assert.equal(fetches, 0);
+
+    const missingToken = createWorkerMonitoringDependencies({
+      ...environment(), THREADS_DISCOVERY_ENABLED: "true", THREADS_PUBLIC_SEARCH_APPROVED: "true",
+      THREADS_TOKEN_EXPIRES_AT: "2026-11-25T08:00:00.000Z",
+    });
+    assert.equal((await missingToken.collectThreads!(new Date("2026-10-25T08:00:00.000Z"))).metrics.reason, "configuration");
+    assert.equal(fetches, 0);
+
+    const enabled = createWorkerMonitoringDependencies({
+      ...environment(), THREADS_DISCOVERY_ENABLED: "true", THREADS_PUBLIC_SEARCH_APPROVED: "true",
+      THREADS_TOKEN_EXPIRES_AT: "2026-11-25T08:00:00.000Z", THREADS_ACCESS_TOKEN: "offline-token",
+    });
+    const result = await enabled.collectThreads!(new Date("2026-10-25T08:00:00.000Z"));
+    assert.equal(result.metrics.succeededQueries, 3);
+    assert.equal(fetches, 3, "native fetch wrapper is invoked exactly once per approved query");
+  } finally { globalThis.fetch = originalFetch; }
 });
 
 test("Worker composition uses D1 stores and exposes a scheduled handler without invoking it from fetch", async () => {
@@ -322,8 +349,8 @@ test("scheduled summary reports bounded timeout accounting without claiming zero
 function batchMetrics(overrides: Partial<BatchCycleMetrics> = {}): BatchCycleMetrics {
   return {
     searchAttempts: 10, searchSuccesses: 9, searchFailures: 1, rawObservations: 55, acceptedObservations: 45,
-    invalid: 1, homepages: 1, duplicates: 2, known: 3, poolCapExcluded: 0, sizeExcluded: 2, submittedCandidates: 36, promptBytes: 32000,
-    submittedBySource: { brave: 36, rss: 0 },
+    invalid: 1, homepages: 1, duplicates: 2, known: 3, poolCapExcluded: 0, sizeExcluded: 2, submittedCandidates: 24, promptBytes: 12000,
+    submittedBySource: { brave: 24, rss: 0 },
     discoverySourceHealth: { brave: "degraded", rss: "healthy", outage: false },
     truncationStage: "tail", status: "validated", reservationAttempts: 1, reservations: 1, providerDispatches: 1,
     returnedStories: 4, acceptedStories: 4, selected: [{ candidateId: "c050", hostname: "example.test", score: 8, provenance: [{ kind: "brave", queryOrdinal: 10, resultOrdinal: 5 }] }],
@@ -345,6 +372,29 @@ test("scheduled summary independently allowlists discovery source health", () =>
   (poisoned.batch?.discoverySourceHealth as unknown as Record<string, unknown>).rss = "PRIVATE_PROVIDER_BODY";
   const serialized = JSON.stringify(createScheduledCycleSummary(poisoned, environment()));
   assert.equal(serialized.includes("PRIVATE_PROVIDER_BODY"), false);
+});
+
+test("scheduled summary projects bounded Threads metrics and omits post identity", () => {
+  const threads: ThreadsCycleMetrics = {
+    enabled: true, configured: true, publicApprovalAttested: true, health: "degraded", reason: "timeout",
+    authentication: "accepted", rotationDue: false, attemptedQueries: 3, succeededQueries: 2, failedQueries: 1,
+    skippedQueries: 0, observedPositions: 6, validObservations: 5, rejectedPositions: 1,
+    outcomes: [
+      { queryId: "ai_agents", reason: "ok", httpStatus: 200, elapsedMs: 10, observedPositions: 3, itemTruncated: false, pagingIgnored: true, bodyTruncated: false },
+      { queryId: "claude_code", reason: "timeout", httpStatus: null, elapsedMs: 3000, observedPositions: 0, itemTruncated: false, pagingIgnored: false, bodyTruncated: false },
+    ],
+    pipeline: { duplicates: 1, retainedOwned: 3, retainedAttributed: 4, submitted: 2, selected: 1, delivered: 1 },
+  };
+  const batch = batchMetrics({
+    submittedBySource: { brave: 18, rss: 4, threads: 2 },
+    discoverySourceHealth: { brave: "healthy", rss: "healthy", threads: "degraded", successfulResponses: { brave: 10, rss: 4, threads: 2 }, threadsEnabled: true, outage: false },
+    selected: [{ candidateId: "c001", hostname: "threads.com", score: 8, provenance: [{ kind: "threads", queryId: "ai_agents", postId: "123456", resultOrdinal: 1 }] }],
+  });
+  const summary = createScheduledCycleSummary(monitoringResult({ batch, threads }), { ...environment(), THREADS_ACCESS_TOKEN: "private-token" });
+  assert.deepEqual(summary.threads, threads);
+  assert.deepEqual(summary.batch?.selected[0]?.provenance, [{ kind: "threads", queryId: "ai_agents", resultOrdinal: 1 }]);
+  assert.equal(JSON.stringify(summary).includes("123456"), false);
+  assert.equal(JSON.stringify(summary).includes("private-token"), false);
 });
 
 test("scheduled summary copies every batch counter and distinguishes selected stories from one dispatch", () => {

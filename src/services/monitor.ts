@@ -92,6 +92,7 @@ function cycleSnapshot(result: MonitoringCycleResult): CycleSnapshotV1 {
       attemptTimings: batch.latency.attemptTimings.map(timing => ({ ...timing })),
     } }),
     ...(batch?.analyzerFailover===undefined?{}:{analyzerFailover:{...batch.analyzerFailover,usage:batch.analyzerFailover.usage?{...batch.analyzerFailover.usage}:null}}),
+    ...(result.threads === undefined ? {} : { threads: result.threads }),
   };
 }
 
@@ -405,7 +406,9 @@ async function runBatchMonitoringCycleInternal(dependencies: BatchMonitoringDepe
         batch.acceptedStories = analyzed.selections.length;
         batch.selected = analyzed.selections.map(({ candidate, analysis }) => ({
           candidateId: candidate.candidateId, hostname: new URL(candidate.source.url).hostname,
-          score: analysis.relevanceScore, provenance: candidate.provenance.map(pair => ({ ...pair })),
+          score: analysis.relevanceScore, provenance: candidate.provenance.map(pair => pair.kind === "threads"
+            ? { kind: "threads" as const, queryId: pair.queryId, resultOrdinal: pair.resultOrdinal }
+            : { ...pair }),
         }));
         threads.metrics.pipeline.selected = analyzed.selections.filter(({ candidate }) => candidate.provenance.some(entry => entry.kind === "threads")).length;
       } catch (error) {
