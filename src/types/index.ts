@@ -16,7 +16,62 @@ export interface BraveSearchPage {
 
 export type DiscoveryProvenance =
   | { kind: "brave"; queryOrdinal: number; resultOrdinal: number }
-  | { kind: "rss"; feedId: string; itemOrdinal: number };
+  | { kind: "rss"; feedId: string; itemOrdinal: number }
+  | ThreadsProvenance;
+
+export type ThreadsQueryId = "ai_agents" | "claude_code" | "codex";
+export interface ThreadsProvenance {
+  kind: "threads";
+  queryId: ThreadsQueryId;
+  postId: string | null;
+  resultOrdinal: number;
+}
+
+export type ThreadsHealth = "healthy" | "degraded" | "unavailable" | "disabled";
+export type ThreadsReason = "ok" | "disabled" | "configuration" | "expired"
+  | "public_permission_unapproved" | "auth" | "permission_or_policy"
+  | "rate_limit" | "redirect" | "http" | "transport" | "timeout"
+  | "body_limit" | "malformed" | "api_error" | "budget" | "skipped";
+export interface ThreadsQueryOutcome {
+  queryId: ThreadsQueryId;
+  reason: ThreadsReason;
+  httpStatus: number | null;
+  elapsedMs: number;
+  observedPositions: number;
+  itemTruncated: boolean;
+  pagingIgnored: boolean;
+  bodyTruncated: boolean;
+}
+export interface ThreadsPipelineMetrics {
+  duplicates: number;
+  retainedOwned: number;
+  retainedAttributed: number;
+  submitted: number | null;
+  selected: number | null;
+  delivered: number | null;
+}
+export interface ThreadsCycleMetrics {
+  enabled: boolean;
+  configured: boolean;
+  publicApprovalAttested: boolean;
+  health: ThreadsHealth;
+  reason: ThreadsReason;
+  authentication: "unknown" | "accepted" | "rejected";
+  rotationDue: boolean;
+  attemptedQueries: number;
+  succeededQueries: number;
+  failedQueries: number;
+  skippedQueries: number;
+  observedPositions: number;
+  validObservations: number;
+  rejectedPositions: number;
+  outcomes: ThreadsQueryOutcome[];
+  pipeline?: ThreadsPipelineMetrics;
+}
+export interface ThreadsDiscoveryResult {
+  observations: BatchObservation[];
+  metrics: ThreadsCycleMetrics;
+}
 
 export interface BatchObservation {
   result: SearchResult | null;

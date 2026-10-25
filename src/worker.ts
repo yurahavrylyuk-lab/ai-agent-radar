@@ -177,6 +177,7 @@ function summarizeBatch(batch: BatchCycleMetrics, env: RadarWorkerEnv): BatchCyc
         : pair.kind === "rss" && typeof pair.feedId === "string" && approvedFeedIds.has(pair.feedId)
           && Number.isInteger(pair.itemOrdinal) && pair.itemOrdinal >= 1 && pair.itemOrdinal <= 5;
       if (!valid) continue;
+      if (pair.kind !== "brave" && pair.kind !== "rss") continue;
       const key = pair.kind === "brave" ? `b:${pair.queryOrdinal}:${pair.resultOrdinal}` : `r:${pair.feedId}:${pair.itemOrdinal}`;
       if (seen.has(key)) continue;
       seen.add(key); remainingProvenance--;

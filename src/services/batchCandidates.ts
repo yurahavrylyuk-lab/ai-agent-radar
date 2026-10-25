@@ -46,18 +46,21 @@ export async function prepareBatchCandidates(
   const approvedFeedOrder = new Map(RSS_FEEDS.map((feed, index) => [feed.id, index]));
   const provenanceKey = (provenance: DiscoveryProvenance): string => provenance.kind === "brave"
     ? `b:${provenance.queryOrdinal}:${provenance.resultOrdinal}`
-    : `r:${provenance.feedId}:${provenance.itemOrdinal}`;
+    : provenance.kind === "rss" ? `r:${provenance.feedId}:${provenance.itemOrdinal}`
+      : `t:${provenance.queryId}:${provenance.resultOrdinal}`;
   const provenanceRank = (provenance: DiscoveryProvenance): number => provenance.kind === "brave"
     ? (provenance.queryOrdinal - 1) * 5 + provenance.resultOrdinal
-    : 50 + (approvedFeedOrder.get(provenance.feedId) ?? 99) * 5 + provenance.itemOrdinal;
+    : provenance.kind === "rss" ? 50 + (approvedFeedOrder.get(provenance.feedId) ?? 99) * 5 + provenance.itemOrdinal
+      : 10_000;
   for (const observation of observations) {
     const provenance = observation?.provenance;
     const valid = provenance?.kind === "brave"
       ? Number.isInteger(provenance.queryOrdinal) && provenance.queryOrdinal >= 1 && provenance.queryOrdinal <= 10
         && Number.isInteger(provenance.resultOrdinal) && provenance.resultOrdinal >= 1 && provenance.resultOrdinal <= 5
       : provenance?.kind === "rss"
-        && approvedFeedOrder.has(provenance.feedId)
-        && Number.isInteger(provenance.itemOrdinal) && provenance.itemOrdinal >= 1 && provenance.itemOrdinal <= 5;
+        ? approvedFeedOrder.has(provenance.feedId)
+          && Number.isInteger(provenance.itemOrdinal) && provenance.itemOrdinal >= 1 && provenance.itemOrdinal <= 5
+        : false;
     if (!valid) {
       counts.invalid += 1;
       continue;
