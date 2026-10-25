@@ -1,4 +1,5 @@
 import { RSS_FEEDS } from "../config/rssSources.js";
+import { THREADS_QUERIES } from "../config/threadsSources.js";
 import type { BatchCandidate, BatchObservation, CandidatePool, DiscoveryProvenance, SearchResult } from "../types/index.js";
 import { normalizeDiscoveryUrl, type DiscoveryHistory } from "./discoveryHistoryCore.js";
 import type { NotificationHistory } from "./notificationHistoryCore.js";
@@ -44,6 +45,7 @@ export async function prepareBatchCandidates(
   const counts: CandidatePool["counts"] = { acceptedObservations: 0, invalid: 0, homepages: 0, duplicates: 0, known: 0, poolCapExcluded: 0 };
   const bounded: BatchObservation[] = [];
   const approvedFeedOrder = new Map(RSS_FEEDS.map((feed, index) => [feed.id, index]));
+  const approvedThreadsOrder = new Map(THREADS_QUERIES.map((query, index) => [query.id, index]));
   const provenanceKey = (provenance: DiscoveryProvenance): string => provenance.kind === "brave"
     ? `b:${provenance.queryOrdinal}:${provenance.resultOrdinal}`
     : provenance.kind === "rss" ? `r:${provenance.feedId}:${provenance.itemOrdinal}`
@@ -51,7 +53,7 @@ export async function prepareBatchCandidates(
   const provenanceRank = (provenance: DiscoveryProvenance): number => provenance.kind === "brave"
     ? (provenance.queryOrdinal - 1) * 5 + provenance.resultOrdinal
     : provenance.kind === "rss" ? 50 + (approvedFeedOrder.get(provenance.feedId) ?? 99) * 5 + provenance.itemOrdinal
-      : 10_000;
+      : 75 + (approvedThreadsOrder.get(provenance.queryId) ?? 99) * 5 + provenance.resultOrdinal;
   for (const observation of observations) {
     const provenance = observation?.provenance;
     const valid = provenance?.kind === "brave"
@@ -60,7 +62,10 @@ export async function prepareBatchCandidates(
       : provenance?.kind === "rss"
         ? approvedFeedOrder.has(provenance.feedId)
           && Number.isInteger(provenance.itemOrdinal) && provenance.itemOrdinal >= 1 && provenance.itemOrdinal <= 5
-        : false;
+        : provenance?.kind === "threads"
+          && approvedThreadsOrder.has(provenance.queryId)
+          && Number.isInteger(provenance.resultOrdinal) && provenance.resultOrdinal >= 1 && provenance.resultOrdinal <= 5
+          && (observation.result === null ? provenance.postId === null : typeof provenance.postId === "string" && /^\d{1,64}$/.test(provenance.postId));
     if (!valid) {
       counts.invalid += 1;
       continue;
@@ -71,6 +76,7 @@ export async function prepareBatchCandidates(
 
   const positions = new Set<string>();
   const groups = new Map<string, Omit<BatchCandidate, "candidateId">>();
+  let threadsDuplicates = 0;
   for (const observation of bounded) {
     const { provenance, result } = observation;
     const position = provenanceKey(provenance);
@@ -99,6 +105,7 @@ export async function prepareBatchCandidates(
     const existing = groups.get(aliasKey);
     if (existing) {
       counts.duplicates += 1;
+      if (provenance.kind === "threads") threadsDuplicates += 1;
       if (!existing.aliases.includes(normalizedUrl)) existing.aliases.push(normalizedUrl);
       existing.provenance.push(provenance);
     } else {
@@ -109,6 +116,7 @@ export async function prepareBatchCandidates(
   const observedAliases = new Map<string, readonly string[]>();
   const braveBacked: Array<Omit<BatchCandidate, "candidateId">> = [];
   const rssOnly: Array<Omit<BatchCandidate, "candidateId">> = [];
+  const threadsOnly: Array<Omit<BatchCandidate, "candidateId">> = [];
   for (const group of groups.values()) {
     observedAliases.set(group.aliasKey, [...group.aliases]);
     let known = false;
@@ -125,16 +133,27 @@ export async function prepareBatchCandidates(
       counts.known += 1;
       continue;
     }
-    (group.provenance.some(entry => entry.kind === "brave") ? braveBacked : rssOnly).push(group);
+    if (group.provenance.some(entry => entry.kind === "brave")) braveBacked.push(group);
+    else if (group.provenance.some(entry => entry.kind === "rss")) rssOnly.push(group);
+    else threadsOnly.push(group);
   }
   const interleaved: Array<Omit<BatchCandidate, "candidateId">> = [];
-  while (braveBacked.length > 0 || rssOnly.length > 0) {
+  while (braveBacked.length > 0 || rssOnly.length > 0 || threadsOnly.length > 0) {
     const brave = braveBacked.shift();
     if (brave) interleaved.push(brave);
     const rss = rssOnly.shift();
     if (rss) interleaved.push(rss);
+    const threads = threadsOnly.shift();
+    if (threads) interleaved.push(threads);
   }
   counts.poolCapExcluded = Math.max(0, interleaved.length - 50);
   const candidates = interleaved.slice(0, 50).map((group, index) => ({ ...group, candidateId: `c${String(index + 1).padStart(3, "0")}` }));
-  return { candidates, observedAliases, counts };
+  return {
+    candidates, observedAliases, counts,
+    threads: {
+      duplicates: threadsDuplicates,
+      retainedOwned: candidates.filter(candidate => candidate.provenance.every(entry => entry.kind === "threads")).length,
+      retainedAttributed: candidates.filter(candidate => candidate.provenance.some(entry => entry.kind === "threads")).length,
+    },
+  };
 }

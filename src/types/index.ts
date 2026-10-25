@@ -103,6 +103,7 @@ export interface CandidatePool {
   candidates: BatchCandidate[];
   observedAliases: ReadonlyMap<string, readonly string[]>;
   counts: { acceptedObservations: number; invalid: number; homepages: number; duplicates: number; known: number; poolCapExcluded: number };
+  threads?: { duplicates: number; retainedOwned: number; retainedAttributed: number };
 }
 
 export type RssFailureReason = "disabled" | "configuration" | "http" | "redirect" | "timeout" | "body_limit" | "encoding" | "parse" | "structure" | "ok";

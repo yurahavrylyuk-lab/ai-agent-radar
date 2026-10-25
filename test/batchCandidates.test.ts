@@ -17,6 +17,9 @@ function observation(url: string, queryOrdinal = 1, resultOrdinal = 1, title = "
 function rssObservation(url: string, feedId = "openai_news", itemOrdinal = 1, title = "RSS title"): BatchObservation {
   return { provenance: { kind: "rss", feedId, itemOrdinal }, result: { title, url, snippet: "RSS snippet", source: "RSS" } };
 }
+function threadsObservation(url: string, queryId: "ai_agents" | "claude_code" | "codex" = "ai_agents", resultOrdinal = 1, postId = "123", title = "Threads title"): BatchObservation {
+  return { provenance: { kind: "threads", queryId, resultOrdinal, postId }, result: { title, url, snippet: "Threads snippet", source: "Threads" } };
+}
 function analysis(sourceUrl: string): AgentAnalysis {
   return {
     name: "Stored story", category: "developer_tool", summary: "Stored evidence", relevanceScore: 8,
@@ -220,5 +223,26 @@ test("shared pool rejects forged RSS positions and caps admitted candidates at f
     assert.equal(pool.counts.poolCapExcluded, 20);
     assert.equal(pool.counts.invalid, 1);
     assert.equal(pool.candidates.some(candidate => candidate.source.url.endsWith("/forged")), false);
+  });
+});
+
+test("three_source_aliases_merge_once_and_check_every_history_key", async () => {
+  await withHistory(async (history, notificationHistory) => {
+    const pool = await prepareBatchCandidates([
+      rssObservation("https://example.test/shared#rss", "openai_news", 1),
+      threadsObservation("https://example.test/shared#threads", "ai_agents", 1, "900"),
+      observation("https://example.test/shared#brave", 1, 1),
+      threadsObservation("https://www.threads.net/@official/post/901", "ai_agents", 2, "901"),
+      threadsObservation("https://www.threads.com/@official/post/901", "claude_code", 1, "901"),
+    ], { history, notificationHistory, seenAt });
+    assert.equal(pool.candidates.length, 3);
+    assert.equal(pool.candidates[0]?.source.title, "Original title");
+    assert.deepEqual(pool.candidates[0]?.provenance.map(item => item.kind), ["brave", "rss", "threads"]);
+    assert.deepEqual(pool.candidates[0]?.aliases, [
+      "https://example.test/shared#brave", "https://example.test/shared#rss", "https://example.test/shared#threads",
+    ]);
+    assert.deepEqual(pool.threads, { duplicates: 1, retainedOwned: 2, retainedAttributed: 3 });
+    assert.equal(pool.candidates.some(item => item.normalizedUrl.includes("threads.net")), true);
+    assert.equal(pool.candidates.some(item => item.normalizedUrl.includes("threads.com")), true);
   });
 });
