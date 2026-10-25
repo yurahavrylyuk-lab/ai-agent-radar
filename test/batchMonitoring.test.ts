@@ -11,7 +11,7 @@ import { D1MonitoringTelemetry } from "../src/services/d1MonitoringTelemetry.js"
 import { createScheduledCycleSummary, createWorkerMonitoringDependencies, type RadarWorkerEnv } from "../src/worker.js";
 import { BraveUsageGuardDeniedError } from "../src/tools/webSearch.js";
 import { createGeminiBatchCycleContext, generateBatchWithGemini } from "../src/tools/llm/gemini.js";
-import type { AgentAnalysis, BatchAnalysisResult, BraveSearchPage, DiscoveryEmailContent, NotificationRecord, PreparedBatch, RssDiscoveryResult, StoredDiscovery } from "../src/types/index.js";
+import type { AgentAnalysis, BatchAnalysisResult, BraveSearchPage, DiscoveryEmailContent, NotificationRecord, PreparedBatch, RssDiscoveryResult, StoredDiscovery, ThreadsDiscoveryResult } from "../src/types/index.js";
 
 const cycleStart = new Date("2026-10-14T08:00:00.000Z");
 const counts = { dailyRequests: 0, weeklyRequests: 0, monthlyRequests: 0, dailyTokens: 0, weeklyTokens: 0, monthlyTokens: 0 };
@@ -88,6 +88,24 @@ function emptyRss(overrides: Partial<RssDiscoveryResult> = {}): RssDiscoveryResu
     metrics: { status: "collected", configuredFeeds: 4, attemptedFeeds: 4, succeededFeeds: 4, failedFeeds: 0,
       observedPositions: 0, validCandidates: 0, rejectedItems: 0, itemLimitTruncations: 0,
       outcomes: ["openai_news", "github_changelog", "cloudflare_ai", "chrome_developers"].map(feedId => ({ feedId, reason: "ok" as const, elapsedMs: 1 })) },
+    ...overrides,
+  };
+}
+
+function emptyThreads(overrides: Partial<ThreadsDiscoveryResult> = {}): ThreadsDiscoveryResult {
+  return {
+    observations: [],
+    metrics: {
+      enabled: true, configured: true, publicApprovalAttested: true,
+      health: "healthy", reason: "ok", authentication: "accepted", rotationDue: false,
+      attemptedQueries: 3, succeededQueries: 3, failedQueries: 0, skippedQueries: 0,
+      observedPositions: 0, validObservations: 0, rejectedPositions: 0,
+      outcomes: ["ai_agents", "claude_code", "codex"].map(queryId => ({
+        queryId: queryId as "ai_agents" | "claude_code" | "codex", reason: "ok" as const,
+        httpStatus: 200, elapsedMs: 1, observedPositions: 0,
+        itemTruncated: false, pagingIgnored: false, bodyTruncated: false,
+      })),
+    },
     ...overrides,
   };
 }
@@ -260,6 +278,70 @@ test("Brave and RSS candidates share one pool and one Gemini analysis", async ()
   assert.equal(result.rss?.validCandidates, 1);
 });
 
+test("Threads joins Brave and RSS before one shared Batch analysis", async () => {
+  const f = fixture();
+  let clockReads = 0;
+  f.dependencies.now = () => new Date(cycleStart.getTime() + clockReads++ * 1_000);
+  f.dependencies.collectThreads = async collectedAt => {
+    f.events.push("threads");
+    assert.equal(collectedAt.toISOString(), "2026-10-14T08:00:01.000Z");
+    return emptyThreads({
+      observations: [{
+        result: { title: "Threads story", url: "https://www.threads.com/@author/post/abc", snippet: "Public post", publishedAt: "2026-10-14T07:00:00.000Z", source: "Threads" },
+        provenance: { kind: "threads", queryId: "ai_agents", postId: "123", resultOrdinal: 1 },
+      }],
+      metrics: { ...emptyThreads().metrics, observedPositions: 1, validObservations: 1 },
+    });
+  };
+  f.dependencies.analyze = async batch => {
+    f.events.push("analysis");
+    assert.ok(f.events.indexOf("threads") > f.events.indexOf("rss"));
+    assert.ok(batch.candidates.some(candidate => candidate.provenance.some(entry => entry.kind === "threads")));
+    return selection(batch, [batch.candidates.findIndex(candidate => candidate.provenance.some(entry => entry.kind === "threads"))]);
+  };
+
+  const result = await run(f.dependencies);
+
+  assert.equal(f.events.filter(event => event === "analysis").length, 1);
+  assert.equal(result.threads?.succeededQueries, 3);
+  assert.equal(result.batch?.submittedBySource.threads, 1);
+  assert.deepEqual(result.batch?.discoverySourceHealth.successfulResponses, { brave: 10, rss: 4, threads: 3 });
+  assert.equal(result.batch?.discoverySourceHealth.threadsEnabled, true);
+});
+
+test("Threads collector failure is isolated from healthy Brave and RSS", async () => {
+  const f = fixture();
+  f.dependencies.collectThreads = async () => { throw new Error("PRIVATE_THREADS_PROVIDER_TEXT"); };
+  const result = await run(f.dependencies);
+  assert.equal(result.threads?.health, "unavailable");
+  assert.equal(result.threads?.reason, "transport");
+  assert.equal(result.batch?.discoverySourceHealth.outage, false);
+  assert.equal(result.analysesAttempted, 1);
+  assert.equal(JSON.stringify(result).includes("PRIVATE_THREADS_PROVIDER_TEXT"), false);
+});
+
+test("Threads-only successful empty response prevents a total discovery outage", async () => {
+  const f = fixture();
+  f.dependencies.searchPage = async () => { throw new Error("Brave unavailable"); };
+  f.dependencies.collectRss = async () => { throw new Error("RSS unavailable"); };
+  f.dependencies.collectThreads = async () => emptyThreads();
+  const result = await run(f.dependencies);
+  assert.deepEqual(result.batch?.discoverySourceHealth.successfulResponses, { brave: 0, rss: 0, threads: 3 });
+  assert.equal(result.batch?.discoverySourceHealth.outage, false);
+  assert.notEqual(result.delivery?.deliveryReason, "discovery_unavailable");
+});
+
+test("missing Threads collector stays disabled and preserves the two-source outage predicate", async () => {
+  const f = fixture();
+  f.dependencies.searchPage = async () => { throw new Error("Brave unavailable"); };
+  f.dependencies.collectRss = async () => { throw new Error("RSS unavailable"); };
+  const result = await run(f.dependencies);
+  assert.equal(result.threads?.enabled, false);
+  assert.deepEqual(result.batch?.discoverySourceHealth.successfulResponses, { brave: 0, rss: 0, threads: 0 });
+  assert.equal(result.batch?.discoverySourceHealth.threadsEnabled, false);
+  assert.equal(result.batch?.discoverySourceHealth.outage, true);
+});
+
 test("RSS collector rejection is isolated and Brave still reaches analysis", async () => {
   const f = fixture();
   f.dependencies.collectRss = async () => { throw new Error("private feed failure"); };
@@ -276,7 +358,8 @@ test("Brave outage is visible while healthy RSS continues normally", async () =>
   f.dependencies.searchPage = async () => { throw new Error("Brave unavailable"); };
   const result = await run(f.dependencies);
   assert.deepEqual(result.batch?.discoverySourceHealth, {
-    brave: "unavailable", rss: "healthy", outage: false,
+    brave: "unavailable", rss: "healthy", threads: "disabled",
+    successfulResponses: { brave: 0, rss: 4, threads: 0 }, threadsEnabled: false, outage: false,
   });
 });
 
@@ -285,7 +368,8 @@ test("RSS outage is visible while healthy Brave continues normally", async () =>
   f.dependencies.collectRss = async () => { throw new Error("RSS unavailable"); };
   const result = await run(f.dependencies);
   assert.deepEqual(result.batch?.discoverySourceHealth, {
-    brave: "healthy", rss: "unavailable", outage: false,
+    brave: "healthy", rss: "unavailable", threads: "disabled",
+    successfulResponses: { brave: 10, rss: 0, threads: 0 }, threadsEnabled: false, outage: false,
   });
 });
 
@@ -297,7 +381,8 @@ test("operational failure of both active discovery sources reports an outage", a
   f.dependencies.collectRss = async () => { throw new Error("RSS unavailable"); };
   const result = await run(f.dependencies);
   assert.deepEqual(result.batch?.discoverySourceHealth, {
-    brave: "unavailable", rss: "unavailable", outage: true,
+    brave: "unavailable", rss: "unavailable", threads: "disabled",
+    successfulResponses: { brave: 0, rss: 0, threads: 0 }, threadsEnabled: false, outage: true,
   });
   assert.equal(result.replayStoriesSent, 1);
   assert.equal(f.sent.length, 1);
@@ -334,21 +419,23 @@ test("partial RSS feed failure is degraded rather than unavailable", async () =>
   } });
   const result = await run(f.dependencies);
   assert.deepEqual(result.batch?.discoverySourceHealth, {
-    brave: "healthy", rss: "degraded", outage: false,
+    brave: "healthy", rss: "degraded", threads: "disabled",
+    successfulResponses: { brave: 10, rss: 2, threads: 0 }, threadsEnabled: false, outage: false,
   });
   assert.notEqual(result.delivery?.deliveryReason, "discovery_unavailable");
 });
 
-test("Brave quota denial is admission blocking rather than provider outage", async () => {
+test("Brave quota denial stays distinct while zero successful active sources form an outage", async () => {
   const f = fixture();
   f.dependencies.searchPage = async () => { throw new BraveUsageGuardDeniedError(); };
   f.dependencies.collectRss = async () => { throw new Error("RSS unavailable"); };
   const result = await run(f.dependencies);
   assert.deepEqual(result.batch?.discoverySourceHealth, {
-    brave: "quota_blocked", rss: "unavailable", outage: false,
+    brave: "quota_blocked", rss: "unavailable", threads: "disabled",
+    successfulResponses: { brave: 0, rss: 0, threads: 0 }, threadsEnabled: false, outage: true,
   });
   assert.equal(result.searchFailures.length, 0);
-  assert.equal(result.delivery?.deliveryReason, "no_eligible_stories");
+  assert.equal(result.delivery?.deliveryReason, "discovery_unavailable");
 });
 
 test("healthy discovery sources with zero useful candidates are not an outage", async () => {
@@ -356,7 +443,8 @@ test("healthy discovery sources with zero useful candidates are not an outage", 
   f.dependencies.searchPage = async () => ({ rawCount: 0, positions: [] });
   const result = await run(f.dependencies);
   assert.deepEqual(result.batch?.discoverySourceHealth, {
-    brave: "healthy", rss: "healthy", outage: false,
+    brave: "healthy", rss: "healthy", threads: "disabled",
+    successfulResponses: { brave: 10, rss: 4, threads: 0 }, threadsEnabled: false, outage: false,
   });
   assert.equal(result.analysesAttempted, 0);
   assert.equal(result.delivery?.deliveryReason, "no_eligible_stories");

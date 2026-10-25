@@ -329,10 +329,14 @@ export interface GeminiBatchAttemptSummary {
 
 export type BraveDiscoverySourceHealth = "healthy" | "degraded" | "unavailable" | "quota_blocked";
 export type RssDiscoverySourceHealth = "healthy" | "degraded" | "unavailable";
+export interface DiscoverySourceSuccessCounts { brave: number; rss: number; threads: number }
 
 export interface DiscoverySourceHealthMetrics {
   brave: BraveDiscoverySourceHealth;
   rss: RssDiscoverySourceHealth;
+  threads?: ThreadsHealth;
+  successfulResponses?: DiscoverySourceSuccessCounts;
+  threadsEnabled?: boolean;
   outage: boolean;
 }
 
@@ -341,7 +345,7 @@ export interface BatchCycleMetrics {
   rawObservations: number; acceptedObservations: number;
   invalid: number; homepages: number; duplicates: number; known: number;
   poolCapExcluded: number; sizeExcluded: number; submittedCandidates: number; promptBytes: number;
-  submittedBySource: { brave: number; rss: number };
+  submittedBySource: { brave: number; rss: number; threads?: number };
   discoverySourceHealth: DiscoverySourceHealthMetrics;
   truncationStage: BatchTruncationStage | null;
   status: "empty" | "blocked" | "preparation_failed" | "provider_failed" | "timeout" | "invalid_output" | "validated";
@@ -364,6 +368,7 @@ export interface BatchCycleMetrics {
 export interface MonitoringCycleResult {
   batch?: BatchCycleMetrics;
   rss?: RssCycleMetrics;
+  threads?: ThreadsCycleMetrics;
   query: string;
   searchResultsReceived: number;
   searchFailures: MonitoringSearchFailure[];

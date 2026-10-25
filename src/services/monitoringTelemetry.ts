@@ -1,5 +1,5 @@
 import type { ApprovedGeminiModel } from "../config/geminiModels.js";
-import type { BraveDiscoverySourceHealth, GeminiFailureClass, RssDiscoverySourceHealth } from "../types/index.js";
+import type { BraveDiscoverySourceHealth, DiscoverySourceSuccessCounts, GeminiFailureClass, RssDiscoverySourceHealth } from "../types/index.js";
 import type { GeminiAmbiguityReason, GeminiUsageReservation, GeminiUsageSettlement } from "./geminiUsageTracker.js";
 
 export type AttemptRef = { cycleId: string; ordinal: 1 | 2 | 3 };
@@ -7,6 +7,11 @@ export interface CycleStart { cycleId: string; scheduledAt: string; startedAt: s
 export type CyclePhase = "started" | "sources_complete" | "gemini_complete" | "email_attempting" | "completed";
 export type RetryDecision = "not_evaluated" | "retry" | "stop";
 export type RetryReason = "none" | "retryable_503" | "non_retryable" | "max_attempts" | "deadline" | "quota" | "accounting" | "telemetry" | "cancelled";
+
+/** Availability is proven only by at least one valid provider response, not by content volume. */
+export function isTotalDiscoveryOutage(successes: DiscoverySourceSuccessCounts, threadsEnabled: boolean): boolean {
+  return successes.brave === 0 && successes.rss === 0 && (!threadsEnabled || successes.threads === 0);
+}
 
 export interface CycleDeliverySnapshot {
   deliveryMode: "normal" | "degraded" | "status_only";
