@@ -1,11 +1,11 @@
 # Daily Self-Improvement Summary
 
-## 2026-10-25 — Cross-provider analyzer failover migration applied
+## 2026-10-25 — Cross-provider analyzer failover production deployment
 
-- Applied only `0009_openai_fallback_usage.sql` to production D1 `9fb545e2-2f43-4922-8b21-2d79a8de9556` using an isolated migration sequence that omitted intentionally-unapplied `0004_x_discovery.sql`.
-- Verified the ledger entry, empty `openai_fallback_usage` table, reviewed indexes, and three protective triggers. No accounting row was created.
-- State is **MERGED / MIGRATION APPLIED / NOT DEPLOYED**. `OPENAI_API_KEY` remains **NOT CONFIGURED** and production Worker source remains `a1024cb72b1e08c7433e0f954da81f6283f106d3`.
-- No deployment, monitoring/Cron invocation, provider call, secret change, or production data mutation beyond the approved schema migration occurred.
+- Promoted the existing Worker version `6a1dcef4-e5cc-414a-aa89-6bf194fa5b60` (source `bd2a3220611e5992b226e6cf7c0f9ec0b92c18ac`) to 100% traffic as deployment `f0dbb968-a9b0-4719-9614-035571b1e917` at `2026-10-25T08:31:00.482237Z`; no build or upload occurred.
+- Preflight confirmed D1 `9fb545e2-2f43-4922-8b21-2d79a8de9556`, applied `0009_openai_fallback_usage.sql`, intentionally pending `0004_x_discovery.sql`, unchanged Cron `0 8 * * *`, and the deployed version's `OPENAI_API_KEY` binding without reading or recording its value.
+- The final read-only OpenAI accounting check found zero rows and zero dispatches. The provider-free health endpoint returned exactly `AI Agent Radar worker ready`.
+- Status is **DEPLOYED / AWAITING NATURAL PRODUCTION VALIDATION**. No monitoring/Cron invocation, provider call, migration, secret change, D1 write, push, or additional deployment occurred. Gemini Reliability V2 and RSS BODY_LIMIT statuses are unchanged; X remains disabled.
 
 ## 2026-10-24 — Cross-provider analyzer failover implemented offline
 

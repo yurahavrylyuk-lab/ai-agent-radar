@@ -1,8 +1,8 @@
 # AI Agent Radar — Backlog
 
-## 2026-10-25 — Cross-provider analyzer failover migration applied
+## 2026-10-25 — Cross-provider analyzer failover deployed
 
-**CROSS-PROVIDER ANALYZER FAILOVER = MERGED / MIGRATION APPLIED / NOT DEPLOYED.** Migration `0009_openai_fallback_usage.sql` is applied to production D1 `9fb545e2-2f43-4922-8b21-2d79a8de9556`; it created the empty, protected `openai_fallback_usage` accounting table. Migration `0004_x_discovery.sql` remains intentionally unapplied. `OPENAI_API_KEY` is **NOT CONFIGURED**, Luna is not active, and production Worker source remains `a1024cb72b1e08c7433e0f954da81f6283f106d3`. Deployment and production validation remain separate human-controlled gates.
+**CROSS-PROVIDER ANALYZER FAILOVER = DEPLOYED / AWAITING NATURAL PRODUCTION VALIDATION.** Existing Worker version `6a1dcef4-e5cc-414a-aa89-6bf194fa5b60` for source `bd2a3220611e5992b226e6cf7c0f9ec0b92c18ac` is at 100% traffic as deployment `f0dbb968-a9b0-4719-9614-035571b1e917` (`2026-10-25T08:31:00.482237Z`). The promotion performed no build/upload. Production D1 `9fb545e2-2f43-4922-8b21-2d79a8de9556` retains applied `0009_openai_fallback_usage.sql`; `0004_x_discovery.sql` remains intentionally unapplied. The deployed version binds `OPENAI_API_KEY` without recording its value; the final accounting read was zero rows/zero OpenAI dispatches. Cron remains `0 8 * * *`, health returned `AI Agent Radar worker ready`, and natural validation is still pending. X remains disabled.
 
 ## 2026-10-24 — Cross-provider analyzer failover implemented offline
 

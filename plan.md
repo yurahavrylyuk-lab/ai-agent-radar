@@ -1,8 +1,8 @@
 # AI Agent Radar — Architecture and roadmap
 
-## 2026-10-25 — Cross-provider analyzer failover release checkpoint
+## 2026-10-25 — Cross-provider analyzer failover production release
 
-**MERGED / MIGRATION APPLIED / NOT DEPLOYED.** Production D1 now contains the empty `openai_fallback_usage` schema from migration `0009_openai_fallback_usage.sql`, including its reviewed uniqueness and transition protections. Migration `0004_x_discovery.sql` remains intentionally unapplied. `OPENAI_API_KEY` is **NOT CONFIGURED** and the deployed Worker remains source `a1024cb72b1e08c7433e0f954da81f6283f106d3`; therefore Luna is not active and no production validation is claimed. The next release gates are separate secret/spend authorization and exact-source deployment approval.
+**DEPLOYED / AWAITING NATURAL PRODUCTION VALIDATION.** The existing Worker version `6a1dcef4-e5cc-414a-aa89-6bf194fa5b60` for source `bd2a3220611e5992b226e6cf7c0f9ec0b92c18ac` was promoted to 100% traffic as deployment `f0dbb968-a9b0-4719-9614-035571b1e917` at `2026-10-25T08:31:00.482237Z`; no build/upload occurred. Production D1 retains the protected `0009_openai_fallback_usage.sql` schema and zero accounting rows/dispatches at release time. `0004_x_discovery.sql` remains intentionally unapplied. The deployed version binds `OPENAI_API_KEY` without recording its value. Cron remains `0 8 * * *`, the health endpoint returned `AI Agent Radar worker ready`, X remains disabled, and a natural scheduled cycle is still required before claiming failover-path validation.
 
 ## 2026-10-24 — Cross-provider analyzer failover implemented offline
 
