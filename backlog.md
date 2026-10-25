@@ -1,5 +1,9 @@
 # AI Agent Radar — Backlog
 
+## 2026-10-25 — Threads discovery implemented offline
+
+**THREADS = IMPLEMENTED / OFFLINE-TESTED / AWAITING INDEPENDENT ANALYST REVIEW / NOT DEPLOYED.** The approved official public-keyword collector is disabled by default and joins Brave + RSS before shared dedupe, bounded retention, the one Batch analyzer path, and the one finalizer. It adds no migration and does not touch X/0004. Meta public-search approval, token/scopes/expiry, secret/config provisioning, release version, deployment, and natural combined-source proof remain separate human gates. Next roadmap step after review/release is **Brave + RSS + Threads production proof**, followed by Idempotent Email Delivery.
+
 ## 2026-10-25 — Threads discovery design approved and planned
 
 **THREADS = DESIGN APPROVED / IMPLEMENTATION PLANNED / NOT IMPLEMENTED.** [Design](docs/superpowers/specs/2026-10-25-threads-discovery-design.md): official public keyword-search collector into the shared Batch pool; [five-task TDD implementation plan](docs/superpowers/plans/2026-10-25-threads-discovery.md) ready for human review; no runtime implementation. Meta public-search approval/token setup remains an external release dependency. This entry supersedes older active-priority descriptions: Threads → Brave + RSS + Threads production proof → Idempotent Email Delivery → Cross-source Event Deduplication → Telemetry-degraded Content Continuity → Workerd CI Runtime Gate → Legacy Cleanup → Centralize Pipeline Limits → P7 / Relevance + Feedback → Final Stabilization / V1.0. Gemini Latency, RSS BODY_LIMIT and Cross-provider Analyzer Failover natural validation continue independently and do not block offline Threads work. Production state below is unchanged; this checkpoint is documentation only.

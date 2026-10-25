@@ -1,0 +1,6 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "threads-discovery-workerd-regression",
+  "main": "threadsDiscovery.worker.ts",
+  "compatibility_date": "2026-09-20"
+}

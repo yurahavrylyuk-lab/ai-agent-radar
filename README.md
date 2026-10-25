@@ -3,7 +3,7 @@
 AI Agent Radar is a Node.js and TypeScript project for discovering practical AI-agent, AI-product, and developer-tool updates. Production monitoring follows this scheduled pipeline:
 
 ```text
-multi-query Brave + bounded RSS → shared deduplication → one Gemini batch → up to four stories → one Resend digest
+multi-query Brave + bounded RSS + optional bounded Threads → shared deduplication → one Gemini batch → up to four stories → one Resend digest
 ```
 
 The retained `runMonitoringCycle()` per-story path is available for legacy/local use but is not the Cloudflare scheduled production path.
@@ -32,7 +32,7 @@ Current:
 - D1 adapters exist for discoveries, notifications, Brave/Gemini usage, and the disabled/deprecated P6 X inbox/cursor/budget state.
 - The versioned D1 schema lives in `migrations/`; migration `0003` adds nullable Gemini model attribution, while unapplied migration `0004` adds only P6 X tables.
 
-Production schedule: `0 8 * * *` UTC (daily at 08:00 UTC). Each scheduled event runs `runBatchMonitoringCycle()`: up to ten quota-guarded Brave searches plus bounded RSS feed collection enter one shared canonical/history-deduplicated pool; at most 50 candidates enter the current 32 KiB prompt; Gemini is dispatched at most once; at most four stories are selected; and at most one Resend digest is sent. D1 preserves deduplication, usage, discoveries, Batch-selection provenance, and notification history.
+Production schedule: `0 8 * * *` UTC (daily at 08:00 UTC). Each scheduled event runs `runBatchMonitoringCycle()`: up to ten quota-guarded Brave searches plus bounded RSS collection and, only when separately enabled, bounded Threads keyword collection enter one shared canonical/history-deduplicated pool. At most 50 candidates are retained, at most 24 enter a prompt bounded to 12,288 bytes, one Batch analyzer path runs, at most four stories are selected, and at most one Resend digest is sent. D1 preserves deduplication, usage, discoveries, Batch-selection provenance, and notification history.
 
 The retained legacy Gemini analysis path uses a source-controlled, forward-only model pool:
 `gemini-3.8-flash`, `gemini-3.6-flash`, then `gemini-3.5-flash-lite`.
@@ -65,9 +65,27 @@ X is disabled and production activation is abandoned/deprecated. Migration `0004
 
 ### RSS discovery
 
-RSS discovery is implemented and deployed for four approved first-party feeds. It is bounded to five configured feeds, five item positions per feed, one request with no retry or redirect, a 5-second request-through-body deadline, and 256 KiB per feed. Feed failures are isolated and do not stop Brave. The Workerd native-fetch receiver issue is fixed.
+RSS discovery is implemented and deployed for four approved first-party feeds. It is bounded to five configured feeds, five item positions per feed, one request with no retry or redirect, a 5-second request-through-body deadline, and 1 MiB per feed. Feed failures are isolated and do not stop Brave. The Workerd native-fetch receiver issue is fixed.
 
 The natural 2026-10-20 production cycle proved GitHub Changelog and Chrome for Developers succeeded and supplied valid RSS candidates to the shared Gemini pool. OpenAI and Cloudflare AI reached `body_limit` and remain follow-up reliability work; all four feeds are not claimed healthy.
+
+### Optional Threads discovery (offline implementation; not activated)
+
+Threads discovery is implemented behind independent source-controlled gates and is disabled by default. It runs exactly three approved public keyword searches (`AI agents`, `Claude Code`, `Codex`) sequentially, with at most five positions per query, one request per query, a three-second request/body deadline, a nine-second aggregate budget, 128 KiB success bodies, no redirects, no retries, and no pagination. Valid observations join Brave and RSS before the shared URL/history dedupe, 50-candidate retention cap, 24-candidate analyzer selection, and single analyzer/finalizer path.
+
+Configuration is intentionally split:
+
+- secret binding: `THREADS_ACCESS_TOKEN`;
+- non-secret vars: `THREADS_DISCOVERY_ENABLED`, `THREADS_PUBLIC_SEARCH_APPROVED`, and `THREADS_TOKEN_EXPIRES_AT`;
+- only the literal string `"true"` enables either boolean gate;
+- the source defaults to disabled, public-search approval defaults false, and expiry defaults empty;
+- no D1 migration, refresh endpoint, app secret, posting, replies, engagement, pagination, or account-only fallback is used.
+
+`THREADS_PUBLIC_SEARCH_APPROVED=true` is an operator attestation, not runtime proof. Before activation, verify Meta app identity, `threads_basic` plus `threads_keyword_search`, approval for public keyword search and the intended news-discovery use case, and the actual token/expiry. An HTTP 200 or empty result cannot prove public access or distinguish silent own-account restriction. Seven days before the recorded expiry telemetry sets `rotationDue=true`; an expired/invalid token performs zero requests.
+
+Rotation is manual: disable Threads, reverify app approval/scopes/use case, obtain or refresh an authorized long-lived token outside the Worker, update the secret and actual UTC expiry, record non-secret approval evidence, then explicitly re-enable. Revocation/auth/permission uncertainty leaves Threads unavailable while Brave/RSS continue. There is no automatic refresh and no D1 dependency.
+
+Release remains staged: offline implementation → independent final Analyst review → separately authorized push/PR/CI/merge → Meta setup/token/permission approval → separately authorized undeployed Worker version → separately authorized deployment → natural combined-source proof. Compatible rollback readers must tolerate the optional Threads telemetry extension; older strict readers that reject unknown snapshot keys are not approved after Threads-enabled telemetry is written.
 
 Repository Brave request limits are configured as:
 

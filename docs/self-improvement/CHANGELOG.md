@@ -1,5 +1,11 @@
 # Self-improvement changelog
 
+## 2026-10-25 — Threads discovery implementation ready for review
+
+- Added a disabled-by-default, bounded official Threads keyword collector for the three approved topics and merged its validated observations into the existing Brave/RSS Batch pool.
+- Added deterministic three-source retention/selection, successful-response outage semantics, failure isolation, pipeline attribution, strict optional scheduled/D1 telemetry, and source-controlled disabled Worker gates.
+- Added loopback-only Workerd coverage and manual Meta approval/token-expiry/rotation/release instructions. No migration, production activation, credential, provider call, push, merge, or deployment occurred; independent Analyst review is next.
+
 ## 2026-10-25 — Deploy cross-provider analyzer failover
 
 - Promoted the prepared Worker version `6a1dcef4-e5cc-414a-aa89-6bf194fa5b60` for source `bd2a3220611e5992b226e6cf7c0f9ec0b92c18ac` to 100% traffic as deployment `f0dbb968-a9b0-4719-9614-035571b1e917`; no build or upload occurred.

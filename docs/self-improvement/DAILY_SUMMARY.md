@@ -279,3 +279,10 @@ Review the completed experimental governance change if desired. No production ac
 None. No production code, Cloudflare configuration, Cron, or provider limits changed; no deployment, provider calls, or merge to `main` occurred.
 
 “GOV-001 is complete on `self-improvement`. No production behavior changed and nothing merged to `main`. The human owner may review the completed experimental governance change. No production action is required unless the human explicitly decides otherwise.”
+
+# 2026-10-25 — Threads discovery implementation ready for review
+
+- Implemented the approved disabled-by-default official Threads public-keyword source: three fixed sequential queries, five positions each, 3-second request/body deadline, 9-second aggregate budget, 128 KiB response cap, and no redirect/retry/pagination.
+- Threads observations now join Brave and RSS before shared canonical/history dedupe and the existing 50-retained/24-submitted/single-analyzer/single-finalizer path. Source isolation, successful-response outage semantics, bounded pipeline attribution, and secret-free optional telemetry are included.
+- Added local Workerd coverage for native fetch receiver behavior, streamed overflow cancellation, redirect/token isolation, disabled zero requests, and source-failure continuation. Operator setup/rotation and staged release gates are documented; Meta approval and public-access proof remain external prerequisites.
+- Status: **IMPLEMENTED / OFFLINE-TESTED / AWAITING INDEPENDENT ANALYST REVIEW / NOT DEPLOYED**. No migration, provider/feed call, D1 mutation, secret/config change, push, PR, merge, or deployment occurred; X remains disabled and `0004_x_discovery.sql` untouched.
