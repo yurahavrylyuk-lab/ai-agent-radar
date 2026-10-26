@@ -1,5 +1,5 @@
 import type { ApprovedGeminiModel } from "../config/geminiModels.js";
-import type { BraveDiscoverySourceHealth, GeminiFailureClass, RssDiscoverySourceHealth } from "../types/index.js";
+import type { BraveDiscoverySourceHealth, DiscoverySourceSuccessCounts, GeminiFailureClass, RssDiscoverySourceHealth, ThreadsCycleMetrics } from "../types/index.js";
 import type { GeminiAmbiguityReason, GeminiUsageReservation, GeminiUsageSettlement } from "./geminiUsageTracker.js";
 
 export type AttemptRef = { cycleId: string; ordinal: 1 | 2 | 3 };
@@ -7,6 +7,11 @@ export interface CycleStart { cycleId: string; scheduledAt: string; startedAt: s
 export type CyclePhase = "started" | "sources_complete" | "gemini_complete" | "email_attempting" | "completed";
 export type RetryDecision = "not_evaluated" | "retry" | "stop";
 export type RetryReason = "none" | "retryable_503" | "non_retryable" | "max_attempts" | "deadline" | "quota" | "accounting" | "telemetry" | "cancelled";
+
+/** Availability is proven only by at least one valid provider response, not by content volume. */
+export function isTotalDiscoveryOutage(successes: DiscoverySourceSuccessCounts, threadsEnabled: boolean): boolean {
+  return successes.brave === 0 && successes.rss === 0 && (!threadsEnabled || successes.threads === 0);
+}
 
 export interface CycleDeliverySnapshot {
   deliveryMode: "normal" | "degraded" | "status_only";
@@ -57,6 +62,38 @@ export interface CycleSnapshotV1 {
   accounting: { reserved: number; exact: number; confirmedZero: number; ambiguous: number; unavailable: boolean };
   latency?: CycleLatencyV1;
   analyzerFailover?: AnalyzerFailoverObservation;
+  threads?: ThreadsCycleMetrics;
+}
+
+const threadQueryIds = ["ai_agents", "claude_code", "codex"] as const;
+const threadReasons = ["ok", "disabled", "configuration", "expired", "public_permission_unapproved", "auth", "permission_or_policy", "rate_limit", "redirect", "http", "transport", "timeout", "body_limit", "malformed", "api_error", "budget", "skipped"] as const;
+
+export function validateThreadsCycleMetrics(value: unknown): ThreadsCycleMetrics {
+  const baseKeys = ["enabled", "configured", "publicApprovalAttested", "health", "reason", "authentication", "rotationDue", "attemptedQueries", "succeededQueries", "failedQueries", "skippedQueries", "observedPositions", "validObservations", "rejectedPositions", "outcomes"];
+  if (!isObject(value) || !exactKeys(value, [...baseKeys, ...(Object.hasOwn(value, "pipeline") ? ["pipeline"] : [])]) ||
+    typeof value.enabled !== "boolean" || typeof value.configured !== "boolean" || typeof value.publicApprovalAttested !== "boolean" ||
+    !member(value.health, ["healthy", "degraded", "unavailable", "disabled"]) || !member(value.reason, threadReasons) ||
+    !member(value.authentication, ["unknown", "accepted", "rejected"]) || typeof value.rotationDue !== "boolean" ||
+    !count(value.attemptedQueries, 3) || !count(value.succeededQueries, 3) || !count(value.failedQueries, 3) || !count(value.skippedQueries, 3) ||
+    !count(value.observedPositions, 15) || !count(value.validObservations, 15) || !count(value.rejectedPositions, 15) ||
+    !Array.isArray(value.outcomes) || value.outcomes.length > 3) throw new Error("Threads cycle metrics are invalid.");
+  const seen = new Set<string>();
+  for (const outcome of value.outcomes) {
+    if (!isObject(outcome) || !exactKeys(outcome, ["queryId", "reason", "httpStatus", "elapsedMs", "observedPositions", "itemTruncated", "pagingIgnored", "bodyTruncated"]) ||
+      !member(outcome.queryId, threadQueryIds) || seen.has(outcome.queryId as string) || !member(outcome.reason, threadReasons) ||
+      !(outcome.httpStatus === null || (Number.isInteger(outcome.httpStatus) && Number(outcome.httpStatus) >= 100 && Number(outcome.httpStatus) <= 599)) ||
+      !count(outcome.elapsedMs, 9000) || !count(outcome.observedPositions, 5) || typeof outcome.itemTruncated !== "boolean" ||
+      typeof outcome.pagingIgnored !== "boolean" || typeof outcome.bodyTruncated !== "boolean") throw new Error("Threads cycle metrics are invalid.");
+    seen.add(outcome.queryId as string);
+  }
+  if (Object.hasOwn(value, "pipeline")) {
+    const pipeline = value.pipeline;
+    if (!isObject(pipeline) || !exactKeys(pipeline, ["duplicates", "retainedOwned", "retainedAttributed", "submitted", "selected", "delivered"]) ||
+      !count(pipeline.duplicates, 15) || !count(pipeline.retainedOwned, 15) || !count(pipeline.retainedAttributed, 50) ||
+      !count(pipeline.submitted, 24, true) || !count(pipeline.selected, 4, true) || !count(pipeline.delivered, 4, true)) throw new Error("Threads cycle metrics are invalid.");
+  }
+  if (encoder.encode(JSON.stringify(value)).byteLength > 1536) throw new Error("Threads cycle metrics exceed their byte limit.");
+  return value as unknown as ThreadsCycleMetrics;
 }
 export interface AttemptEvidence { failureClass: GeminiFailureClass; httpStatus: number | null; accountingError: boolean; observedAt: string; }
 export type AttemptSettlement =
@@ -161,7 +198,7 @@ export function validateAnalyzerFailoverObservation(value: unknown): AnalyzerFai
 
 export function validateCycleSnapshot(value: unknown): CycleSnapshotV1 {
   const keys = ["version", "braveHealth", "rssHealth", "outage", "candidateCounts", "geminiDispatchCount", "delivery", "accounting"];
-  if (!isObject(value) || !exactKeys(value, [...keys, ...(Object.hasOwn(value,"latency")?["latency"]:[]), ...(Object.hasOwn(value,"analyzerFailover")?["analyzerFailover"]:[])]) || value.version !== 1 ||
+  if (!isObject(value) || !exactKeys(value, [...keys, ...(Object.hasOwn(value,"latency")?["latency"]:[]), ...(Object.hasOwn(value,"analyzerFailover")?["analyzerFailover"]:[]), ...(Object.hasOwn(value,"threads")?["threads"]:[])]) || value.version !== 1 ||
     !(value.braveHealth === null || member(value.braveHealth, ["healthy", "degraded", "unavailable", "quota_blocked"])) ||
     !(value.rssHealth === null || member(value.rssHealth, ["healthy", "degraded", "unavailable"])) ||
     !(value.outage === null || typeof value.outage === "boolean") || !isObject(value.candidateCounts) ||
@@ -171,7 +208,8 @@ export function validateCycleSnapshot(value: unknown): CycleSnapshotV1 {
     !isObject(value.accounting) || !exactKeys(value.accounting, ["reserved", "exact", "confirmedZero", "ambiguous", "unavailable"]) ||
     !count(value.accounting.reserved, 3) || !count(value.accounting.exact, 3) || !count(value.accounting.confirmedZero, 3) ||
     !count(value.accounting.ambiguous, 3) || typeof value.accounting.unavailable !== "boolean" ||
-    ("latency" in value && !validLatency(value.latency)) || ("analyzerFailover" in value && (()=>{try{validateAnalyzerFailoverObservation(value.analyzerFailover);return false;}catch{return true;}})())) {
+    ("latency" in value && !validLatency(value.latency)) || ("analyzerFailover" in value && (()=>{try{validateAnalyzerFailoverObservation(value.analyzerFailover);return false;}catch{return true;}})()) ||
+    ("threads" in value && (()=>{try{validateThreadsCycleMetrics(value.threads);return false;}catch{return true;}})())) {
     throw new Error("Monitoring cycle snapshot is invalid.");
   }
   const encoded = JSON.stringify(value);

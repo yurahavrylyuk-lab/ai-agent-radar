@@ -14,8 +14,8 @@ import { createGeminiCycleContext, getGeminiProviderFailureClass, type GeminiBat
 import { xPostIdFromUrl, type XDiscoveryResult } from "./xDiscovery.js";
 import { BraveUsageGuardDeniedError } from "../tools/webSearch.js";
 import { sendWithResend } from "../tools/email/resend.js";
-import type { AnalyzerFailoverObservation, CycleSnapshotV1 } from "./monitoringTelemetry.js";
-import type { BatchAnalysisResult, BatchCycleMetrics, BatchDeliveryCandidate, BatchObservation, BraveSearchPage, DailyEmailContext, DeliveryCandidate, DiscoveryProcessingResult, MonitoringCycleResult, MonitoringSearchFailure, NotificationResult, PreparedBatch, RssDiscoveryResult, SearchResult, StoredDiscovery, XSourceProvenance } from "../types/index.js";
+import { isTotalDiscoveryOutage, type AnalyzerFailoverObservation, type CycleSnapshotV1 } from "./monitoringTelemetry.js";
+import type { BatchAnalysisResult, BatchCycleMetrics, BatchDeliveryCandidate, BatchObservation, BraveSearchPage, DailyEmailContext, DeliveryCandidate, DiscoveryProcessingResult, MonitoringCycleResult, MonitoringSearchFailure, NotificationResult, PreparedBatch, RssDiscoveryResult, SearchResult, StoredDiscovery, ThreadsCycleMetrics, ThreadsDiscoveryResult, XSourceProvenance } from "../types/index.js";
 
 export const MONITORING_QUERY = "new AI agent developer tool framework release";
 export { MONITORING_QUERIES };
@@ -57,6 +57,7 @@ export interface BatchMonitoringDependencies {
   analyze: (batch: PreparedBatch) => Promise<BatchAnalysisResult>;
   geminiCycleContext: GeminiBatchCycleContext;
   collectRss: (now: Date) => Promise<RssDiscoveryResult>;
+  collectThreads?: (now: Date) => Promise<ThreadsDiscoveryResult>;
   now?: () => Date;
   /** Shared by the Worker so initialization failures use the same one-shot finalizer guard. */
   dailyEmailContext?: DailyEmailContext;
@@ -91,6 +92,7 @@ function cycleSnapshot(result: MonitoringCycleResult): CycleSnapshotV1 {
       attemptTimings: batch.latency.attemptTimings.map(timing => ({ ...timing })),
     } }),
     ...(batch?.analyzerFailover===undefined?{}:{analyzerFailover:{...batch.analyzerFailover,usage:batch.analyzerFailover.usage?{...batch.analyzerFailover.usage}:null}}),
+    ...(result.threads === undefined ? {} : { threads: result.threads }),
   };
 }
 
@@ -197,6 +199,24 @@ function recordNotification(result: MonitoringCycleResult, notification: Notific
   if (notification.status === "not_eligible") result.notificationsNotEligible += 1;
 }
 
+function disabledThreadsMetrics(): ThreadsCycleMetrics {
+  return {
+    enabled: false, configured: false, publicApprovalAttested: false,
+    health: "disabled", reason: "disabled", authentication: "unknown", rotationDue: false,
+    attemptedQueries: 0, succeededQueries: 0, failedQueries: 0, skippedQueries: 0,
+    observedPositions: 0, validObservations: 0, rejectedPositions: 0, outcomes: [],
+  };
+}
+
+function unavailableThreadsMetrics(): ThreadsCycleMetrics {
+  return {
+    enabled: true, configured: false, publicApprovalAttested: false,
+    health: "unavailable", reason: "transport", authentication: "unknown", rotationDue: false,
+    attemptedQueries: 0, succeededQueries: 0, failedQueries: 0, skippedQueries: 3,
+    observedPositions: 0, validObservations: 0, rejectedPositions: 0, outcomes: [],
+  };
+}
+
 /** The scheduled policy: collect the whole bounded pool, analyze once, then deliver persisted stories. */
 async function runBatchMonitoringCycleInternal(dependencies: BatchMonitoringDependencies, emailContext: DailyEmailContext): Promise<MonitoringCycleResult> {
   const now = dependencies.now ?? (() => new Date());
@@ -207,8 +227,8 @@ async function runBatchMonitoringCycleInternal(dependencies: BatchMonitoringDepe
   const batch: BatchCycleMetrics = {
     searchAttempts: 0, searchSuccesses: 0, searchFailures: 0, rawObservations: 0, acceptedObservations: 0,
     invalid: 0, homepages: 0, duplicates: 0, known: 0, poolCapExcluded: 0, sizeExcluded: 0, submittedCandidates: 0, promptBytes: 0,
-    submittedBySource: { brave: 0, rss: 0 },
-    discoverySourceHealth: { brave: "healthy", rss: "healthy", outage: false },
+    submittedBySource: { brave: 0, rss: 0, threads: 0 },
+    discoverySourceHealth: { brave: "healthy", rss: "healthy", threads: "disabled", successfulResponses: { brave: 0, rss: 0, threads: 0 }, threadsEnabled: false, outage: false },
     truncationStage: null, status: "empty", reservationAttempts: 0, reservations: 0, providerDispatches: 0,
     returnedStories: 0, acceptedStories: 0, selected: [], freshDelivered: 0, replayDelivered: 0, emailCount: 0,
   };
@@ -270,6 +290,18 @@ async function runBatchMonitoringCycleInternal(dependencies: BatchMonitoringDepe
   batch.rawObservations += rss.metrics.observedPositions;
   result.failures += rss.metrics.failedFeeds;
   if (rss.metrics.status === "configuration") result.failures += 1;
+  let threads: ThreadsDiscoveryResult;
+  if (!dependencies.collectThreads) {
+    threads = { observations: [], metrics: disabledThreadsMetrics() };
+  } else {
+    try { threads = await dependencies.collectThreads(now()); }
+    catch { threads = { observations: [], metrics: unavailableThreadsMetrics() }; }
+  }
+  result.threads = threads.metrics;
+  observations.push(...threads.observations);
+  batch.rawObservations += threads.metrics.observedPositions;
+  result.failures += threads.metrics.failedQueries;
+  if (threads.metrics.enabled && threads.metrics.health === "unavailable" && threads.metrics.failedQueries === 0) result.failures += 1;
   const braveHealth = braveQuotaBlocked
     ? "quota_blocked" as const
     : batch.searchFailures === 0
@@ -282,15 +314,25 @@ async function runBatchMonitoringCycleInternal(dependencies: BatchMonitoringDepe
     : rss.metrics.failedFeeds > 0
       ? "degraded" as const
       : "healthy" as const;
+  const successfulResponses = { brave: batch.searchSuccesses, rss: rss.metrics.succeededFeeds, threads: threads.metrics.succeededQueries };
   batch.discoverySourceHealth = {
     brave: braveHealth,
     rss: rssHealth,
-    outage: braveHealth === "unavailable" && rssHealth === "unavailable",
+    threads: threads.metrics.health,
+    successfulResponses,
+    threadsEnabled: threads.metrics.enabled,
+    outage: isTotalDiscoveryOutage(successfulResponses, threads.metrics.enabled),
   };
   result.searchResultsReceived = braveResultsReceived;
   // Any required history read/touch failure rejects before analysis or delivery.
   const pool = await prepareBatchCandidates(observations, { history, notificationHistory: notification.history, seenAt: cycleStartedAt });
   Object.assign(batch, pool.counts);
+  threads.metrics.pipeline = {
+    duplicates: pool.threads?.duplicates ?? 0,
+    retainedOwned: pool.threads?.retainedOwned ?? 0,
+    retainedAttributed: pool.threads?.retainedAttributed ?? 0,
+    submitted: null, selected: null, delivered: null,
+  };
   result.duplicates = pool.counts.duplicates + pool.counts.known;
   const fresh: BatchDeliveryCandidate[] = [];
   let selectionPersistenceFailed = false;
@@ -317,7 +359,9 @@ async function runBatchMonitoringCycleInternal(dependencies: BatchMonitoringDepe
       batch.submittedBySource = {
         brave: prepared.candidates.filter(candidate => candidate.provenance.some(entry => entry.kind === "brave")).length,
         rss: prepared.candidates.filter(candidate => candidate.provenance.some(entry => entry.kind === "rss")).length,
+        threads: prepared.candidates.filter(candidate => candidate.provenance.some(entry => entry.kind === "threads")).length,
       };
+      threads.metrics.pipeline.submitted = batch.submittedBySource.threads ?? 0;
       batch.promptBytes = prepared.promptBytes;
       batch.truncationStage = prepared.truncationStage;
       Object.assign(batch.latency, {
@@ -362,8 +406,11 @@ async function runBatchMonitoringCycleInternal(dependencies: BatchMonitoringDepe
         batch.acceptedStories = analyzed.selections.length;
         batch.selected = analyzed.selections.map(({ candidate, analysis }) => ({
           candidateId: candidate.candidateId, hostname: new URL(candidate.source.url).hostname,
-          score: analysis.relevanceScore, provenance: candidate.provenance.map(pair => ({ ...pair })),
+          score: analysis.relevanceScore, provenance: candidate.provenance.map(pair => pair.kind === "threads"
+            ? { kind: "threads" as const, queryId: pair.queryId, resultOrdinal: pair.resultOrdinal }
+            : { ...pair }),
         }));
+        threads.metrics.pipeline.selected = analyzed.selections.filter(({ candidate }) => candidate.provenance.some(entry => entry.kind === "threads")).length;
       } catch (error) {
         batch.status = geminiCycleContext.dispatchBlockedByTimeout ? "timeout" : error instanceof BatchAnalysisError ? "invalid_output" : "provider_failed";
         const providerFailureClass = getGeminiProviderFailureClass(error);
@@ -443,6 +490,9 @@ async function runBatchMonitoringCycleInternal(dependencies: BatchMonitoringDepe
     : preparedDigest;
   result.replayCandidatesEligible = digest.items.filter(item => item.kind === "analyzed" && item.candidate.origin === "replay").length;
   const acceptedItems = digest.items;
+  const threadsAliases = new Set(pool.candidates
+    .filter(candidate => candidate.provenance.some(entry => entry.kind === "threads"))
+    .flatMap(candidate => candidate.aliases.map(normalizeDiscoveryUrl)));
   const email = await finalizeDailyDigest(digest, {
     context: emailContext, history: notification.history, sendEmail: notification.sendEmail ?? sendWithResend,
     beforeEmailAttempt: notification.beforeEmailAttempt,
@@ -450,6 +500,8 @@ async function runBatchMonitoringCycleInternal(dependencies: BatchMonitoringDepe
       result.notificationsSent = batch.emailCount = 1;
       result.freshStoriesSent = batch.freshDelivered = acceptedItems.filter(item => item.kind === "analyzed" && item.candidate.origin === "fresh").length;
       result.replayStoriesSent = batch.replayDelivered = acceptedItems.filter(item => item.kind === "analyzed" && item.candidate.origin === "replay").length;
+      threads.metrics.pipeline!.delivered = acceptedItems.filter(item => item.kind === "analyzed" && item.candidate.origin === "fresh"
+        && threadsAliases.has(normalizeDiscoveryUrl(item.candidate.discovery.normalizedUrl))).length;
     },
   });
   result.delivery = {

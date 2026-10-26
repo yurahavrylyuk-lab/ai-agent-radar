@@ -3,7 +3,7 @@ import Database from "better-sqlite3";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { D1MonitoringTelemetry } from "../src/services/d1MonitoringTelemetry.js";
-import { parseCycleSnapshot, serializeCycleSnapshot, validateCycleSnapshot, validateCycleStart } from "../src/services/monitoringTelemetry.js";
+import { parseCycleSnapshot, serializeCycleSnapshot, validateCycleSnapshot, validateCycleStart, validateThreadsCycleMetrics } from "../src/services/monitoringTelemetry.js";
 
 const encoder = new TextEncoder();
 
@@ -51,6 +51,18 @@ const analyzerFailover = {
   accountingState: "exact" as const, finalAnalyzer: "openai" as const,
 };
 
+const threads = {
+  enabled: true, configured: true, publicApprovalAttested: true,
+  health: "degraded" as const, reason: "timeout" as const, authentication: "accepted" as const, rotationDue: false,
+  attemptedQueries: 3, succeededQueries: 2, failedQueries: 1, skippedQueries: 0,
+  observedPositions: 6, validObservations: 5, rejectedPositions: 1,
+  outcomes: [
+    { queryId: "ai_agents" as const, reason: "ok" as const, httpStatus: 200, elapsedMs: 10, observedPositions: 3, itemTruncated: false, pagingIgnored: true, bodyTruncated: false },
+    { queryId: "claude_code" as const, reason: "timeout" as const, httpStatus: null, elapsedMs: 3000, observedPositions: 0, itemTruncated: false, pagingIgnored: false, bodyTruncated: false },
+  ],
+  pipeline: { duplicates: 1, retainedOwned: 3, retainedAttributed: 4, submitted: 2, selected: 1, delivered: 1 },
+};
+
 test("cycle start accepts trusted null release metadata and rejects malformed identity", () => {
   assert.deepEqual(validateCycleStart(start), start);
   assert.throws(() => validateCycleStart({ ...start, cycleId: "not-uuid" }), /cycle start/i);
@@ -78,6 +90,21 @@ test("reads legacy and bounded latency snapshots without rewriting legacy shape"
   const serialized = serializeCycleSnapshot(extended);
   assert.ok(encoder.encode(serialized).byteLength <= 8192);
   assert.deepEqual(parseCycleSnapshot(serialized), extended);
+});
+
+test("optional Threads telemetry is exact, bounded, and legacy-compatible", () => {
+  assert.deepEqual(validateThreadsCycleMetrics(threads), threads);
+  const extended = { ...snapshot, threads };
+  assert.deepEqual(parseCycleSnapshot(serializeCycleSnapshot(extended)), extended);
+  assert.equal(parseCycleSnapshot(JSON.stringify(snapshot)).threads, undefined);
+  for (const malformed of [
+    { ...threads, token: "private" },
+    { ...threads, outcomes: [...threads.outcomes, { ...threads.outcomes[0] }, { ...threads.outcomes[0] }] },
+    { ...threads, outcomes: [threads.outcomes[0], { ...threads.outcomes[0] }] },
+    { ...threads, observedPositions: 16 },
+    { ...threads, pipeline: { ...threads.pipeline, submitted: 25 } },
+    { ...threads, outcomes: [{ ...threads.outcomes[0], postId: "123" }] },
+  ]) assert.throws(() => validateThreadsCycleMetrics(malformed), /Threads/i);
 });
 
 test("rejects unknown, inconsistent, unbounded, or sensitive latency fields", () => {

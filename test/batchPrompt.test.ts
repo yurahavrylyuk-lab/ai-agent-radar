@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { BATCH_ANALYSIS_INSTRUCTIONS, prepareBatchPrompt, truncateUtf8, utf8Length } from "../src/services/batchPrompt.js";
+import { selectGeminiCandidates } from "../src/services/batchCandidateSelection.js";
 import type { BatchCandidate, BatchTruncationStage, PreparedBatch, SearchResult } from "../src/types/index.js";
 
 const encoder = new TextEncoder();
@@ -186,4 +187,29 @@ test("preparation preserves all original source evidence byte-for-byte", () => {
   assert.equal(batch.candidates[0].source, input[0].source);
   assert.equal(batch.candidates[0].source.title, "  Original\t😀 title  ");
   assert.equal(batch.candidates[0].source.publishedAt, "2026-10-12");
+});
+
+test("three-source early representation survives bounded prompt compaction", () => {
+  const kinds = ["brave", "rss", "brave", "threads"] as const;
+  const input = Array.from({ length: 24 }, (_, index) => {
+    const item = candidate(index + 1, {
+      title: "😀".repeat(80), snippet: "é".repeat(500),
+      url: `https://source-${index}.example.test/${"x".repeat(400)}`,
+    });
+    item.normalizedUrl = item.source.url;
+    item.aliasKey = item.source.url;
+    item.aliases = [item.source.url];
+    const kind = kinds[index % kinds.length]!;
+    item.provenance = kind === "brave"
+      ? [{ kind, queryOrdinal: index % 10 + 1, resultOrdinal: Math.floor(index / 10) + 1 }]
+      : kind === "rss"
+        ? [{ kind, feedId: "openai_news", itemOrdinal: index % 5 + 1 }]
+        : [{ kind, queryId: "ai_agents", postId: String(1000 + index), resultOrdinal: index % 5 + 1 }];
+    return item;
+  });
+  const selected = selectGeminiCandidates(input).candidates;
+  const batch = prepareBatchPrompt(selected);
+  assert.ok(batch.promptBytes <= maximumPromptBytes);
+  assert.ok(batch.candidates.length <= 24);
+  assert.deepEqual(new Set(batch.candidates.slice(0, 4).flatMap(item => item.provenance.map(p => p.kind))), new Set(["brave", "rss", "threads"]));
 });

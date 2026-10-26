@@ -1,5 +1,12 @@
 # Daily Self-Improvement Summary
 
+## 2026-10-25 — Cross-provider analyzer failover production deployment
+
+- Promoted the existing Worker version `6a1dcef4-e5cc-414a-aa89-6bf194fa5b60` (source `bd2a3220611e5992b226e6cf7c0f9ec0b92c18ac`) to 100% traffic as deployment `f0dbb968-a9b0-4719-9614-035571b1e917` at `2026-10-25T08:31:00.482237Z`; no build or upload occurred.
+- Preflight confirmed D1 `9fb545e2-2f43-4922-8b21-2d79a8de9556`, applied `0009_openai_fallback_usage.sql`, intentionally pending `0004_x_discovery.sql`, unchanged Cron `0 8 * * *`, and the deployed version's `OPENAI_API_KEY` binding without reading or recording its value.
+- The final read-only OpenAI accounting check found zero rows and zero dispatches. The provider-free health endpoint returned exactly `AI Agent Radar worker ready`.
+- Status is **DEPLOYED / AWAITING NATURAL PRODUCTION VALIDATION**. No monitoring/Cron invocation, provider call, migration, secret change, D1 write, push, or additional deployment occurred. Gemini Reliability V2 and RSS BODY_LIMIT statuses are unchanged; X remains disabled.
+
 ## 2026-10-24 — Cross-provider analyzer failover implemented offline
 
 - Implemented the approved Gemini → one GPT-6 Luna → existing degraded-delivery flow with an exact three-attempt Gemini proof, D1 reservation/CAS accounting, fixed quotas, one native Responses request, the shared Batch validator and bounded telemetry.
@@ -272,3 +279,10 @@ Review the completed experimental governance change if desired. No production ac
 None. No production code, Cloudflare configuration, Cron, or provider limits changed; no deployment, provider calls, or merge to `main` occurred.
 
 “GOV-001 is complete on `self-improvement`. No production behavior changed and nothing merged to `main`. The human owner may review the completed experimental governance change. No production action is required unless the human explicitly decides otherwise.”
+
+# 2026-10-25 — Threads discovery implementation ready for review
+
+- Implemented the approved disabled-by-default official Threads public-keyword source: three fixed sequential queries, five positions each, 3-second request/body deadline, 9-second aggregate budget, 128 KiB response cap, and no redirect/retry/pagination.
+- Threads observations now join Brave and RSS before shared canonical/history dedupe and the existing 50-retained/24-submitted/single-analyzer/single-finalizer path. Source isolation, successful-response outage semantics, bounded pipeline attribution, and secret-free optional telemetry are included.
+- Added local Workerd coverage for native fetch receiver behavior, streamed overflow cancellation, redirect/token isolation, disabled zero requests, and source-failure continuation. Operator setup/rotation and staged release gates are documented; Meta approval and public-access proof remain external prerequisites.
+- Status: **IMPLEMENTED / OFFLINE-TESTED / AWAITING INDEPENDENT ANALYST REVIEW / NOT DEPLOYED**. No migration, provider/feed call, D1 mutation, secret/config change, push, PR, merge, or deployment occurred; X remains disabled and `0004_x_discovery.sql` untouched.

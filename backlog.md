@@ -1,5 +1,17 @@
 # AI Agent Radar — Backlog
 
+## 2026-10-25 — Threads discovery implemented offline
+
+**THREADS = IMPLEMENTED / OFFLINE-TESTED / AWAITING INDEPENDENT ANALYST REVIEW / NOT DEPLOYED.** The approved official public-keyword collector is disabled by default and joins Brave + RSS before shared dedupe, bounded retention, the one Batch analyzer path, and the one finalizer. It adds no migration and does not touch X/0004. Meta public-search approval, token/scopes/expiry, secret/config provisioning, release version, deployment, and natural combined-source proof remain separate human gates. Next roadmap step after review/release is **Brave + RSS + Threads production proof**, followed by Idempotent Email Delivery.
+
+## 2026-10-25 — Threads discovery design approved and planned
+
+**THREADS = DESIGN APPROVED / IMPLEMENTATION PLANNED / NOT IMPLEMENTED.** [Design](docs/superpowers/specs/2026-10-25-threads-discovery-design.md): official public keyword-search collector into the shared Batch pool; [five-task TDD implementation plan](docs/superpowers/plans/2026-10-25-threads-discovery.md) ready for human review; no runtime implementation. Meta public-search approval/token setup remains an external release dependency. This entry supersedes older active-priority descriptions: Threads → Brave + RSS + Threads production proof → Idempotent Email Delivery → Cross-source Event Deduplication → Telemetry-degraded Content Continuity → Workerd CI Runtime Gate → Legacy Cleanup → Centralize Pipeline Limits → P7 / Relevance + Feedback → Final Stabilization / V1.0. Gemini Latency, RSS BODY_LIMIT and Cross-provider Analyzer Failover natural validation continue independently and do not block offline Threads work. Production state below is unchanged; this checkpoint is documentation only.
+
+## 2026-10-25 — Cross-provider analyzer failover deployed
+
+**CROSS-PROVIDER ANALYZER FAILOVER = DEPLOYED / AWAITING NATURAL PRODUCTION VALIDATION.** Existing Worker version `6a1dcef4-e5cc-414a-aa89-6bf194fa5b60` for source `bd2a3220611e5992b226e6cf7c0f9ec0b92c18ac` is at 100% traffic as deployment `f0dbb968-a9b0-4719-9614-035571b1e917` (`2026-10-25T08:31:00.482237Z`). The promotion performed no build/upload. Production D1 `9fb545e2-2f43-4922-8b21-2d79a8de9556` retains applied `0009_openai_fallback_usage.sql`; `0004_x_discovery.sql` remains intentionally unapplied. The deployed version binds `OPENAI_API_KEY` without recording its value; the final accounting read was zero rows/zero OpenAI dispatches. Cron remains `0 8 * * *`, health returned `AI Agent Radar worker ready`, and natural validation is still pending. X remains disabled.
+
 ## 2026-10-24 — Cross-provider analyzer failover implemented offline
 
 **CROSS-PROVIDER ANALYZER FAILOVER = IMPLEMENTED / OFFLINE-TESTED / AWAITING RE-REVIEW.** The scheduled Batch coordinator preserves Gemini V2 as primary and admits exactly one synchronous `gpt-6-luna` Responses request only after the exact three-attempt `unavailable_503` / `confirmed_zero` Gemini proof, D1 reservation authority, configured OpenAI quotas, and the shared timing gate all pass. Luna accepts only the known-safe Responses reasoning auxiliary plus exactly one assistant `output_text`; analyzer success is published only after the authoritative shared Batch validator passes. Every other Gemini or Luna outcome follows the existing degraded/status finalizer.

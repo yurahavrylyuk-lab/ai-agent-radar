@@ -1,5 +1,11 @@
 # AI Agent Radar project state
 
+## 2026-10-25 — Cross-provider analyzer failover production deployment
+
+Cross-provider analyzer failover is **DEPLOYED / AWAITING NATURAL PRODUCTION VALIDATION**. The existing Worker version `6a1dcef4-e5cc-414a-aa89-6bf194fa5b60`, annotated with source `bd2a3220611e5992b226e6cf7c0f9ec0b92c18ac`, was promoted to 100% traffic as deployment `f0dbb968-a9b0-4719-9614-035571b1e917` at `2026-10-25T08:31:00.482237Z`. The prior version is no longer active. This was a version promotion only: no Worker build or upload occurred.
+
+Production D1 `9fb545e2-2f43-4922-8b21-2d79a8de9556` retains applied migration `0009_openai_fallback_usage.sql`; `0004_x_discovery.sql` remains intentionally unapplied. The deployed version binds `OPENAI_API_KEY` without recording its value. The final pre-promotion accounting read found zero `openai_fallback_usage` rows and zero recorded OpenAI dispatches. Cron remains `0 8 * * *`; the provider-free health endpoint returned exactly `AI Agent Radar worker ready`. No monitoring/Cron invocation or provider call was made, so the new failover path has not yet been naturally exercised. Gemini Reliability V2 and RSS BODY_LIMIT retain their prior status; X remains disabled. Older entries below remain historical point-in-time records.
+
 ## 2026-10-24 — Cross-provider analyzer failover implementation checkpoint
 
 Cross-provider analyzer failover is **IMPLEMENTED / OFFLINE-TESTED / AWAITING RE-REVIEW**, not deployed. Source now permits one synchronous native-fetch `gpt-6-luna` attempt only after all three Gemini V2 attempts are durably `unavailable_503` and `confirmed_zero`, D1 grants the single reservation, configured OpenAI request/token limits pass, and the shared cycle-time gate remains safe. The review correction allowlists the known-safe Responses reasoning auxiliary while requiring exactly one assistant `output_text`, and publishes OpenAI analyzer success only after the strict shared result validator passes. Validation failures retain exact provider accounting, report bounded `invalid_response`/no final analyzer, and use the unchanged degraded fallback and one-email finalizer.

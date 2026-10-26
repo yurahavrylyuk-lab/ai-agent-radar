@@ -36,6 +36,10 @@ function rss(id: number, feedId: string, itemOrdinal: number, hostname?: string)
   return candidate(id, [{ kind: "rss", feedId, itemOrdinal }], hostname);
 }
 
+function threads(id: number, queryId: "ai_agents" | "claude_code" | "codex", resultOrdinal: number, hostname = "www.threads.net"): BatchCandidate {
+  return candidate(id, [{ kind: "threads", queryId, postId: String(10_000 + id), resultOrdinal }], hostname);
+}
+
 test("caps_at_24_without_mutation", () => {
   const input = freezeDeep(Array.from({ length: 47 }, (_, index) => brave(index + 1, index % 10 + 1, Math.floor(index / 10) + 1)));
   const before = structuredClone(input);
@@ -122,4 +126,32 @@ test("dual_provenance_is_selected_once", () => {
     { kind: "brave", queryOrdinal: 2, resultOrdinal: 1 },
     { kind: "brave", queryOrdinal: 1, resultOrdinal: 2 },
   ]);
+});
+
+test("saturated_three_sources_select_12_6_6", () => {
+  const braveCandidates = Array.from({ length: 30 }, (_, index) => brave(index + 1, index % 10 + 1, Math.floor(index / 10) + 1));
+  const feeds = ["openai_news", "github_changelog", "cloudflare_ai", "chrome_developers"];
+  const rssCandidates = Array.from({ length: 20 }, (_, index) => rss(31 + index, feeds[index % feeds.length]!, Math.floor(index / feeds.length) + 1));
+  const queries = ["ai_agents", "claude_code", "codex"] as const;
+  const threadCandidates = Array.from({ length: 15 }, (_, index) => threads(51 + index, queries[index % 3]!, Math.floor(index / 3) + 1));
+  const selected = selectGeminiCandidates([...threadCandidates, ...rssCandidates, ...braveCandidates]).candidates;
+  const ownership = selected.map(item => item.provenance.some(p => p.kind === "brave") ? "B" : item.provenance.some(p => p.kind === "rss") ? "R" : "T");
+  assert.deepEqual(ownership.slice(0, 4), ["B", "R", "B", "T"]);
+  assert.deepEqual({ B: ownership.filter(x => x === "B").length, R: ownership.filter(x => x === "R").length, T: ownership.filter(x => x === "T").length }, { B: 12, R: 6, T: 6 });
+});
+
+test("borrowing_uses_brave_rss_threads_order", () => {
+  const queries = ["ai_agents", "claude_code", "codex"] as const;
+  const manyThreads = Array.from({ length: 15 }, (_, index) => threads(50 + index, queries[index % 3]!, Math.floor(index / 3) + 1));
+  const manyBrave = Array.from({ length: 30 }, (_, index) => brave(index + 1, index % 10 + 1, Math.floor(index / 10) + 1));
+  const oneRss = rss(40, "openai_news", 1);
+  const first = selectGeminiCandidates([...manyThreads, oneRss, ...manyBrave]).candidates;
+  assert.equal(first.filter(item => item === oneRss).length, 1);
+  assert.equal(first.filter(item => item.provenance.some(p => p.kind === "threads")).length, 6);
+  assert.equal(first.filter(item => item.provenance.some(p => p.kind === "brave")).length, 17);
+
+  const rssMany = Array.from({ length: 20 }, (_, index) => rss(index + 1, ["openai_news", "github_changelog", "cloudflare_ai", "chrome_developers"][index % 4]!, Math.floor(index / 4) + 1));
+  const noBrave = selectGeminiCandidates([...rssMany, ...manyThreads]).candidates;
+  assert.equal(noBrave.filter(item => item.provenance.some(p => p.kind === "rss")).length, 18);
+  assert.equal(noBrave.filter(item => item.provenance.some(p => p.kind === "threads")).length, 6);
 });

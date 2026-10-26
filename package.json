@@ -13,6 +13,7 @@
     "build": "tsc",
     "test": "tsx --test test/**/*.test.ts",
     "test:rss-workerd": "node test/workerd/rssFetchReceiver.test.mjs",
+    "test:threads-workerd": "node test/workerd/threadsDiscovery.test.mjs",
     "openai:test": "tsx src/openaiTest.ts",
     "gemini:test": "tsx src/geminiTest.ts",
     "analysis:test": "tsx src/analysisAgentTest.ts",
