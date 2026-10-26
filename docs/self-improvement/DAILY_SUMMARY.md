@@ -286,3 +286,10 @@ None. No production code, Cloudflare configuration, Cron, or provider limits cha
 - Threads observations now join Brave and RSS before shared canonical/history dedupe and the existing 50-retained/24-submitted/single-analyzer/single-finalizer path. Source isolation, successful-response outage semantics, bounded pipeline attribution, and secret-free optional telemetry are included.
 - Added local Workerd coverage for native fetch receiver behavior, streamed overflow cancellation, redirect/token isolation, disabled zero requests, and source-failure continuation. Operator setup/rotation and staged release gates are documented; Meta approval and public-access proof remain external prerequisites.
 - Status: **IMPLEMENTED / OFFLINE-TESTED / AWAITING INDEPENDENT ANALYST REVIEW / NOT DEPLOYED**. No migration, provider/feed call, D1 mutation, secret/config change, push, PR, merge, or deployment occurred; X remains disabled and `0004_x_discovery.sql` untouched.
+
+# 2026-10-26 — Threads discovery merged; release gates remain
+
+- Independent review found and drove the bounded strict-Gregorian timestamp correction, then returned `FINAL_APPROVE` on exact reviewed head `e8ee22d6ac389b48eb19882653ad42e49122dd30`.
+- PR #37 passed CI `validate` and merged normally at `2026-10-26T08:05:04Z`, producing `main` `032a24f7eb5cd10469250d9e5e37646619ed3736`; final offline evidence was 763/763 tests plus passing build, Worker typecheck, Workerd, Wrangler dry-run, and bundle audit.
+- The remote implementation branch was deleted. Production remains source `bd2a3220611e5992b226e6cf7c0f9ec0b92c18ac`, Worker `6a1dcef4-e5cc-414a-aa89-6bf194fa5b60`, deployment `f0dbb968-a9b0-4719-9614-035571b1e917`; Threads remains unconfigured and undeployed.
+- Combined Brave + RSS + Threads production proof is blocked on separate Meta/configuration/release gates. Idempotent Email Delivery is the next immediately actionable engineering item. No deployment, credential/configuration change, migration, D1 mutation, monitoring invocation, or provider call occurred.

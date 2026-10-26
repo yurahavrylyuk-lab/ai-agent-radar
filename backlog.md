@@ -1,5 +1,13 @@
 # AI Agent Radar — Backlog
 
+## 2026-10-26 — Threads discovery merged; production activation remains gated
+
+**THREADS DISCOVERY = MERGED TO MAIN / OFFLINE-TESTED / INDEPENDENTLY REVIEWED / NOT CONFIGURED / NOT DEPLOYED.** PR #37 merged reviewed head `e8ee22d6ac389b48eb19882653ad42e49122dd30` into `main` as merge commit `032a24f7eb5cd10469250d9e5e37646619ed3736` at `2026-10-26T08:05:04Z`. CI `validate` passed, the final suite passed 763/763, and build, Worker typecheck, Workerd, Wrangler dry-run, and bundle audit passed. The source adds the disabled-by-default official Threads keyword collector, deterministic 12/6/6 three-source fairness, strict timestamp validation, bounded failure isolation, and the existing single analyzer/finalizer path. It adds no migration and does not activate X or `0004_x_discovery.sql`.
+
+Production remains source `bd2a3220611e5992b226e6cf7c0f9ec0b92c18ac`, Worker `6a1dcef4-e5cc-414a-aa89-6bf194fa5b60`, deployment `f0dbb968-a9b0-4719-9614-035571b1e917`, at 100% traffic. Threads has no production configuration or secret and is not present in that deployed source. Release still requires Meta app/public keyword-search approval, a securely prepared production token, feature/public-approval configuration, an inspected undeployed Worker version, explicit deployment approval, a natural-cycle validation, and combined Brave + RSS + Threads proof.
+
+The combined production proof is first in roadmap order but is **BLOCKED / WAITING ON THREADS PRODUCTION ACTIVATION**. The next immediately actionable engineering item while those external gates remain pending is **Idempotent Email Delivery**.
+
 ## 2026-10-25 — Threads discovery implemented offline
 
 **THREADS = IMPLEMENTED / OFFLINE-TESTED / AWAITING INDEPENDENT ANALYST REVIEW / NOT DEPLOYED.** The approved official public-keyword collector is disabled by default and joins Brave + RSS before shared dedupe, bounded retention, the one Batch analyzer path, and the one finalizer. It adds no migration and does not touch X/0004. Meta public-search approval, token/scopes/expiry, secret/config provisioning, release version, deployment, and natural combined-source proof remain separate human gates. Next roadmap step after review/release is **Brave + RSS + Threads production proof**, followed by Idempotent Email Delivery.
@@ -60,35 +68,27 @@ Natural cycle scheduled `2026-10-23T08:00:49.466Z`, completed `2026-10-23T08:03:
 
 ## Authoritative active priority order
 
-1. **CROSS-PROVIDER ANALYZER FAILOVER — NEXT ACTIVE BUILD ITEM:** Gemini → GPT-6 Luna → degraded digest; design approved; implementation plan ready; not implemented.
-2. **GEMINI LATENCY RELIABILITY — DEPLOYED / NATURAL VALIDATION CYCLE 1 MIXED:** observation continues in parallel.
-3. **RSS BODY_LIMIT RELIABILITY — DEPLOYED / AWAITING NATURAL PRODUCTION VALIDATION:** observation continues in parallel.
-4. **THREADS**
-5. **BRAVE + RSS + THREADS PRODUCTION PROOF**
-6. **IDEMPOTENT EMAIL DELIVERY**
-7. **CROSS-SOURCE EVENT DEDUPLICATION**
-8. **TELEMETRY-DEGRADED CONTENT CONTINUITY**
-9. **WORKERD CI RUNTIME GATE**
-10. **LEGACY CLEANUP**
-11. **CENTRALIZE PIPELINE LIMITS**
-12. **P7 / RELEVANCE + FEEDBACK**
-13. **FINAL STABILIZATION / V1.0**
+1. **BRAVE + RSS + THREADS PRODUCTION PROOF — BLOCKED / WAITING ON THREADS PRODUCTION ACTIVATION**
+2. **IDEMPOTENT EMAIL DELIVERY — NEXT IMMEDIATELY ACTIONABLE ENGINEERING ITEM**
+3. **CROSS-SOURCE EVENT DEDUPLICATION**
+4. **TELEMETRY-DEGRADED CONTENT CONTINUITY**
+5. **WORKERD CI RUNTIME GATE**
+6. **LEGACY CLEANUP**
+7. **CENTRALIZE PIPELINE LIMITS**
+8. **P7 / RELEVANCE + FEEDBACK**
+9. **FINAL STABILIZATION / V1.0**
 
 ## Scope and completion criteria
 
-1. **DESIGN APPROVED / PLANNED:** [Cross-provider failover](docs/superpowers/specs/2026-10-24-cross-provider-analyzer-failover-design.md), only after three durably confirmed-zero Gemini503 dispatches exhaust V2; one bounded Luna attempt, shared validator, D1 accounting, same finalizer. Five-task implementation plan ready for review.
-2. **DEPLOYED / NATURAL VALIDATION CYCLE 1 MIXED:** optimized synchronous Gemini, <=24 candidates/12 KiB, low thinking. Continue the existing natural observation window; successful-Gemini latency remains unproven. No manual cycles.
-3. **DEPLOYED / AWAITING NATURAL PRODUCTION VALIDATION:** 1 MiB RSS complete-document cap, unchanged structural/timeout/isolation guards. Natural Gemini/RSS observation does not block offline failover work.
-4. **TODO:** official Meta API only, shared source pool, no per-source Gemini request.
-5. **TODO:** natural combined-source proof after Threads release.
-6. **DEFERRED:** idempotent email and ambiguous-send recovery; do not claim current send-before-history ambiguity is solved.
-7. **DEFERRED:** conservative cross-source event dedupe: same event group, distinct preserve both, uncertain preserve both. Current URL/alias dedupe remains unchanged; no semantic matching now.
-8. **DEFERRED:** telemetry-degraded content continuity; existing telemetry admission behavior remains authoritative.
-9. **DEFERRED:** Workerd CI runtime gate; no workflow change now.
-10. **DEFERRED:** retire/isolate legacy runMonitoringCycle and obsolete X code; migration 0004 remains unapplied.
-11. **DEFERRED:** centralize limits without raising quotas.
-12. **TODO later:** relevance and feedback.
-13. **TODO last:** final stabilization/V1.0.
+1. **BLOCKED:** natural combined-source proof requires separately approved Threads production configuration, deployment, and natural validation.
+2. **TODO / ACTIONABLE:** idempotent email and ambiguous-send recovery; do not claim current send-before-history ambiguity is solved.
+3. **DEFERRED:** conservative cross-source event dedupe: same event group, distinct preserve both, uncertain preserve both. Current URL/alias dedupe remains unchanged; no semantic matching now.
+4. **DEFERRED:** telemetry-degraded content continuity; existing telemetry admission behavior remains authoritative.
+5. **DEFERRED:** Workerd CI runtime gate; no workflow change now.
+6. **DEFERRED:** retire/isolate legacy `runMonitoringCycle` and obsolete X code; migration `0004` remains unapplied.
+7. **DEFERRED:** centralize limits without raising quotas.
+8. **TODO later:** relevance and feedback.
+9. **TODO last:** final stabilization/V1.0.
 
 ## Historical milestones
 

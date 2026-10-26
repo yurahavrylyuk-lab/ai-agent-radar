@@ -1,5 +1,13 @@
 # AI Agent Radar project state
 
+## 2026-10-26 — Threads discovery merged to main; production unchanged
+
+**THREADS DISCOVERY = MERGED TO MAIN / OFFLINE-TESTED / INDEPENDENTLY REVIEWED / NOT CONFIGURED / NOT DEPLOYED.** PR #37 merged reviewed head `e8ee22d6ac389b48eb19882653ad42e49122dd30` through normal merge commit `032a24f7eb5cd10469250d9e5e37646619ed3736` at `2026-10-26T08:05:04Z`. CI run `40288463290` (`validate`) succeeded. Final evidence: 763/763 tests plus passing build, Worker typecheck, Workerd, Wrangler dry-run, and bundle audit. Independent review returned `FINAL_APPROVE`; the remote implementation branch was deleted, leaving `origin/main` and `origin/self-improvement`.
+
+The merged source adds the disabled-by-default, public-approval-gated official Threads keyword collector: three bounded queries and at most 15 observations, strict timestamp validation, bounded source isolation, deterministic 12/6/6 Brave/RSS/Threads retention, and the existing shared one-analyzer/one-email pipeline. It adds no migration and does not activate X or `0004_x_discovery.sql`.
+
+Production remains unchanged at source `bd2a3220611e5992b226e6cf7c0f9ec0b92c18ac`, Worker `6a1dcef4-e5cc-414a-aa89-6bf194fa5b60`, deployment `f0dbb968-a9b0-4719-9614-035571b1e917`, with 100% traffic and Cron `0 8 * * *`. Threads is absent from that deployed source and has no production feature/public-approval configuration or secret. Remaining gates are Meta app/public keyword-search approval, secure production token preparation, production configuration, an inspected undeployed version, explicit deployment approval, natural validation, and combined Brave + RSS + Threads proof. That proof is first in roadmap order but blocked on activation; Idempotent Email Delivery is the next immediately actionable engineering item.
+
 ## 2026-10-25 — Cross-provider analyzer failover production deployment
 
 Cross-provider analyzer failover is **DEPLOYED / AWAITING NATURAL PRODUCTION VALIDATION**. The existing Worker version `6a1dcef4-e5cc-414a-aa89-6bf194fa5b60`, annotated with source `bd2a3220611e5992b226e6cf7c0f9ec0b92c18ac`, was promoted to 100% traffic as deployment `f0dbb968-a9b0-4719-9614-035571b1e917` at `2026-10-25T08:31:00.482237Z`. The prior version is no longer active. This was a version promotion only: no Worker build or upload occurred.
@@ -106,7 +114,7 @@ Cloudflare Cron
 - Analysis: Google Gemini through the reviewed ordered pool `gemini-3.8-flash`, `gemini-3.6-flash`, and `gemini-3.5-flash-lite`. Runtime environment input cannot add, remove, or reorder models; `GEMINI_MODEL` is deprecated and ignored. The production scheduled Batch Gemini path uses `gemini-3.8-flash`, normally one dispatch, with at most two same-model retries only after reviewed 503 and durable confirmed_zero; no model fallback. One 90s envelope has a 75s Gemini cutoff; delays 1500–2000ms then3000–4000ms. 429, timeout, transport and accounting uncertainty never retry. The pool remains restricted to approved included Free Tier capacity; paid fallback is disabled.
 - Email: Resend.
 - Historical discovery integration: P6 X selected-account polling is implemented but disabled. Production activation is abandoned/deprecated; no X credential or migration activation is planned on the active roadmap.
-- Replacement source roadmap: Brave and RSS are active. Daily delivery reliability is deployed and naturally validated. V2 is deployed/partially naturally validated, styling and durable telemetry naturally validated. Gemini latency reliability is deployed and awaits natural validation before RSS body_limit and Threads; see backlog.md.
+- Discovery roadmap: Brave and RSS are active in production; Threads is merged but unconfigured and undeployed. Combined Brave + RSS + Threads proof is blocked on activation, while Idempotent Email Delivery is the next immediately actionable engineering item; see backlog.md.
 - OpenAI: not used in the cloud production execution path. Local legacy tooling/dependencies do not authorize inclusion in the deployed Worker runtime.
 
 ## RSS production checkpoint

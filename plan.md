@@ -1,5 +1,15 @@
 # AI Agent Radar — Architecture and roadmap
 
+## 2026-10-26 — Threads discovery source-control milestone
+
+**THREADS DISCOVERY = MERGED TO MAIN / OFFLINE-TESTED / INDEPENDENTLY REVIEWED / NOT CONFIGURED / NOT DEPLOYED.** PR #37 merged reviewed head `e8ee22d6ac389b48eb19882653ad42e49122dd30` through a normal merge commit, producing `main` `032a24f7eb5cd10469250d9e5e37646619ed3736`. CI `validate` passed; final evidence was 763/763 tests plus passing build, Worker typecheck, Workerd, Wrangler dry-run, and bundle audit.
+
+Lifecycle: **DESIGNED / PLANNED / IMPLEMENTED / OFFLINE-TESTED / INDEPENDENTLY REVIEWED / MERGED / NOT CONFIGURED / NOT DEPLOYED / NOT NATURALLY VALIDATED**.
+
+The merged architecture adds an official, disabled-by-default Threads public-keyword collector with three fixed queries, strict timestamp validation, bounded acquisition/failure isolation, and deterministic Brave/RSS/Threads retention of 12/6/6 before the unchanged shared analyzer and finalizer. It adds no extra LLM or email path and no migration. Production still runs `bd2a3220611e5992b226e6cf7c0f9ec0b92c18ac`; Threads is unconfigured and absent from that deployed source.
+
+Release remains gated on Meta app/public keyword-search approval, securely prepared production credentials, production feature/public-approval configuration, an inspected undeployed Worker version, explicit deployment approval, natural-cycle validation, and combined Brave + RSS + Threads proof. That proof is first in roadmap order but externally blocked; **Idempotent Email Delivery** is the next immediately actionable engineering item while activation is pending.
+
 ## 2026-10-25 — Threads discovery implementation handoff
 
 **CURRENT EXECUTION STATE: IMPLEMENTED OFFLINE / AWAITING INDEPENDENT ANALYST REVIEW / NOT PUSHED / NOT DEPLOYED.** Tasks 1–5 of the approved plan are complete on `codex/threads-discovery-implementation`. The runtime remains gated off by default; no Meta credential, public-search approval, Cloudflare setting, migration, provider call, or production action was performed. Release order remains independent review → authorized publication/merge → external Meta approval/token setup → authorized undeployed version → authorized deployment → natural Brave + RSS + Threads proof.
@@ -68,27 +78,23 @@ Analyzed Batch selections support scores1–10, label below7 `It could be releva
 
 ## Active architecture phase
 
-CROSS-PROVIDER ANALYZER FAILOVER is the next active build item. The [design](docs/superpowers/specs/2026-10-24-cross-provider-analyzer-failover-design.md) is human-approved; the five-task implementation plan is ready for review and no implementation has started. Gemini remains primary; only its fully exhausted three-attempt unavailable_503/confirmed_zero sequence permits one synchronous Luna attempt. Use the same PreparedBatch/validator and finalizer, with separate durable OpenAI admission/accounting. All other Gemini failures retain the existing delivery path.
+Threads Discovery is complete in source control at merge commit `032a24f7eb5cd10469250d9e5e37646619ed3736`, but remains disabled, unconfigured, undeployed, and not naturally validated. Production activation stays behind the explicit Meta approval, credential, configuration, undeployed-version inspection, and human deployment gates. Combined-source production proof cannot begin until those gates pass.
 
-Gemini latency validation (cycle 1 mixed) and deployed RSS BODY_LIMIT validation proceed in parallel. Retain the latency evidence window of three eligible dispatched cycles, initially at most five scheduled cycles; successful Gemini median <=45s and comparable total cycle <=110s remain targets, not SLAs. Full raw pool/aliases, replay and one-email finalization remain unchanged. No future natural result is claimed. Design approval, later implementation planning/review, and production migration/secret/spend/deployment permissions remain distinct.
+Idempotent Email Delivery is the next immediately actionable engineering item while Threads activation is externally blocked. Full raw pool/aliases, replay and one-email finalization remain unchanged until that separately approved work begins. No future natural result is claimed, and source merge does not authorize production configuration or deployment.
 
 ## Authoritative roadmap
 
-1. **CROSS-PROVIDER ANALYZER FAILOVER — NEXT ACTIVE BUILD ITEM:** Gemini → GPT-6 Luna → degraded digest; design approved; implementation plan ready; not implemented.
-2. **GEMINI LATENCY RELIABILITY — DEPLOYED / NATURAL VALIDATION CYCLE 1 MIXED:** observation continues in parallel.
-3. **RSS BODY_LIMIT RELIABILITY — DEPLOYED / AWAITING NATURAL PRODUCTION VALIDATION:** observation continues in parallel.
-4. **THREADS**
-5. **BRAVE + RSS + THREADS PRODUCTION PROOF**
-6. **IDEMPOTENT EMAIL DELIVERY**
-7. **CROSS-SOURCE EVENT DEDUPLICATION**
-8. **TELEMETRY-DEGRADED CONTENT CONTINUITY**
-9. **WORKERD CI RUNTIME GATE**
-10. **LEGACY CLEANUP**
-11. **CENTRALIZE PIPELINE LIMITS**
-12. **P7 / RELEVANCE + FEEDBACK**
-13. **FINAL STABILIZATION / V1.0**
+1. **BRAVE + RSS + THREADS PRODUCTION PROOF — BLOCKED / WAITING ON THREADS PRODUCTION ACTIVATION**
+2. **IDEMPOTENT EMAIL DELIVERY — NEXT IMMEDIATELY ACTIONABLE ENGINEERING ITEM**
+3. **CROSS-SOURCE EVENT DEDUPLICATION**
+4. **TELEMETRY-DEGRADED CONTENT CONTINUITY**
+5. **WORKERD CI RUNTIME GATE**
+6. **LEGACY CLEANUP**
+7. **CENTRALIZE PIPELINE LIMITS**
+8. **P7 / RELEVANCE + FEEDBACK**
+9. **FINAL STABILIZATION / V1.0**
 
-Future items are separate bounded work after failover: official API Threads and combined proof; idempotent/ambiguous email; conservative event dedupe (uncertain/distinct preserve both); telemetry-degraded continuity; Workerd CI; legacy cleanup; limits; relevance/feedback; stabilization. No semantic dedupe or other future implementation in latency work. HTTP remains health-only; X disabled and0004 unapplied.
+Threads source implementation is complete, but production activation and combined-source proof remain separate human-controlled gates. While that proof is blocked, engineering may proceed with idempotent/ambiguous email work. Later items remain separate bounded changes: conservative event dedupe (uncertain/distinct preserve both); telemetry-degraded continuity; Workerd CI; legacy cleanup; limits; relevance/feedback; stabilization. HTTP remains health-only; X is disabled and `0004` unapplied.
 
 ## Backlog/Plan Actualization Checkpoint
 

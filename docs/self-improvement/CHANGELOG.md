@@ -1,5 +1,11 @@
 # Self-improvement changelog
 
+## 2026-10-26 — Merge Threads discovery source
+
+- Merged PR #37 reviewed head `e8ee22d6ac389b48eb19882653ad42e49122dd30` into `main` as normal merge commit `032a24f7eb5cd10469250d9e5e37646619ed3736`; CI `validate` and independent review passed.
+- Source now contains the disabled official Threads keyword collector, deterministic 12/6/6 Brave/RSS/Threads retention, strict timestamp validation, bounded isolation, an explicit public-search activation gate, and the existing single analyzer/email finalization path with no additional LLM or email route.
+- Threads remains **NOT CONFIGURED / NOT DEPLOYED**. Production remains source `bd2a3220611e5992b226e6cf7c0f9ec0b92c18ac`; no migration, production setting, credential, deployment, provider call, or D1 mutation accompanied the merge.
+
 ## 2026-10-25 — Threads discovery implementation ready for review
 
 - Added a disabled-by-default, bounded official Threads keyword collector for the three approved topics and merged its validated observations into the existing Brave/RSS Batch pool.
