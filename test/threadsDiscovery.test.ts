@@ -78,6 +78,31 @@ test("freshness_uses_one_collection_window", async () => {
   assert.deepEqual(new Set(urls.map(url => url.searchParams.get("since"))), new Set([String(Math.floor(NOW.getTime() / 1000) - 259200)]));
 });
 
+test("calendar timestamps validate before Date normalization", async () => {
+  const cases = [
+    ["2026-03-01T12:00:00.000Z", "2026-03-01T13:00:00.000Z", true],
+    ["2026-03-01T12:00:00+0000", "2026-03-01T13:00:00.000Z", true],
+    ["2024-02-29T12:00:00.000Z", "2024-02-29T13:00:00.000Z", true],
+    ["2026-02-30T12:00:00.000Z", "2026-03-02T13:00:00.000Z", false],
+    ["2025-02-29T12:00:00.000Z", "2025-03-01T13:00:00.000Z", false],
+    ["2026-04-31T12:00:00.000Z", "2026-05-01T13:00:00.000Z", false],
+    ["2026-13-01T12:00:00.000Z", "2026-12-01T13:00:00.000Z", false],
+    ["2026-03-01T24:00:00.000Z", "2026-03-02T01:00:00.000Z", false],
+    ["2026-03-01T12:60:00.000Z", "2026-03-01T13:00:00.000Z", false],
+    ["2026-03-01T12:00:60.000Z", "2026-03-01T13:00:00.000Z", false],
+  ] as const;
+
+  for (const [timestamp, now, accepted] of cases) {
+    const result = await collectThreads(enabled(
+      (async () => json({ data: [post("1", "AI agents", timestamp)] })) as typeof fetch,
+      { now: new Date(now), tokenExpiresAt: "2027-01-01T00:00:00.000Z" },
+    ));
+    assert.equal(result.metrics.observedPositions, 3, timestamp);
+    assert.equal(result.metrics.validObservations, accepted ? 3 : 0, timestamp);
+    assert.equal(result.observations.every(item => item.result !== null), accepted, timestamp);
+  }
+});
+
 test("bounded_stream_and_deadlines", async () => {
   const oversized = "x".repeat(THREADS_LIMITS.successBodyBytes + 1);
   const response = new Response(oversized, { headers: { "content-type": "application/json" } });

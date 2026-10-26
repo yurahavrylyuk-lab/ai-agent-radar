@@ -106,6 +106,28 @@ function validPermalink(value: unknown): string | undefined {
   } catch { return undefined; }
 }
 
+function validTimestamp(value: string): Date | undefined {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,3})?(Z|[+-]\d{2}:?\d{2})$/.exec(value);
+  if (!match) return undefined;
+  const [, yearText, monthText, dayText, hourText, minuteText, secondText, zone] = match;
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+  const second = Number(secondText);
+  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const monthDays = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  if (month < 1 || month > 12 || day < 1 || day > monthDays[month - 1]! || hour > 23 || minute > 59 || second > 59) return undefined;
+  if (zone !== "Z") {
+    const offsetHour = Number(zone.slice(1, 3));
+    const offsetMinute = Number(zone.slice(-2));
+    if (offsetHour > 23 || offsetMinute > 59) return undefined;
+  }
+  const timestamp = new Date(value);
+  return Number.isFinite(timestamp.getTime()) ? timestamp : undefined;
+}
+
 function validPost(value: unknown, sinceMs: number, untilMs: number): { result: SearchResult; postId: string } | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const post = value as Record<string, unknown>;
@@ -115,9 +137,10 @@ function validPost(value: unknown, sinceMs: number, untilMs: number): { result: 
   if (!text) return undefined;
   const url = validPermalink(post.permalink);
   if (!url || typeof post.timestamp !== "string") return undefined;
-  const timestamp = new Date(post.timestamp);
+  const timestamp = validTimestamp(post.timestamp);
+  if (!timestamp) return undefined;
   const time = timestamp.getTime();
-  if (Number.isNaN(time) || time < sinceMs || time > untilMs) return undefined;
+  if (time < sinceMs || time > untilMs) return undefined;
   return {
     postId: post.id,
     result: {
