@@ -95,3 +95,61 @@ test("unresolved mutation plus unreadable authoritative state fails closed", asy
     assert.equal(sqlite.prepare("SELECT count(*) AS count FROM email_deliveries").get()?.count, 0);
   } finally { sqlite.close(); }
 });
+
+test("dispatch admission starts the immutable 23-hour clock and is idempotent per token", async () => {
+  const { sqlite, d1 } = await createEmailDeliveryDatabase();
+  try {
+    const ledger = new D1EmailDeliveryLedger(d1 as unknown as D1Database);
+    await ledger.reserve(await frozen());
+    const claimed = await ledger.claim("daily-digest/2026-11-04", "dispatch-1");
+    assert.equal(claimed.kind, "committed");
+    if (claimed.kind !== "committed" || !claimed.record.claim) return;
+    const admitted = await ledger.admitDispatch(claimed.record.claim);
+    assert.equal(admitted.kind, "committed");
+    const repeated = await ledger.admitDispatch(claimed.record.claim);
+    assert.equal(repeated.kind, "committed");
+    const record = await ledger.read("daily-digest/2026-11-04");
+    assert.equal(record?.slots.length, 1);
+    assert.equal(record?.slots[0]?.token, "dispatch-1");
+    assert.equal(record?.slots[0]?.evidence, "uncertain");
+    assert.equal(new Date(record!.retryBefore!).getTime() - new Date(record!.firstProviderAttemptAt!).getTime(), 23 * 60 * 60 * 1000);
+    assert.notEqual(record?.firstProviderAttemptAt, record?.frozen?.identity.scheduledAt);
+    const verified = await ledger.verifyDispatch(claimed.record.claim);
+    assert.equal(verified.record.slots.length, 1);
+    assert.ok(new Date(verified.databaseNow).getTime() >= new Date(record!.firstProviderAttemptAt!).getTime());
+  } finally { sqlite.close(); }
+});
+
+test("proven pre-fetch cancellation refunds only the live owner's sole slot and clock", async () => {
+  const { sqlite, d1 } = await createEmailDeliveryDatabase();
+  try {
+    const ledger = new D1EmailDeliveryLedger(d1 as unknown as D1Database);
+    await ledger.reserve(await frozen());
+    const claimed = await ledger.claim("daily-digest/2026-11-04", "cancel-1");
+    if (claimed.kind !== "committed" || !claimed.record.claim) return;
+    await ledger.admitDispatch(claimed.record.claim);
+    const cancelled = await ledger.cancelUndispatched(claimed.record.claim);
+    assert.equal(cancelled.kind, "committed");
+    const record = await ledger.read("daily-digest/2026-11-04");
+    assert.equal(record?.state, "prepared");
+    assert.equal(record?.claim, null);
+    assert.deepEqual(record?.slots, []);
+    assert.equal(record?.firstProviderAttemptAt, null);
+    assert.equal(record?.retryBefore, null);
+    assert.equal((await ledger.cancelUndispatched(claimed.record.claim)).kind, "blocked");
+  } finally { sqlite.close(); }
+});
+
+test("lost dispatch-admission response retains one uncertain capacity slot", async () => {
+  const { sqlite, d1 } = await createEmailDeliveryDatabase();
+  try {
+    const ledger = new D1EmailDeliveryLedger(d1 as unknown as D1Database);
+    await ledger.reserve(await frozen());
+    const claimed = await ledger.claim("daily-digest/2026-11-04", "lost-intent");
+    if (claimed.kind !== "committed" || !claimed.record.claim) return;
+    d1.inject({ pattern: /^UPDATE email_deliveries SET\s+dispatch_evidence_json/, phase: "after" });
+    const admitted = await ledger.admitDispatch(claimed.record.claim);
+    assert.equal(admitted.kind, "committed");
+    assert.equal((await ledger.read("daily-digest/2026-11-04"))?.slots.length, 1);
+  } finally { sqlite.close(); }
+});

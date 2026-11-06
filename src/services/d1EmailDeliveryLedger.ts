@@ -132,9 +132,92 @@ export class D1EmailDeliveryLedger implements DeliveryLedger {
     return { kind: "blocked", reason: record?.claim ? "in_progress" : "ledger_unavailable" };
   }
 
-  async admitDispatch(_ref: ClaimRef): Promise<MutationResult> { throw new Error("Dispatch admission is not implemented."); }
-  async verifyDispatch(_ref: ClaimRef): Promise<{ record: DeliveryRecord; databaseNow: string }> { throw new Error("Dispatch verification is not implemented."); }
-  async cancelUndispatched(_ref: ClaimRef): Promise<MutationResult> { throw new Error("Dispatch cancellation is not implemented."); }
+  private slot(record: DeliveryRecord, token: string): DispatchSlot | undefined {
+    return record.slots.find(slot => slot.token === token);
+  }
+
+  private owns(record: DeliveryRecord, ref: ClaimRef): boolean {
+    return record.claim?.token === ref.token && record.claim.generation === ref.generation;
+  }
+
+  private async appendDispatch(ref: ClaimRef): Promise<void> {
+    await this.database.prepare(`UPDATE email_deliveries SET
+      dispatch_evidence_json=json_insert(dispatch_evidence_json,'$[#]',json_object(
+        'token',?1,'admittedAt',strftime('%Y-%m-%dT%H:%M:%fZ','now'),'evidence','uncertain','outcome','pending')),
+      first_provider_attempt_at=coalesce(first_provider_attempt_at,strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      last_provider_attempt_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+      retry_before=coalesce(retry_before,strftime('%Y-%m-%dT%H:%M:%fZ','now','+23 hours')),
+      updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),last_reason='dispatch_admitted'
+      WHERE delivery_key=?2 AND claim_token=?1 AND claim_generation=?3 AND state='attempting'
+        AND lease_until>strftime('%Y-%m-%dT%H:%M:%fZ','now')
+        AND json_array_length(dispatch_evidence_json)<3
+        AND (retry_before IS NULL OR retry_before>strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        AND NOT EXISTS (SELECT 1 FROM json_each(dispatch_evidence_json) WHERE json_extract(value,'$.token')=?1)`)
+      .bind(ref.token, ref.key, ref.generation).run();
+  }
+
+  async admitDispatch(ref: ClaimRef): Promise<MutationResult> {
+    let record = await this.read(ref.key);
+    if (!record) return { kind: "blocked", reason: "integrity_hold" };
+    const existing = this.slot(record, ref.token);
+    if (existing) return { kind: this.owns(record, ref) ? "committed" : "superseded", record };
+    if (!this.owns(record, ref)) return { kind: "blocked", reason: record.claim ? "in_progress" : "integrity_hold" };
+    try { await this.appendDispatch(ref); } catch { /* authoritative read decides */ }
+    record = await this.read(ref.key);
+    if (!record) return { kind: "blocked", reason: "ledger_unavailable" };
+    if (this.slot(record, ref.token)) return { kind: this.owns(record, ref) ? "committed" : "superseded", record };
+    if (!this.owns(record, ref)) return { kind: "blocked", reason: "in_progress" };
+    if (record.slots.length >= 3 || (record.retryBefore && record.retryBefore <= new Date().toISOString())) {
+      return { kind: "blocked", reason: "recovery_required" };
+    }
+    try { await this.appendDispatch(ref); } catch { /* final authoritative read decides */ }
+    record = await this.read(ref.key);
+    if (record && this.slot(record, ref.token)) return { kind: "committed", record };
+    return { kind: "blocked", reason: "ledger_unavailable" };
+  }
+
+  async verifyDispatch(ref: ClaimRef): Promise<{ record: DeliveryRecord; databaseNow: string }> {
+    const database = this.primary();
+    try {
+      const row = await database.prepare(`${selectRow} WHERE delivery_key=?1`).bind(ref.key).first<DeliveryRow>();
+      const time = await database.prepare("SELECT strftime('%Y-%m-%dT%H:%M:%fZ','now') AS database_now").first<{ database_now: string }>();
+      if (!row || !time || !time.database_now) throw new DeliveryStateUnavailableError();
+      const record = fromRow(row);
+      if (!this.owns(record, ref) || !this.slot(record, ref.token)) throw new DeliveryStateUnavailableError();
+      return { record, databaseNow: time.database_now };
+    } catch (error) {
+      if (error instanceof DeliveryStateUnavailableError) throw error;
+      throw new DeliveryStateUnavailableError();
+    }
+  }
+
+  private async removeUndispatched(ref: ClaimRef, record: DeliveryRecord): Promise<void> {
+    const remaining = record.slots.filter(slot => slot.token !== ref.token);
+    const empty = remaining.length === 0;
+    await this.database.prepare(`UPDATE email_deliveries SET
+      state=?1,dispatch_evidence_json=?2,
+      first_provider_attempt_at=?3,last_provider_attempt_at=?4,retry_before=?5,
+      claim_token=NULL,lease_until=NULL,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),last_reason='cancelled_before_dispatch'
+      WHERE delivery_key=?6 AND claim_token=?7 AND claim_generation=?8 AND state='attempting'
+        AND lease_until>strftime('%Y-%m-%dT%H:%M:%fZ','now') AND dispatch_evidence_json=?9`)
+      .bind(empty ? "prepared" : "ambiguous", JSON.stringify(remaining),
+        empty ? null : record.firstProviderAttemptAt,
+        empty ? null : remaining.at(-1)!.admittedAt,
+        empty ? null : record.retryBefore,
+        ref.key, ref.token, ref.generation, JSON.stringify(record.slots)).run();
+  }
+
+  async cancelUndispatched(ref: ClaimRef): Promise<MutationResult> {
+    let record = await this.read(ref.key);
+    if (!record || !this.owns(record, ref)) return { kind: "blocked", reason: "integrity_hold" };
+    const slot = this.slot(record, ref.token);
+    if (!slot || slot.evidence !== "uncertain" || slot.outcome !== "pending") return { kind: "blocked", reason: "integrity_hold" };
+    try { await this.removeUndispatched(ref, record); } catch { /* authoritative read decides */ }
+    const after = await this.read(ref.key);
+    if (!after) return { kind: "blocked", reason: "ledger_unavailable" };
+    if (!this.slot(after, ref.token) && !this.owns(after, ref)) return { kind: "committed", record: after };
+    return { kind: "blocked", reason: "ledger_unavailable" };
+  }
   async recordOutcome(_ref: ClaimRef, _hash: string, _outcome: ResendOutcome): Promise<MutationResult> { throw new Error("Delivery outcome recording is not implemented."); }
   async reconcileAccepted(_key: DeliveryKey): Promise<MutationResult> { throw new Error("Delivery reconciliation is not implemented."); }
   async reconcileOneOlder(_logicalDate: string): Promise<void> { throw new Error("Delivery reconciliation is not implemented."); }

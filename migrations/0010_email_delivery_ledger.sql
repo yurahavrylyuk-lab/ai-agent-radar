@@ -83,8 +83,12 @@ WHEN NEW.delivery_key IS NOT OLD.delivery_key
   OR (OLD.aliases_json IS NOT NULL AND NEW.aliases_json IS NOT OLD.aliases_json)
   OR NEW.created_at IS NOT OLD.created_at
   OR NEW.claim_generation < OLD.claim_generation
-  OR (OLD.first_provider_attempt_at IS NOT NULL AND NEW.first_provider_attempt_at IS NOT OLD.first_provider_attempt_at)
-  OR (OLD.retry_before IS NOT NULL AND NEW.retry_before IS NOT OLD.retry_before)
+  OR (OLD.first_provider_attempt_at IS NOT NULL AND NEW.first_provider_attempt_at IS NOT OLD.first_provider_attempt_at
+    AND NOT (OLD.state='attempting' AND NEW.state='prepared' AND json_array_length(OLD.dispatch_evidence_json)=1
+      AND json_array_length(NEW.dispatch_evidence_json)=0 AND NEW.first_provider_attempt_at IS NULL))
+  OR (OLD.retry_before IS NOT NULL AND NEW.retry_before IS NOT OLD.retry_before
+    AND NOT (OLD.state='attempting' AND NEW.state='prepared' AND json_array_length(OLD.dispatch_evidence_json)=1
+      AND json_array_length(NEW.dispatch_evidence_json)=0 AND NEW.retry_before IS NULL))
   OR (OLD.accepted_at IS NOT NULL AND NEW.accepted_at IS NOT OLD.accepted_at)
 BEGIN
   SELECT RAISE(ABORT, 'email delivery identity and evidence are immutable');

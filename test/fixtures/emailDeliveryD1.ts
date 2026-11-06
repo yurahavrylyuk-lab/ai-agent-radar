@@ -6,23 +6,34 @@ export type D1Fault = { pattern: RegExp; phase: "before" | "after" | "read"; rem
 class Statement {
   constructor(private readonly owner: SqliteD1, private readonly sql: string, private readonly values: unknown[] = []) {}
   bind(...values: unknown[]): Statement { return new Statement(this.owner, this.sql, values); }
-  private query(): string { return this.sql.replace(/\?\d+/g, "?"); }
+  private compiled(): { query: string; values: unknown[] } {
+    const values: unknown[] = [];
+    const query = this.sql.replace(/\?(\d+)/g, (_match, ordinal: string) => {
+      values.push(this.values[Number(ordinal) - 1]);
+      return "?";
+    });
+    return { query, values };
+  }
   async first<T>(): Promise<T | null> {
     this.owner.fail(this.sql, "read");
-    return (this.owner.database.prepare(this.query()).get(...this.values) as T | undefined) ?? null;
+    const compiled = this.compiled();
+    return (this.owner.database.prepare(compiled.query).get(...compiled.values) as T | undefined) ?? null;
   }
   async all<T>(): Promise<D1Result<T>> {
     this.owner.fail(this.sql, "read");
-    return { success: true, results: this.owner.database.prepare(this.query()).all(...this.values) as T[], meta: {} as D1Meta };
+    const compiled = this.compiled();
+    return { success: true, results: this.owner.database.prepare(compiled.query).all(...compiled.values) as T[], meta: {} as D1Meta };
   }
   async run(): Promise<D1Result> {
     this.owner.fail(this.sql, "before");
-    const result = this.owner.database.prepare(this.query()).run(...this.values);
+    const compiled = this.compiled();
+    const result = this.owner.database.prepare(compiled.query).run(...compiled.values);
     this.owner.fail(this.sql, "after");
     return { success: true, results: [], meta: { changes: result.changes, last_row_id: Number(result.lastInsertRowid) } as D1Meta };
   }
   runSync(): D1Result {
-    const result = this.owner.database.prepare(this.query()).run(...this.values);
+    const compiled = this.compiled();
+    const result = this.owner.database.prepare(compiled.query).run(...compiled.values);
     return { success: true, results: [], meta: { changes: result.changes } as D1Meta };
   }
 }
