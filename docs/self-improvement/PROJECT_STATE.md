@@ -1,5 +1,33 @@
 # AI Agent Radar project state
 
+## 2026-11-06 — Final payload-conflict concurrency correction ready for re-review
+
+**Source-control status only:** commit `37293147ef38b8d4cc77d205881d7e04c02341e2` on `codex/idempotent-email-delivery-implementation` closes the two remaining payload-conflict races. A genuine provider conflict tied to the exact durable pending slot and frozen payload can atomically establish the hold after claim reclamation, while unadmitted tokens fail closed. Once established, the same conditional storage boundary prevents a stale accepted outcome from clearing the hold; ordinary non-conflict late acceptance and ambiguity recovery remain unchanged.
+
+RED reproduced both defects in the real local D1 adapter. GREEN passed focused 133/133, full 800/800, build, Worker typecheck, and the email Workerd/D1 restart harness. The Workerd proof includes reclaimed-owner fencing, unchanged one-slot evidence, zero recovery transport calls, late-acceptance rejection, and restart persistence; the existing 24 uncertainty cases were not redesigned. Migration `0010` is unchanged and unapplied. No push, merge, deployment, provider call, monitoring run, production D1 mutation, or other production action occurred. Status remains **IMPLEMENTED / OFFLINE-TESTED / AWAITING FOCUSED INDEPENDENT ANALYST RE-REVIEW**.
+
+## 2026-11-06 — Idempotent Email Delivery Analyst corrections ready for re-review
+
+**Source-control status only:** the two IMPORTANT findings against reviewed commit `6bd81ad250eeccae60c46959d9473585de8883af` are corrected in commit `bd80a8d6b0123b2938ddec9956d6a849abb0cbf1` on `codex/idempotent-email-delivery-implementation`. A durable `payload_conflict` can no longer be reclaimed or admitted for another dispatch, including after restart/concurrency; ordinary non-conflict ambiguity remains recoverable.
+
+The local Workerd harness now proves provider acceptance followed by a Worker crash before accepted-state persistence, exact same-key/body replay without a second provider-created email, committed accepted-state response loss, restart repair of accepted notification history with zero new provider calls, payload-conflict restart blocking, provider key expiry, and the separate intent-before-fetch crash boundary. It also runs 24 adapter cases over real local Workerd D1 for reservation, claim, dispatch admission, ambiguous outcome, accepted/provider-ID outcome, and notification reconciliation: not committed vs committed-response-lost, each with readable vs unavailable authoritative reread. The injected D1 API-boundary loss is a faithful local-runtime adapter test; it does not claim to reproduce Cloudflare's remote network transport itself.
+
+Verification passed: focused 130/130, full 797/797, build, Worker typecheck, email/Gemini/OpenAI/RSS/Threads Workerd harnesses, Wrangler dry-run bundle audit, diff and scoped secret checks. Migration `0010` remains unapplied; no push, merge, deployment, provider call, production D1 mutation, or monitoring action occurred. Status remains **IMPLEMENTED / OFFLINE-TESTED / AWAITING INDEPENDENT ANALYST RE-REVIEW**.
+
+## 2026-11-06 — Idempotent Email Delivery ready for independent review
+
+**Source-control status only:** Idempotent Email Delivery is implemented and offline-tested on its feature branch, awaiting independent Analyst review. It adds migration `0010_email_delivery_ledger.sql`, a durable scheduled-email ledger, frozen Resend request identity/body recovery, fenced bounded dispatch admission, accepted-history reconciliation, bounded telemetry, and a loopback-only Workerd recovery harness. Verification passed: focused 59/59, full 794/794, build, Worker typecheck, all required Workerd regressions, Wrangler dry-run bundle audit and diff check.
+
+Production remains unchanged. Migration0010 is not applied; the branch is not merged or deployed; no provider or natural monitoring action occurred. A future authorized release must use an untouched logical UTC day outside old in-flight invocations, preserve the same Resend account/recipient, fail closed if the ledger is unavailable, never clear stale ambiguity, and retain only ledger-aware rollback versions after activation. Next implementation work remains Brave Request Timeout + Bounded Response, but has not started.
+
+## 2026-10-27 — Threads activation deferred; engineering roadmap unblocked
+
+**THREADS = IMPLEMENTED / OFFLINE-TESTED / PRODUCTION ACTIVATION DEFERRED / EXTERNALLY BLOCKED BY META BUSINESS REQUIREMENTS.** The merged official Threads implementation and its offline/review evidence remain valid and do not require reimplementation. The tester account demonstrated `threads_basic`, `threads_keyword_search`, Meta OAuth, and retrieval of the public tester post; the reviewer website and App Review screencast were completed. None of that establishes approval for public cross-user production search.
+
+The human has paused Meta Business Portfolio/domain/website/verification and public-search App Review work. Production Threads gates remain disabled; no production token or activation is recorded. Threads activation plus Brave + RSS + Threads production proof move to a parallel deferred/external-gate track. Brave + RSS remain the usable discovery sources, and the active roadmap continues with Idempotent Email Delivery. That design remains **DESIGN READY / AWAITING HUMAN APPROVAL**; no implementation plan, SQL, or runtime implementation is claimed.
+
+Resume Threads from activation/release—not implementation—only after the prerequisite checklist in `backlog.md` and `plan.md` is satisfied. In particular, `THREADS_PUBLIC_SEARCH_APPROVED=true` requires actual Meta approval and must not be inferred from tester-mode success or App Review submission. No runtime, production, provider, D1, credential, or Cloudflare action accompanies this documentation decision.
+
 ## 2026-10-26 — Threads discovery merged to main; production unchanged
 
 **THREADS DISCOVERY = MERGED TO MAIN / OFFLINE-TESTED / INDEPENDENTLY REVIEWED / NOT CONFIGURED / NOT DEPLOYED.** PR #37 merged reviewed head `e8ee22d6ac389b48eb19882653ad42e49122dd30` through normal merge commit `032a24f7eb5cd10469250d9e5e37646619ed3736` at `2026-10-26T08:05:04Z`. CI run `40288463290` (`validate`) succeeded. Final evidence: 763/763 tests plus passing build, Worker typecheck, Workerd, Wrangler dry-run, and bundle audit. Independent review returned `FINAL_APPROVE`; the remote implementation branch was deleted, leaving `origin/main` and `origin/self-improvement`.

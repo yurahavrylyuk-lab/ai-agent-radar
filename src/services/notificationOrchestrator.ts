@@ -6,7 +6,9 @@ import { isNotificationEligible } from "./notificationEligibility.js";
 import { isTrustedFallbackSource } from "./sourceTrust.js";
 import { NotificationHistoryError, type NotificationHistory } from "./notificationHistoryCore.js";
 import { sendWithResend } from "../tools/email/resend.js";
-import type { BatchCandidate, BatchDeliveryCandidate, DailyDigestInput, DailyDigestItem, DailyEmailContext, DailyEmailOutcome, DeliveryCandidate, DiscoveryEmailContent, DiscoveryProcessingResult, EmailSendResult, NotificationRecord, NotificationResult, PreparedDailyDigest, StoredDiscovery } from "../types/index.js";
+import { ResendPreDispatchError } from "../tools/email/resend.js";
+import { freezeDelivery, restoreDeliveryBody, type DeliveryIdentity, type DeliveryLedger, type DeliveryRecord, type ResendOutcome } from "./emailDeliveryLedger.js";
+import type { BatchCandidate, BatchDeliveryCandidate, DailyDigestInput, DailyDigestItem, DailyEmailContext, DailyEmailOutcome, DeliveryCandidate, DeliveryLedgerObservation, DiscoveryEmailContent, DiscoveryProcessingResult, EmailSendResult, NotificationRecord, NotificationResult, PreparedDailyDigest, StoredDiscovery } from "../types/index.js";
 
 type EligibilityCheck = (result: DiscoveryProcessingResult) => boolean;
 type DiscoveryEmailFormatter = (discovery: StoredDiscovery) => DiscoveryEmailContent;
@@ -30,6 +32,17 @@ export interface DigestDeliveryResult {
   eligibleCandidates: DeliveryCandidate[];
   sentCandidates: DeliveryCandidate[];
   mode?: DigestEmailOptions["mode"];
+}
+
+export interface DailyDeliveryDependencies {
+  context: DailyEmailContext;
+  identity: DeliveryIdentity;
+  ledger: DeliveryLedger;
+  recipient: string;
+  sender: string;
+  sendFrozen: (body: string, key: DeliveryIdentity["key"]) => Promise<ResendOutcome>;
+  beforeEmailAttempt?: () => Promise<void>;
+  onAccepted?: () => void;
 }
 
 function messageOf(error: unknown): string {
@@ -117,54 +130,143 @@ export async function prepareDailyDigest(input: DailyDigestInput, history: Notif
   }
 }
 
-export function createDailyEmailContext(): DailyEmailContext { return { emailAttempted: false }; }
+export function createDailyEmailContext(): DailyEmailContext { return { emailAttempted: false, finalizationEntered: false }; }
 
-/** Owns the single mail-transport attempt for one scheduled invocation. */
-export async function finalizeDailyDigest(
-  digest: PreparedDailyDigest,
-  dependencies: { context: DailyEmailContext; history?: NotificationHistory; sendEmail: EmailSender; onAccepted?: () => void; beforeEmailAttempt?: () => Promise<void> },
-): Promise<DailyEmailOutcome> {
+type LegacyDailyDependencies = { context: DailyEmailContext; history?: NotificationHistory; sendEmail: EmailSender; onAccepted?: () => void; beforeEmailAttempt?: () => Promise<void> };
+
+async function legacyFinalizeDailyDigest(digest: PreparedDailyDigest, dependencies: LegacyDailyDependencies): Promise<DailyEmailOutcome> {
   if (dependencies.context.emailAttempted) {
     return { emailAttempts: 0, emailOutcome: "not_attempted", historyOutcome: "not_required", finalizationReached: true };
   }
   dependencies.context.emailAttempted = true;
   try { await dependencies.beforeEmailAttempt?.(); } catch { /* delivery remains authoritative */ }
   let content: DiscoveryEmailContent;
-  try {
-    content = formatDailyDigestEmail(digest);
-  } catch {
-    content = formatDailyDigestEmail({ mode: "status_only", reason: "preparation_unavailable", cycleDate: digest.cycleDate, items: [] });
-  }
+  try { content = formatDailyDigestEmail(digest); }
+  catch { content = formatDailyDigestEmail({ mode: "status_only", reason: "preparation_unavailable", cycleDate: digest.cycleDate, items: [] }); }
   let accepted: EmailSendResult;
-  try {
-    accepted = await dependencies.sendEmail(content);
-  } catch {
-    return { emailAttempts: 1, emailOutcome: "failed", historyOutcome: "not_required", finalizationReached: true };
-  }
+  try { accepted = await dependencies.sendEmail(content); }
+  catch { return { emailAttempts: 1, emailOutcome: "failed", historyOutcome: "not_required", finalizationReached: true }; }
   dependencies.onAccepted?.();
-  if (digest.items.length === 0) {
-    return { emailAttempts: 1, emailOutcome: "accepted", historyOutcome: "not_required", finalizationReached: true };
-  }
-  if (!dependencies.history) {
-    return { emailAttempts: 1, emailOutcome: "accepted", historyOutcome: "unavailable", finalizationReached: true };
-  }
+  if (digest.items.length === 0) return { emailAttempts: 1, emailOutcome: "accepted", historyOutcome: "not_required", finalizationReached: true };
+  if (!dependencies.history) return { emailAttempts: 1, emailOutcome: "accepted", historyOutcome: "unavailable", finalizationReached: true };
   let persistenceFailed = false;
-  for (const item of digest.items) {
-    const aliases = item.candidate.aliases;
-    for (const alias of new Set(aliases)) {
-      try {
-        await dependencies.history.recordNotificationSent(alias, "email", accepted.id);
-      } catch {
-        persistenceFailed = true;
-      }
-    }
+  for (const item of digest.items) for (const alias of new Set(item.candidate.aliases)) {
+    try { await dependencies.history.recordNotificationSent(alias, "email", accepted.id); } catch { persistenceFailed = true; }
   }
+  return { emailAttempts: 1, emailOutcome: "accepted", historyOutcome: persistenceFailed ? "persistence_failed" : "recorded", finalizationReached: true };
+}
+
+type DeliveryAction = DeliveryLedgerObservation["action"];
+
+function ledgerObservation(record: DeliveryRecord | null, key: DeliveryIdentity["key"], action: DeliveryAction, reason = record?.lastReason ?? "ledger_unavailable", reconciliation?: DeliveryLedgerObservation["reconciliation"]): DeliveryLedgerObservation {
+  const knownDispatchCount = record?.slots.filter(slot => slot.evidence === "dispatched").length ?? 0;
+  const uncertainSlotCount = record?.slots.filter(slot => slot.evidence === "uncertain").length ?? 0;
   return {
-    emailAttempts: 1,
-    emailOutcome: "accepted",
-    historyOutcome: persistenceFailed ? "persistence_failed" : "recorded",
-    finalizationReached: true,
+    version: 1, key, action, state: record?.state ?? null, reason,
+    knownDispatchCount, uncertainSlotCount,
+    reconciliation: reconciliation ?? (record?.state === "accepted" ? (record.reconciledAt ? "complete" : "pending") : "not_required"),
+    replayEvidence: record ? "same_key_requested" : "unknown",
   };
+}
+
+function blockedOutcome(value: DailyEmailOutcome["emailOutcome"] = "unknown", observation?: DeliveryLedgerObservation): DailyEmailOutcome {
+  return { emailAttempts: 0, emailOutcome: value, historyOutcome: "not_required", finalizationReached: true, ...(observation ? { deliveryLedger: observation } : {}) };
+}
+
+async function acceptedOutcome(record: DeliveryRecord, dependencies: DailyDeliveryDependencies, emailAttempts: 0 | 1, action: DeliveryAction): Promise<DailyEmailOutcome> {
+  const repaired = await dependencies.ledger.reconcileAccepted(record.key);
+  const aliases = record.frozen?.aliases.length ?? 0;
+  const authoritative = repaired.kind === "committed" || repaired.kind === "superseded" ? repaired.record : record;
+  return {
+    emailAttempts,
+    emailOutcome: "accepted",
+    historyOutcome: aliases === 0 ? "not_required" : repaired.kind === "committed" ? "recorded" : "persistence_failed",
+    finalizationReached: true,
+    deliveryLedger: ledgerObservation(authoritative, record.key, action, authoritative.lastReason,
+      aliases === 0 ? "not_required" : repaired.kind === "committed" ? "complete" : "failed"),
+  };
+}
+
+async function dispatchStored(record: DeliveryRecord, dependencies: DailyDeliveryDependencies, action: "first" | "recovery"): Promise<DailyEmailOutcome> {
+  if (!record.frozen) return blockedOutcome("unknown", ledgerObservation(record, record.key, "blocked", "integrity_hold"));
+  const token = crypto.randomUUID();
+  const claimed = await dependencies.ledger.claim(record.key, token);
+  if (claimed.kind === "blocked") return blockedOutcome(claimed.reason === "already_accepted" ? "accepted" : "unknown", ledgerObservation(record, record.key, claimed.reason === "in_progress" ? "in_progress" : "blocked", claimed.reason));
+  const claim = claimed.record.claim;
+  if (!claim || claim.token !== token) return blockedOutcome("unknown", ledgerObservation(claimed.record, record.key, "blocked", "integrity_hold"));
+  const admitted = await dependencies.ledger.admitDispatch(claim);
+  if (admitted.kind !== "committed") return blockedOutcome("unknown", ledgerObservation("record" in admitted ? admitted.record : record, record.key, "blocked", admitted.kind === "blocked" ? admitted.reason : "integrity_hold"));
+  try { await dependencies.beforeEmailAttempt?.(); } catch { /* best-effort telemetry only */ }
+  let verified: { record: DeliveryRecord; databaseNow: string };
+  try { verified = await dependencies.ledger.verifyDispatch(claim); }
+  catch { return blockedOutcome("unknown", ledgerObservation(admitted.record, record.key, "blocked", "ledger_unavailable")); }
+  if (!verified.record.retryBefore || new Date(verified.databaseNow).getTime() + 90_000 >= new Date(verified.record.retryBefore).getTime()) {
+    await dependencies.ledger.cancelUndispatched(claim);
+    return blockedOutcome("unknown", ledgerObservation(verified.record, record.key, "blocked", "recovery_required"));
+  }
+  let body: string;
+  try { body = await restoreDeliveryBody(record.frozen, dependencies.recipient); }
+  catch {
+    await dependencies.ledger.cancelUndispatched(claim);
+    return blockedOutcome("unknown", ledgerObservation(verified.record, record.key, "blocked", "configuration_payload_mismatch"));
+  }
+  let providerOutcome: ResendOutcome;
+  let attempted: 0 | 1 = 1;
+  dependencies.context.emailAttempted = true;
+  try { providerOutcome = await dependencies.sendFrozen(body, record.key); }
+  catch (error) {
+    if (error instanceof ResendPreDispatchError) {
+      attempted = 0;
+      await dependencies.ledger.cancelUndispatched(claim);
+      return blockedOutcome("not_attempted", ledgerObservation(verified.record, record.key, "blocked", "cancelled_before_dispatch"));
+    }
+    providerOutcome = { kind: "ambiguous", reason: "transport" };
+  }
+  const persisted = await dependencies.ledger.recordOutcome(claim, record.payloadSha256, providerOutcome);
+  if (providerOutcome.kind === "accepted" && persisted.kind === "committed" && persisted.record.state === "accepted") {
+    dependencies.onAccepted?.();
+    return acceptedOutcome(persisted.record, dependencies, attempted, action);
+  }
+  if (providerOutcome.kind === "rejected" && persisted.kind === "committed" && persisted.record.state === "confirmed_failed") {
+    return { emailAttempts: attempted, emailOutcome: "failed", historyOutcome: "not_required", finalizationReached: true, deliveryLedger: ledgerObservation(persisted.record, record.key, action) };
+  }
+  const authoritative = persisted.kind === "committed" || persisted.kind === "superseded" ? persisted.record : verified.record;
+  return { emailAttempts: attempted, emailOutcome: "unknown", historyOutcome: "not_required", finalizationReached: true, deliveryLedger: ledgerObservation(authoritative, record.key, action) };
+}
+
+export async function recoverDailyDelivery(dependencies: DailyDeliveryDependencies): Promise<DailyEmailOutcome | null> {
+  let record: DeliveryRecord | null;
+  try { record = await dependencies.ledger.read(dependencies.identity.key); }
+  catch { return blockedOutcome("unknown", ledgerObservation(null, dependencies.identity.key, "blocked")); }
+  if (!record) return null;
+  if (record.state === "accepted") return acceptedOutcome(record, dependencies, 0, "already_accepted");
+  if (record.state === "confirmed_failed") return blockedOutcome("failed", ledgerObservation(record, record.key, "blocked"));
+  return dispatchStored(record, dependencies, "recovery");
+}
+
+/** Owns the single mail-transport attempt for one scheduled invocation. */
+export async function finalizeDailyDigest(
+  digest: PreparedDailyDigest,
+  dependencies: DailyDeliveryDependencies | LegacyDailyDependencies,
+): Promise<DailyEmailOutcome> {
+  if ("sendEmail" in dependencies) return legacyFinalizeDailyDigest(digest, dependencies);
+  if (dependencies.context.finalizationEntered) return blockedOutcome("not_attempted");
+  dependencies.context.finalizationEntered = true;
+  const recovered = await recoverDailyDelivery(dependencies);
+  if (recovered) return recovered;
+  let content: DiscoveryEmailContent;
+  let effectiveDigest: PreparedDailyDigest = { ...digest, cycleDate: dependencies.identity.scheduledAt };
+  try { content = formatDailyDigestEmail(effectiveDigest); }
+  catch {
+    effectiveDigest = { mode: "status_only", reason: "preparation_unavailable", cycleDate: dependencies.identity.scheduledAt, items: [] };
+    content = formatDailyDigestEmail(effectiveDigest);
+  }
+  let frozen;
+  try { frozen = await freezeDelivery(effectiveDigest, dependencies.identity, { ...content, from: dependencies.sender }, dependencies.recipient); }
+  catch { return blockedOutcome("not_attempted", ledgerObservation(null, dependencies.identity.key, "blocked", "configuration_payload_mismatch")); }
+  const reserved = await dependencies.ledger.reserve(frozen);
+  if (reserved.kind === "blocked") return blockedOutcome("unknown", ledgerObservation(null, dependencies.identity.key, "blocked", reserved.reason));
+  return dispatchStored(reserved.record, dependencies, "first");
 }
 
 export async function notifyDiscovery(

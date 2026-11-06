@@ -1,5 +1,33 @@
 # Self-improvement changelog
 
+## 2026-11-06 — Fence stale payload-conflict races
+
+- Added an exact D1 conditional transition that lets a provider-confirmed conflict from a durable pending slot establish the no-send hold even after another claimant has reclaimed the lease.
+- Made the conflict hold monotonic against later accepted outcomes, claim/retry admission and restart; invalid or unadmitted stale tokens cannot freeze a delivery, and already accepted deliveries cannot be downgraded.
+- Added local D1 and Workerd restart regressions for reclaimed claims, late acceptance, invalid stale identity, zero additional transport, ordinary ambiguity recovery and existing slot/cutoff behavior. Focused 133/133 and full 800/800 passed with build and Worker typecheck.
+- Runtime/test correction commit: `37293147ef38b8d4cc77d205881d7e04c02341e2`. Migration `0010` remains unchanged/unapplied; no production or provider action occurred.
+
+## 2026-11-06 — Correct idempotent email delivery review findings
+
+- Made `payload_conflict` a durable no-send integrity hold at the D1 claim and dispatch-admission boundaries; restart, lease expiry and concurrent/stale claimants cannot erase it or consume another slot.
+- Added focused storage/finalizer regressions and extended the real Workerd harness for provider-accepted crash recovery, accepted-write and notification-repair uncertainty, provider key conflict/expiry, and 24 critical D1 adapter uncertainty cases.
+- Verification passed: focused 130/130, full 797/797, build, Worker typecheck, all required Workerd harnesses, Wrangler dry-run bundle audit and diff checks. Runtime/test correction commit: `bd80a8d6b0123b2938ddec9956d6a849abb0cbf1`.
+- Offline correction only. Migration `0010` remains unapplied; no push, merge, deployment, provider call, monitoring run or production D1 mutation occurred.
+
+## 2026-11-06 — Implement idempotent scheduled email delivery
+
+- Added a durable one-row-per-UTC-day email ledger with exact frozen payload identity, three fenced possible-dispatch slots, immutable first-admission +23-hour recovery cutoff, monotonic provider acceptance, and independent notification-history repair.
+- Added typed bounded Resend outcomes, one-request-per-invocation scheduled finalization, strict recovery telemetry and real Workerd/D1 concurrency, restart, cutoff and late-success evidence.
+- Added migration `0010_email_delivery_ledger.sql`; it is created and tested locally only, not applied. Full offline suite passed 794/794 with all required build/typecheck/Workerd/dry-run gates.
+- Status is awaiting independent review. No merge, deployment, production D1 change, migration application or provider call occurred.
+
+## 2026-10-27 — Defer Threads activation and continue roadmap
+
+- Marked Threads **IMPLEMENTED / OFFLINE-TESTED / PRODUCTION ACTIVATION DEFERRED / EXTERNALLY BLOCKED BY META BUSINESS REQUIREMENTS** without removing or rewriting the implementation.
+- Recorded the Meta business/App Review/token prerequisites and the later Cloudflare/release/natural-validation steps. Tester-mode success cannot set `THREADS_PUBLIC_SEARCH_APPROVED=true`.
+- Moved Threads activation and combined-source proof to a parallel deferred track. Brave + RSS remain usable; Idempotent Email Delivery is now the next active buildable item and remains design-ready/awaiting human approval.
+- Documentation only; no runtime, configuration, credential, provider, D1, migration, deployment, or production change.
+
 ## 2026-10-26 — Merge Threads discovery source
 
 - Merged PR #37 reviewed head `e8ee22d6ac389b48eb19882653ad42e49122dd30` into `main` as normal merge commit `032a24f7eb5cd10469250d9e5e37646619ed3736`; CI `validate` and independent review passed.

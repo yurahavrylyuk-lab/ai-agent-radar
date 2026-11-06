@@ -1,14 +1,116 @@
 import type { DiscoveryEmailContent, EmailSendResult } from "../../types/index.js";
 import type { RuntimeEnvironment } from "../../services/radarRuntimeConfiguration.js";
+import type { DeliveryKey, ResendOutcome } from "../../services/emailDeliveryLedger.js";
 
 const RESEND_EMAILS_URL = "https://api.resend.com/emails";
 const RESEND_TIMEOUT_MS = 30_000;
 export const RESEND_ONBOARDING_SENDER = "AI Agent Radar <onboarding@resend.dev>";
 
-interface ResendDependencies {
+export interface ResendDependencies {
   environment?: RuntimeEnvironment;
   fetchImplementation?: typeof fetch;
   timeoutMs?: number;
+}
+
+export class ResendPreDispatchError extends Error {
+  constructor() { super("Resend request was rejected before dispatch."); this.name = "ResendPreDispatchError"; }
+}
+
+const frozenKey = /^daily-digest\/\d{4}-\d{2}-\d{2}$/;
+const responseBytes = 8 * 1024;
+
+async function readBoundedResponse(response: Response, signal: AbortSignal): Promise<string | null> {
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    while (true) {
+      const result = await Promise.race([
+        reader.read(),
+        new Promise<never>((_resolve, reject) => signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true })),
+      ]);
+      if (result.done) break;
+      size += result.value.byteLength;
+      if (size > responseBytes) { void reader.cancel().catch(() => undefined); return null; }
+      chunks.push(result.value);
+    }
+  } catch { throw new DOMException("aborted", "AbortError"); }
+  const joined = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) { joined.set(chunk, offset); offset += chunk.byteLength; }
+  try { return new TextDecoder("utf-8", { fatal: true }).decode(joined); } catch { return null; }
+}
+
+function structuredName(body: string | null): string | null {
+  if (body === null) return null;
+  try {
+    const parsed = JSON.parse(body) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    const name = (parsed as Record<string, unknown>).name;
+    return typeof name === "string" && name.length <= 64 ? name : null;
+  } catch { return null; }
+}
+
+function rejection(status: number, name: string | null): ResendOutcome | null {
+  if (status === 400 && ["validation_error", "invalid_idempotency_key"].includes(name ?? "")) return { kind: "rejected", rejection: "validation" };
+  if (status === 401 && ["missing_api_key", "invalid_api_key"].includes(name ?? "")) return { kind: "rejected", rejection: "authentication" };
+  if (status === 403 && ["restricted_api_key", "domain_not_verified"].includes(name ?? "")) return { kind: "rejected", rejection: "permission" };
+  if (status === 422 && name === "validation_error") return { kind: "rejected", rejection: "validation" };
+  if (status === 429 && name === "rate_limit_exceeded") return { kind: "rejected", rejection: "quota" };
+  return null;
+}
+
+/** Sends already-verified canonical bytes exactly once for scheduled delivery. */
+export async function sendFrozenWithResend(
+  body: string,
+  key: DeliveryKey,
+  dependencies: ResendDependencies = {},
+): Promise<ResendOutcome> {
+  const environment = dependencies.environment ?? process.env;
+  const apiKey = environment.RESEND_API_KEY?.trim();
+  if (!apiKey || !frozenKey.test(key) || !body || new TextEncoder().encode(body).byteLength > 280 * 1024) {
+    throw new ResendPreDispatchError();
+  }
+  try { JSON.parse(body); } catch { throw new ResendPreDispatchError(); }
+  const fetchImplementation = dependencies.fetchImplementation ?? fetch;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), dependencies.timeoutMs ?? RESEND_TIMEOUT_MS);
+  const aborted = new Promise<never>((_resolve, reject) => controller.signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true }));
+  try {
+    let response: Response;
+    try {
+      response = await Promise.race([fetchImplementation(RESEND_EMAILS_URL, {
+        method: "POST",
+        redirect: "manual",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+          "Idempotency-Key": key,
+        },
+        body,
+        signal: controller.signal,
+      }), aborted]);
+    } catch {
+      return { kind: "ambiguous", reason: controller.signal.aborted ? "timeout" : "transport" };
+    }
+    let responseBody: string | null;
+    try { responseBody = await readBoundedResponse(response, controller.signal); }
+    catch { return { kind: "ambiguous", reason: controller.signal.aborted ? "timeout" : "transport" }; }
+    if (response.status >= 300 && response.status < 400) return { kind: "ambiguous", reason: "http" };
+    const name = structuredName(responseBody);
+    if (response.status === 409 && name === "invalid_idempotent_request") return { kind: "payload_conflict" };
+    if (response.status === 409 && name === "concurrent_idempotent_requests") return { kind: "ambiguous", reason: "concurrent" };
+    if (!response.ok) return rejection(response.status, name) ?? { kind: "ambiguous", reason: "http" };
+    if (responseBody === null) return { kind: "ambiguous", reason: "invalid_response" };
+    try {
+      const parsed = JSON.parse(responseBody) as unknown;
+      const id = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>).id : undefined;
+      return typeof id === "string" && id.trim().length > 0 && new TextEncoder().encode(id).byteLength <= 256
+        ? { kind: "accepted", id }
+        : { kind: "ambiguous", reason: "invalid_response" };
+    } catch { return { kind: "ambiguous", reason: "invalid_response" }; }
+  } finally { clearTimeout(timeout); }
 }
 
 function required(name: "RESEND_API_KEY" | "NOTIFICATION_EMAIL", environment: RuntimeEnvironment): string {

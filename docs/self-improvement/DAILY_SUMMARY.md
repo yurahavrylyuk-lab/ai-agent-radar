@@ -1,5 +1,34 @@
 # Daily Self-Improvement Summary
 
+## 2026-11-06 — Final payload-conflict concurrency correction
+
+- Corrected both remaining Analyst findings in runtime/test commit `37293147ef38b8d4cc77d205881d7e04c02341e2`: an exact durable pending slot may establish `payload_conflict` after its claim is stale, and a later accepted outcome cannot overwrite an established conflict hold.
+- The conflict transition is one D1 compare-and-set over delivery key, frozen payload hash, exact dispatch journal, permitted state, empty acceptance evidence, and the admitted pending token. It clears any replacement claim atomically; an unadmitted token cannot establish the hold. Ordinary accepted monotonicity and non-conflict ambiguity recovery remain unchanged.
+- RED: the local D1 suite failed exactly two new regressions—stale conflict returned `blocked`, and late acceptance returned `committed`. GREEN: focused email-delivery suite 133/133; full suite 800/800; build and Worker typecheck passed; real Workerd D1 restart/fencing regression passed with no additional provider request.
+- Migration `0010` is unchanged and unapplied. The protected untracked historical design remained byte-identical at SHA-256 `67ebe90fdda67d9312f952cb477d38e5c78fff69396f8e4bbbc6bc6405d09a66`. No push, merge, deployment, provider call, monitoring run, or production D1 action occurred. Status: awaiting focused independent Analyst re-review.
+
+## 2026-11-06 — Idempotent Email Delivery Analyst corrections
+
+- Corrected reviewed HEAD `6bd81ad250eeccae60c46959d9473585de8883af` in runtime/test commit `bd80a8d6b0123b2938ddec9956d6a849abb0cbf1`: `payload_conflict` is now a durable storage-level claim/admission hold, while ordinary ambiguity recovery remains unchanged.
+- Expanded the persistent local Workerd harness with a real crash after provider acceptance, exact replay after restart, accepted-write response loss, restart-safe history repair, provider key conflict/expiry, and distinct intent-before-fetch evidence. Added 24 actual-adapter/local-D1 uncertainty cases across six critical transitions and four commit/readback outcomes.
+- RED: focused delivery suite failed 2/29 on conflict reclaim and a second transport call; Workerd RED timed out waiting for the missing crash-delivery route. GREEN: focused delivery/Resend/Worker suite 130/130; full suite 797/797; build, Worker typecheck, all five Workerd harnesses, Wrangler dry-run/bundle audit and diff checks passed.
+- Coverage: mandatory cases 3, 5, 6 and 19 now have explicit runtime evidence. The Workerd fault layer injects uncertainty at the actual local D1 adapter boundary; it cannot reproduce Cloudflare's remote control-plane/network loss and does not claim that limitation as direct remote-runtime proof.
+- Protected untracked historical design remained byte-identical at SHA-256 `67ebe90fdda67d9312f952cb477d38e5c78fff69396f8e4bbbc6bc6405d09a66`. No push, merge, migration application, deployment, provider call, monitoring run, or production D1 action occurred. Status: awaiting independent Analyst re-review.
+
+## 2026-11-06 — Idempotent Email Delivery Builder completion
+
+- Completed all eleven approved TDD tasks on the feature branch: daily identity/frozen payload, migration0010, fenced D1 adapter, dispatch admission/cutoff, acceptance/history repair, typed Resend transport, durable finalizer, scheduled integration, bounded telemetry, Workerd proof and release verification.
+- Evidence passed: focused 59/59, full 794/794, build, Worker typecheck, five Workerd harnesses, Wrangler dry-run bundle audit and diff check.
+- Status is `IMPLEMENTED / OFFLINE-TESTED / AWAITING INDEPENDENT ANALYST REVIEW`; migration0010 is local-only and unapplied. No merge, deployment, provider call, production D1 mutation or natural validation occurred.
+- Next planned item remains Brave Request Timeout + Bounded Response; it was not started.
+
+## 2026-10-27 — Threads deferred-roadmap actualization
+
+- Recorded the human decision to defer Threads production activation because Meta business verification and public-search approval prerequisites are unavailable now.
+- Preserved Threads as implemented/offline-tested engineering and separated the future activation/release checklist from implementation history; tester success is explicitly not public-search approval.
+- Moved Threads activation plus combined-source proof to a parallel deferred track. Active engineering now begins with Idempotent Email Delivery, whose existing status remains `DESIGN READY / AWAITING HUMAN APPROVAL`.
+- Documentation/governance only. No runtime, Threads code, Cloudflare configuration, credential, provider, D1, deployment, or production action.
+
 ## 2026-10-25 — Cross-provider analyzer failover production deployment
 
 - Promoted the existing Worker version `6a1dcef4-e5cc-414a-aa89-6bf194fa5b60` (source `bd2a3220611e5992b226e6cf7c0f9ec0b92c18ac`) to 100% traffic as deployment `f0dbb968-a9b0-4719-9614-035571b1e917` at `2026-10-25T08:31:00.482237Z`; no build or upload occurred.

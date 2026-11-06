@@ -3,7 +3,7 @@ import { getNotificationReplayWindow } from "../config/notificationReplay.js";
 import { DISCOVERY_QUERY_DESCRIPTORS, MONITORING_FRESHNESS, MONITORING_QUERIES, type DiscoveryQueryDescriptor } from "../config/discoveryQueries.js";
 import { getPreAnalysisCandidatePriority, hasOfficialPreAnalysisPriority, selectPreAnalysisCandidates } from "./discoveryPriority.js";
 import { NotificationHistoryError, type NotificationHistory } from "./notificationHistoryCore.js";
-import { createDailyEmailContext, finalizeDailyDigest, prepareDailyDigest, notifyDeliveryDigest, type DigestDeliveryResult, type NotificationOrchestratorDependencies } from "./notificationOrchestrator.js";
+import { createDailyEmailContext, finalizeDailyDigest, prepareDailyDigest, recoverDailyDelivery, notifyDeliveryDigest, type DailyDeliveryDependencies, type DigestDeliveryResult, type NotificationOrchestratorDependencies } from "./notificationOrchestrator.js";
 import { batchAliasKey, isBatchNewsUrl, prepareBatchCandidates } from "./batchCandidates.js";
 import { prepareBatchPrompt } from "./batchPrompt.js";
 import { selectGeminiCandidates } from "./batchCandidateSelection.js";
@@ -61,6 +61,8 @@ export interface BatchMonitoringDependencies {
   now?: () => Date;
   /** Shared by the Worker so initialization failures use the same one-shot finalizer guard. */
   dailyEmailContext?: DailyEmailContext;
+  /** Required by the production scheduled path; omitted only by legacy offline fixtures. */
+  dailyDelivery?: DailyDeliveryDependencies;
   onTelemetryCheckpoint?: (phase: "sources_complete" | "gemini_complete", snapshot: CycleSnapshotV1) => Promise<void>;
   getAnalyzerFailoverObservation?: () => AnalyzerFailoverObservation | undefined;
 }
@@ -224,6 +226,21 @@ async function runBatchMonitoringCycleInternal(dependencies: BatchMonitoringDepe
   if (Number.isNaN(cycleStartedAt.getTime())) throw new Error("Monitoring cycle timestamp is invalid.");
   const result = emptyResult(MONITORING_QUERIES.join(" | "), 0);
   result.xBlockedReason = "disabled";
+  if (dependencies.dailyDelivery) {
+    const recovered = await recoverDailyDelivery(dependencies.dailyDelivery);
+    if (recovered) {
+      const record = await dependencies.dailyDelivery.ledger.read(dependencies.dailyDelivery.identity.key);
+      const mode = record?.frozen?.mode ?? "status_only";
+      const reason = record?.frozen?.reason ?? "preparation_unavailable";
+      result.delivery = {
+        deliveryMode: mode, deliveryReason: reason,
+        analyzedStories: 0, rawStories: 0, replayStories: 0, ...recovered,
+      };
+      return result;
+    }
+    try { await dependencies.dailyDelivery.ledger.reconcileOneOlder(dependencies.dailyDelivery.identity.logicalDate); }
+    catch { /* older accepted history repair is best effort */ }
+  }
   const batch: BatchCycleMetrics = {
     searchAttempts: 0, searchSuccesses: 0, searchFailures: 0, rawObservations: 0, acceptedObservations: 0,
     invalid: 0, homepages: 0, duplicates: 0, known: 0, poolCapExcluded: 0, sizeExcluded: 0, submittedCandidates: 0, promptBytes: 0,
@@ -493,7 +510,16 @@ async function runBatchMonitoringCycleInternal(dependencies: BatchMonitoringDepe
   const threadsAliases = new Set(pool.candidates
     .filter(candidate => candidate.provenance.some(entry => entry.kind === "threads"))
     .flatMap(candidate => candidate.aliases.map(normalizeDiscoveryUrl)));
-  const email = await finalizeDailyDigest(digest, {
+  const email = await finalizeDailyDigest(digest, dependencies.dailyDelivery ? {
+    ...dependencies.dailyDelivery,
+    onAccepted: () => {
+      result.notificationsSent = batch.emailCount = 1;
+      result.freshStoriesSent = batch.freshDelivered = acceptedItems.filter(item => item.kind === "analyzed" && item.candidate.origin === "fresh").length;
+      result.replayStoriesSent = batch.replayDelivered = acceptedItems.filter(item => item.kind === "analyzed" && item.candidate.origin === "replay").length;
+      threads.metrics.pipeline!.delivered = acceptedItems.filter(item => item.kind === "analyzed" && item.candidate.origin === "fresh"
+        && threadsAliases.has(normalizeDiscoveryUrl(item.candidate.discovery.normalizedUrl))).length;
+    },
+  } : {
     context: emailContext, history: notification.history, sendEmail: notification.sendEmail ?? sendWithResend,
     beforeEmailAttempt: notification.beforeEmailAttempt,
     onAccepted: () => {
@@ -517,16 +543,23 @@ async function runBatchMonitoringCycleInternal(dependencies: BatchMonitoringDepe
 }
 
 export async function finalizeStatusOnlyMonitoringCycle(
-  context: DailyEmailContext,
-  sendEmail: NonNullable<NotificationOrchestratorDependencies["sendEmail"]>,
-  cycleDate: string,
-  reason: "history_unavailable" | "discovery_unavailable" | "preparation_unavailable" = "discovery_unavailable",
+  deliveryOrContext: DailyDeliveryDependencies | DailyEmailContext,
+  senderOrReason?: NonNullable<NotificationOrchestratorDependencies["sendEmail"]> | "history_unavailable" | "discovery_unavailable" | "preparation_unavailable",
+  cycleDate?: string,
+  legacyReason: "history_unavailable" | "discovery_unavailable" | "preparation_unavailable" = "discovery_unavailable",
   beforeEmailAttempt?: () => Promise<void>,
 ): Promise<MonitoringCycleResult> {
   const result = emptyResult(MONITORING_QUERIES.join(" | "), 0);
   result.failures = 1;
-  const digest = { mode: "status_only" as const, reason, cycleDate, items: [] };
-  const outcome = await finalizeDailyDigest(digest, { context, sendEmail, beforeEmailAttempt });
+  const durable = "ledger" in deliveryOrContext;
+  const reason = durable
+    ? (typeof senderOrReason === "string" ? senderOrReason : "discovery_unavailable")
+    : legacyReason;
+  const date = durable ? deliveryOrContext.identity.scheduledAt : cycleDate!;
+  const digest = { mode: "status_only" as const, reason, cycleDate: date, items: [] };
+  const outcome = await finalizeDailyDigest(digest, durable
+    ? deliveryOrContext
+    : { context: deliveryOrContext, sendEmail: senderOrReason as NonNullable<NotificationOrchestratorDependencies["sendEmail"]>, beforeEmailAttempt });
   if (outcome.emailOutcome === "accepted") result.notificationsSent = 1;
   result.delivery = {
     deliveryMode: digest.mode, deliveryReason: digest.reason,
@@ -541,6 +574,7 @@ export async function runBatchMonitoringCycle(dependencies: BatchMonitoringDepen
   try {
     return await runBatchMonitoringCycleInternal(dependencies, context);
   } catch {
+    if (dependencies.dailyDelivery) return finalizeStatusOnlyMonitoringCycle(dependencies.dailyDelivery, "history_unavailable");
     const cycleDate = (dependencies.now ?? (() => new Date()))().toISOString();
     return finalizeStatusOnlyMonitoringCycle(context, dependencies.notification.sendEmail ?? sendWithResend, cycleDate, "history_unavailable", dependencies.notification.beforeEmailAttempt);
   }

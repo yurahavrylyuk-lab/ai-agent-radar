@@ -1,5 +1,67 @@
 # AI Agent Radar — Architecture and roadmap
 
+## 2026-11-06 — Idempotent Email Delivery Builder milestone
+
+**IDEMPOTENT EMAIL DELIVERY = IMPLEMENTED / OFFLINE-TESTED / AWAITING INDEPENDENT ANALYST REVIEW.** Scheduled delivery now derives one daily identity from authoritative ScheduledEvent UTC, freezes one exact provider payload, reserves and fences D1 state before transport, permits at most three actual-or-uncertain dispatch slots inside the immutable first-admission +23-hour window, and performs at most one Resend HTTP request per Worker invocation. Provider acceptance is monotonic; ambiguous outcomes remain recoverable only with the same key and bytes; accepted notification history is repaired independently without resending. Every normal, degraded, status-only and recovery path uses the same authority. Missing/invalid scheduled identity or unreadable ledger state fails closed.
+
+Offline verification passed: focused aggregate 59/59, full suite 794/794, build, Worker typecheck, Workerd delivery/Gemini/OpenAI/RSS/Threads harnesses, Wrangler dry-run bundle audit and diff check. Migration `0010_email_delivery_ledger.sql` remains local and unapplied. No merge, deployment or natural validation is claimed.
+
+Release gates remain separate: independent Analyst review; explicit merge approval; explicit migration approval; untouched logical-day cutover outside old in-flight invocations; same Resend account/recipient configuration; no stale-ambiguity reset; and rollback only to ledger-aware versions after activation. The next planned engineering item is **Brave Request Timeout + Bounded Response**.
+
+## 2026-10-27 — Current authority: Threads activation deferred
+
+**THREADS = IMPLEMENTED / OFFLINE-TESTED / PRODUCTION ACTIVATION DEFERRED / EXTERNALLY BLOCKED BY META BUSINESS REQUIREMENTS.** The implementation and its review evidence remain valid; Threads must not be rebuilt. Completed external engineering evidence includes the official API integration, demonstrated `threads_basic` OAuth/profile flow, demonstrated `threads_keyword_search` using the authorized tester account, reviewer demo website, completed Meta OAuth flow, successful tester keyword search returning the public tester post, and completed App Review screencast. Tester-mode success and App Review submission do not grant public cross-user production-search approval.
+
+No Threads production activation occurred. The runtime gates remain disabled, and Brave + RSS remain the usable discovery sources while AI Radar development continues. Threads activation and combined-source production proof are a parallel deferred track that may re-enter at activation/release once Meta/business prerequisites exist.
+
+### Threads production activation prerequisites
+
+External Meta/business prerequisites:
+
+- [ ] Create/configure an appropriate Meta Business Portfolio
+- [ ] Have a business-owned custom domain
+- [ ] Have a business website on that domain
+- [ ] Complete Meta Business Verification as required
+- [ ] Configure the verified business/domain information in Meta
+- [ ] Complete App Review for `threads_basic`
+- [ ] Complete App Review for `threads_keyword_search`
+- [ ] Ensure required Meta Testing/API-call evidence shows complete, including the required `1 of 1` calls where applicable
+- [ ] Obtain final Meta approval for public keyword-search access
+- [ ] Provision a production Threads access token with the approved permissions
+- [ ] Establish/document token expiry and rotation procedure
+
+Only after those external prerequisites:
+
+- [ ] Provision `THREADS_ACCESS_TOKEN` securely in Cloudflare
+- [ ] Configure `THREADS_TOKEN_EXPIRES_AT`
+- [ ] Set/verify `THREADS_PUBLIC_SEARCH_APPROVED=true` only after actual Meta approval
+- [ ] Enable `THREADS_DISCOVERY_ENABLED=true`
+- [ ] Create/verify the production Worker version
+- [ ] Obtain explicit human deployment approval
+- [ ] Deploy
+- [ ] Run/observe a natural combined Brave + RSS + Threads production cycle
+- [ ] Verify Threads candidate admission, dedupe, analyzer selection and one-email behavior
+- [ ] Actualize project documentation from real production evidence
+
+`THREADS_PUBLIC_SEARCH_APPROVED` MUST NOT be set to true based only on tester-mode success or App Review submission.
+
+### Active engineering roadmap
+
+1. **IDEMPOTENT EMAIL DELIVERY — NEXT ACTIVE BUILDABLE ITEM**
+2. **CROSS-SOURCE EVENT DEDUPLICATION**
+3. **TELEMETRY-DEGRADED CONTENT CONTINUITY**
+4. **WORKERD CI RUNTIME GATE**
+5. **LEGACY CLEANUP**
+6. **CENTRALIZE PIPELINE LIMITS**
+7. **P7 / RELEVANCE + FEEDBACK**
+8. **FINAL STABILIZATION / V1.0**
+
+Idempotent Email Delivery remains **DESIGN AMENDED / AWAITING FINAL HUMAN APPROVAL**. No design approval, implementation plan, migration SQL, or runtime implementation is created here.
+
+## 2026-10-26 — Idempotent email delivery design
+
+**IDEMPOTENT EMAIL DELIVERY + AMBIGUOUS-SEND RECOVERY = DESIGN AMENDED / AWAITING FINAL HUMAN APPROVAL.** [Design](docs/superpowers/specs/2026-10-26-idempotent-email-delivery-design.md) proposes a durable daily D1 delivery ledger plus Resend idempotency keys, exact-payload recovery, bounded reconciliation and fail-closed expired ambiguity. Migration number0010 is reserved in the design only; no SQL or implementation plan exists yet. Production facts and pending natural validation are unchanged. Threads activation/configuration remains externally gated and untouched; offline delivery work is independent of that gate.
+
 ## 2026-10-26 — Threads discovery source-control milestone
 
 **THREADS DISCOVERY = MERGED TO MAIN / OFFLINE-TESTED / INDEPENDENTLY REVIEWED / NOT CONFIGURED / NOT DEPLOYED.** PR #37 merged reviewed head `e8ee22d6ac389b48eb19882653ad42e49122dd30` through a normal merge commit, producing `main` `032a24f7eb5cd10469250d9e5e37646619ed3736`. CI `validate` passed; final evidence was 763/763 tests plus passing build, Worker typecheck, Workerd, Wrangler dry-run, and bundle audit.
@@ -78,23 +140,24 @@ Analyzed Batch selections support scores1–10, label below7 `It could be releva
 
 ## Active architecture phase
 
-Threads Discovery is complete in source control at merge commit `032a24f7eb5cd10469250d9e5e37646619ed3736`, but remains disabled, unconfigured, undeployed, and not naturally validated. Production activation stays behind the explicit Meta approval, credential, configuration, undeployed-version inspection, and human deployment gates. Combined-source production proof cannot begin until those gates pass.
+Threads Discovery is complete in source control at merge commit `032a24f7eb5cd10469250d9e5e37646619ed3736`, but remains disabled, unconfigured, undeployed, and not naturally validated. Production activation is deferred by human decision and externally blocked by Meta business verification, App Review/public-search approval, credential, configuration, undeployed-version inspection, and human deployment gates. Combined-source proof cannot begin until those gates pass, but neither activation nor proof blocks the active engineering roadmap.
 
 Idempotent Email Delivery is the next immediately actionable engineering item while Threads activation is externally blocked. Full raw pool/aliases, replay and one-email finalization remain unchanged until that separately approved work begins. No future natural result is claimed, and source merge does not authorize production configuration or deployment.
 
 ## Authoritative roadmap
 
-1. **BRAVE + RSS + THREADS PRODUCTION PROOF — BLOCKED / WAITING ON THREADS PRODUCTION ACTIVATION**
-2. **IDEMPOTENT EMAIL DELIVERY — NEXT IMMEDIATELY ACTIONABLE ENGINEERING ITEM**
-3. **CROSS-SOURCE EVENT DEDUPLICATION**
-4. **TELEMETRY-DEGRADED CONTENT CONTINUITY**
-5. **WORKERD CI RUNTIME GATE**
-6. **LEGACY CLEANUP**
-7. **CENTRALIZE PIPELINE LIMITS**
-8. **P7 / RELEVANCE + FEEDBACK**
-9. **FINAL STABILIZATION / V1.0**
+Parallel deferred/external-gate track: **THREADS PRODUCTION ACTIVATION + BRAVE + RSS + THREADS PRODUCTION PROOF**. Resume from activation/release work—not implementation—after the recorded Meta/business prerequisites are satisfied.
 
-Threads source implementation is complete, but production activation and combined-source proof remain separate human-controlled gates. While that proof is blocked, engineering may proceed with idempotent/ambiguous email work. Later items remain separate bounded changes: conservative event dedupe (uncertain/distinct preserve both); telemetry-degraded continuity; Workerd CI; legacy cleanup; limits; relevance/feedback; stabilization. HTTP remains health-only; X is disabled and `0004` unapplied.
+1. **IDEMPOTENT EMAIL DELIVERY — NEXT ACTIVE BUILDABLE ITEM**
+2. **CROSS-SOURCE EVENT DEDUPLICATION**
+3. **TELEMETRY-DEGRADED CONTENT CONTINUITY**
+4. **WORKERD CI RUNTIME GATE**
+5. **LEGACY CLEANUP**
+6. **CENTRALIZE PIPELINE LIMITS**
+7. **P7 / RELEVANCE + FEEDBACK**
+8. **FINAL STABILIZATION / V1.0**
+
+Threads source implementation is complete, but production activation and combined-source proof remain separate human-controlled gates on the deferred track. Engineering proceeds with idempotent/ambiguous email work and the remaining ordered roadmap independently. Later items remain separate bounded changes: conservative event dedupe (uncertain/distinct preserve both); telemetry-degraded continuity; Workerd CI; legacy cleanup; limits; relevance/feedback; stabilization. HTTP remains health-only; X is disabled and `0004` unapplied.
 
 ## Backlog/Plan Actualization Checkpoint
 
