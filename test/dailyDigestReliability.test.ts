@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { createDailyEmailContext, finalizeDailyDigest, prepareDailyDigest } from "../src/services/notificationOrchestrator.js";
+import { D1EmailDeliveryLedger } from "../src/services/d1EmailDeliveryLedger.js";
+import { deliveryIdentity } from "../src/services/emailDeliveryLedger.js";
+import { createEmailDeliveryDatabase } from "./fixtures/emailDeliveryD1.js";
 import { formatDailyDigestEmail } from "../src/services/discoveryEmailFormatter.js";
 import { createGeminiBatchCycleContext, generateBatchWithGemini } from "../src/tools/llm/gemini.js";
 import type { ApprovedGeminiModel } from "../src/config/geminiModels.js";
@@ -149,6 +152,47 @@ test("daily finalizer consumes one email attempt and records raw aliases only af
   assert.equal(first.emailOutcome === "accepted" || second.emailOutcome === "accepted", true);
   assert.equal(first.emailAttempts + second.emailAttempts, 1);
   assert.deepEqual(writes.sort(), [...candidate.aliases].sort());
+});
+
+test("durable daily finalizer sends once and a second same-day invocation repairs without transport", async () => {
+  const { sqlite, d1 } = await createEmailDeliveryDatabase();
+  try {
+    const ledger = new D1EmailDeliveryLedger(d1 as unknown as D1Database);
+    const identity = deliveryIdentity(new Date("2026-11-04T08:00:00.000Z"));
+    const daily: PreparedDailyDigest = { mode: "status_only", reason: "no_eligible_stories", cycleDate: identity.scheduledAt, items: [] };
+    let sends = 0;
+    const dependencies = {
+      context: createDailyEmailContext(), identity, ledger,
+      recipient: "owner@example.test", sender: "AI Radar <radar@example.test>",
+      sendFrozen: async () => { sends += 1; return { kind: "accepted" as const, id: "email-durable" }; },
+    };
+    const first = await finalizeDailyDigest(daily, dependencies);
+    const second = await finalizeDailyDigest(daily, { ...dependencies, context: createDailyEmailContext() });
+    assert.equal(first.emailOutcome, "accepted");
+    assert.equal(first.emailAttempts, 1);
+    assert.equal(second.emailOutcome, "accepted");
+    assert.equal(second.emailAttempts, 0);
+    assert.equal(sends, 1);
+    assert.equal((await ledger.read(identity.key))?.state, "accepted");
+  } finally { sqlite.close(); }
+});
+
+test("durable daily finalizer retains ambiguous transport and never sends twice in one invocation", async () => {
+  const { sqlite, d1 } = await createEmailDeliveryDatabase();
+  try {
+    const ledger = new D1EmailDeliveryLedger(d1 as unknown as D1Database);
+    const identity = deliveryIdentity(new Date("2026-11-04T08:00:00.000Z"));
+    let sends = 0;
+    const outcome = await finalizeDailyDigest({ mode: "status_only", reason: "no_eligible_stories", cycleDate: identity.scheduledAt, items: [] }, {
+      context: createDailyEmailContext(), identity, ledger,
+      recipient: "owner@example.test", sender: "AI Radar <radar@example.test>",
+      sendFrozen: async () => { sends += 1; return { kind: "ambiguous" as const, reason: "timeout" }; },
+    });
+    assert.equal(outcome.emailOutcome, "unknown");
+    assert.equal(outcome.emailAttempts, 1);
+    assert.equal(sends, 1);
+    assert.equal((await ledger.read(identity.key))?.state, "ambiguous");
+  } finally { sqlite.close(); }
 });
 
 test("failed daily transport is not retried and status delivery writes no story history", async () => {
