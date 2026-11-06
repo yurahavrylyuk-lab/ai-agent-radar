@@ -7,6 +7,20 @@ import { createDailyEmailContext } from "../src/services/notificationOrchestrato
 import { runBatchMonitoringCycle } from "../src/services/monitor.js";
 import { createGeminiBatchCycleContext } from "../src/tools/llm/gemini.js";
 import { createEmailDeliveryDatabase } from "./fixtures/emailDeliveryD1.js";
+import { runScheduledMonitoring, type RadarWorkerEnv } from "../src/worker.js";
+
+test("default scheduled execution rejects a missing identity before D1 or provider work", async () => {
+  let touched = false;
+  const DB = new Proxy({}, { get() { touched = true; throw new Error("D1 must not be touched"); } }) as D1Database;
+  const env = {
+    DB, BRAVE_SEARCH_API_KEY: "unused", BRAVE_DAILY_SEARCH_LIMIT: "10", BRAVE_WEEKLY_SEARCH_LIMIT: "100", BRAVE_MONTHLY_SEARCH_LIMIT: "350",
+    GEMINI_API_KEY: "unused", GEMINI_DAILY_REQUEST_LIMIT: "5", GEMINI_WEEKLY_REQUEST_LIMIT: "20", GEMINI_MONTHLY_REQUEST_LIMIT: "50",
+    GEMINI_DAILY_TOKEN_LIMIT: "10000", GEMINI_WEEKLY_TOKEN_LIMIT: "30000", GEMINI_MONTHLY_TOKEN_LIMIT: "100000",
+    RESEND_API_KEY: "unused", NOTIFICATION_EMAIL: "owner@example.test",
+  } satisfies RadarWorkerEnv;
+  await assert.rejects(runScheduledMonitoring(env), /scheduled time/i);
+  assert.equal(touched, false);
+});
 
 test("an accepted current-day ledger row is recovered before any discovery or analysis", async () => {
   const { sqlite, d1 } = await createEmailDeliveryDatabase();

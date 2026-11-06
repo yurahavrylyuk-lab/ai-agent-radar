@@ -519,7 +519,10 @@ export async function runScheduledMonitoring(
     const cycleStartedAtMonotonic = performance.now();
     const context = createDailyEmailContext();
     const telemetry = dependencies.telemetry ?? new D1MonitoringTelemetry(env.DB);
-    const scheduledAt = dependencies.scheduledAt ?? new Date();
+    const scheduledAt = dependencies.scheduledAt;
+    if (!(scheduledAt instanceof Date) || Number.isNaN(scheduledAt.getTime())) {
+      throw new Error("A valid scheduled time is required for scheduled monitoring.");
+    }
     const startedAt = dependencies.startedAt ?? new Date();
     const identity = deliveryIdentity(scheduledAt);
     const ledger = new D1EmailDeliveryLedger(env.DB);
