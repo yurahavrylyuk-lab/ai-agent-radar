@@ -218,7 +218,97 @@ export class D1EmailDeliveryLedger implements DeliveryLedger {
     if (!this.slot(after, ref.token) && !this.owns(after, ref)) return { kind: "committed", record: after };
     return { kind: "blocked", reason: "ledger_unavailable" };
   }
-  async recordOutcome(_ref: ClaimRef, _hash: string, _outcome: ResendOutcome): Promise<MutationResult> { throw new Error("Delivery outcome recording is not implemented."); }
-  async reconcileAccepted(_key: DeliveryKey): Promise<MutationResult> { throw new Error("Delivery reconciliation is not implemented."); }
-  async reconcileOneOlder(_logicalDate: string): Promise<void> { throw new Error("Delivery reconciliation is not implemented."); }
+  private outcomeSlots(record: DeliveryRecord, ref: ClaimRef, outcome: ResendOutcome): DispatchSlot[] {
+    return record.slots.map(slot => slot.token !== ref.token ? slot : {
+      ...slot,
+      evidence: "dispatched" as const,
+      outcome: outcome.kind === "accepted" ? "accepted" as const
+        : outcome.kind === "rejected" ? "rejected" as const
+          : outcome.kind === "payload_conflict" ? "payload_conflict" as const : "ambiguous" as const,
+    });
+  }
+
+  private async persistOutcome(ref: ClaimRef, record: DeliveryRecord, outcome: ResendOutcome): Promise<void> {
+    const soleRejection = outcome.kind === "rejected" && record.slots.length === 1 && this.owns(record, ref);
+    const state = outcome.kind === "accepted" ? "accepted" : soleRejection ? "confirmed_failed" : "ambiguous";
+    const reason: DeliveryReason = outcome.kind === "accepted" ? "provider_accepted"
+      : outcome.kind === "rejected" ? (soleRejection ? "provider_rejected" : "provider_ambiguous")
+        : outcome.kind === "payload_conflict" ? "payload_conflict" : "provider_ambiguous";
+    const slots = JSON.stringify(this.outcomeSlots(record, ref, outcome));
+    await this.database.prepare(`UPDATE email_deliveries SET
+      state=?1,dispatch_evidence_json=?2,provider_message_id=?3,
+      accepted_at=CASE WHEN ?1='accepted' THEN strftime('%Y-%m-%dT%H:%M:%fZ','now') ELSE NULL END,
+      claim_token=NULL,lease_until=NULL,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),last_reason=?4
+      WHERE delivery_key=?5 AND payload_sha256=?6 AND dispatch_evidence_json=?7
+        AND state IN ('attempting','ambiguous')
+        AND EXISTS (SELECT 1 FROM json_each(dispatch_evidence_json) WHERE json_extract(value,'$.token')=?8)
+        AND (?1='accepted' OR (claim_token=?8 AND claim_generation=?9))`)
+      .bind(state, slots, outcome.kind === "accepted" ? outcome.id : null, reason,
+        ref.key, record.payloadSha256, JSON.stringify(record.slots), ref.token, ref.generation).run();
+  }
+
+  async recordOutcome(ref: ClaimRef, hash: string, outcome: ResendOutcome): Promise<MutationResult> {
+    let record = await this.read(ref.key);
+    if (!record) return { kind: "blocked", reason: "integrity_hold" };
+    if (record.payloadSha256 !== hash) return { kind: "blocked", reason: "payload_conflict" };
+    if (record.state === "accepted") {
+      if (outcome.kind === "accepted" && outcome.id === record.providerMessageId) return { kind: "committed", record };
+      return outcome.kind === "accepted" ? { kind: "blocked", reason: "integrity_hold" } : { kind: "superseded", record };
+    }
+    if (!this.slot(record, ref.token)) return { kind: "blocked", reason: "integrity_hold" };
+    if (outcome.kind !== "accepted" && !this.owns(record, ref)) return { kind: "blocked", reason: "in_progress" };
+    try { await this.persistOutcome(ref, record, outcome); } catch { /* authoritative read decides */ }
+    let after = await this.read(ref.key);
+    if (!after) return { kind: "blocked", reason: "ledger_unavailable" };
+    if (after.state === "accepted") {
+      if (outcome.kind === "accepted" && after.providerMessageId === outcome.id) return { kind: "committed", record: after };
+      return outcome.kind === "accepted" ? { kind: "blocked", reason: "integrity_hold" } : { kind: "superseded", record: after };
+    }
+    const slot = this.slot(after, ref.token);
+    if (slot && slot.outcome !== "pending") return { kind: "committed", record: after };
+    if (outcome.kind === "accepted") {
+      try { await this.persistOutcome(ref, after, outcome); } catch { /* final read decides */ }
+      after = await this.read(ref.key);
+      if (after?.state === "accepted" && after.providerMessageId === outcome.id) return { kind: "committed", record: after };
+    }
+    return { kind: "blocked", reason: "ledger_unavailable" };
+  }
+
+  private async repair(record: DeliveryRecord): Promise<void> {
+    if (record.state !== "accepted" || !record.frozen || !record.acceptedAt || !record.providerMessageId) {
+      throw new DeliveryStateUnavailableError();
+    }
+    const statements = record.frozen.aliases.map(alias => this.database.prepare(`INSERT OR IGNORE INTO notifications(
+      normalized_url,channel,sent_at,provider_message_id)
+      SELECT ?1,'email',?2,?3 WHERE EXISTS (
+        SELECT 1 FROM email_deliveries WHERE delivery_key=?4 AND state='accepted' AND payload_sha256=?5
+          AND accepted_at=?2 AND provider_message_id=?3)`)
+      .bind(alias, record.acceptedAt, record.providerMessageId, record.key, record.payloadSha256));
+    statements.push(this.database.prepare(`UPDATE email_deliveries SET
+      reconciled_at=coalesce(reconciled_at,strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),last_reason='history_reconciled'
+      WHERE delivery_key=?1 AND state='accepted' AND payload_sha256=?2 AND accepted_at=?3 AND provider_message_id=?4`)
+      .bind(record.key, record.payloadSha256, record.acceptedAt, record.providerMessageId));
+    await this.database.batch(statements);
+  }
+
+  async reconcileAccepted(key: DeliveryKey): Promise<MutationResult> {
+    let record = await this.read(key);
+    if (!record || record.state !== "accepted") return { kind: "blocked", reason: "integrity_hold" };
+    if (record.reconciledAt) return { kind: "committed", record };
+    try { await this.repair(record); } catch { /* authoritative read decides */ }
+    record = await this.read(key);
+    if (record?.state === "accepted" && record.reconciledAt) return { kind: "committed", record };
+    return { kind: "blocked", reason: "history_pending" };
+  }
+
+  async reconcileOneOlder(logicalDate: string): Promise<void> {
+    let row: { delivery_key: DeliveryKey } | null;
+    try {
+      row = await this.primary().prepare(`SELECT delivery_key FROM email_deliveries
+        WHERE state='accepted' AND reconciled_at IS NULL AND logical_date<?1
+        ORDER BY accepted_at ASC,delivery_key ASC LIMIT 1`).bind(logicalDate).first<{ delivery_key: DeliveryKey }>();
+    } catch { throw new DeliveryStateUnavailableError(); }
+    if (row) await this.reconcileAccepted(row.delivery_key);
+  }
 }

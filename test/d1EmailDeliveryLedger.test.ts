@@ -153,3 +153,69 @@ test("lost dispatch-admission response retains one uncertain capacity slot", asy
     assert.equal((await ledger.read("daily-digest/2026-11-04"))?.slots.length, 1);
   } finally { sqlite.close(); }
 });
+
+async function admitted(ledger: D1EmailDeliveryLedger, token = "attempt-1") {
+  await ledger.reserve(await frozen());
+  const claimed = await ledger.claim("daily-digest/2026-11-04", token);
+  assert.equal(claimed.kind, "committed");
+  if (claimed.kind !== "committed" || !claimed.record.claim) throw new Error("claim missing");
+  await ledger.admitDispatch(claimed.record.claim);
+  return claimed.record.claim;
+}
+
+test("acceptance is durable, monotonic, and conflicting provider IDs fail closed", async () => {
+  const { sqlite, d1 } = await createEmailDeliveryDatabase();
+  try {
+    const ledger = new D1EmailDeliveryLedger(d1 as unknown as D1Database);
+    const ref = await admitted(ledger);
+    const hash = (await ledger.read(ref.key))!.payloadSha256;
+    const accepted = await ledger.recordOutcome(ref, hash, { kind: "accepted", id: "email-1" });
+    assert.equal(accepted.kind, "committed");
+    assert.equal((await ledger.read(ref.key))?.state, "accepted");
+    assert.equal((await ledger.recordOutcome(ref, hash, { kind: "accepted", id: "email-1" })).kind, "committed");
+    assert.equal((await ledger.recordOutcome(ref, hash, { kind: "accepted", id: "email-2" })).kind, "blocked");
+    assert.equal((await ledger.recordOutcome(ref, hash, { kind: "rejected", rejection: "quota" })).kind, "superseded");
+    assert.equal((await ledger.read(ref.key))?.providerMessageId, "email-1");
+  } finally { sqlite.close(); }
+});
+
+test("only a sole authoritative rejection can become confirmed_failed", async () => {
+  const { sqlite, d1 } = await createEmailDeliveryDatabase();
+  try {
+    const ledger = new D1EmailDeliveryLedger(d1 as unknown as D1Database);
+    const ref = await admitted(ledger);
+    const hash = (await ledger.read(ref.key))!.payloadSha256;
+    const rejected = await ledger.recordOutcome(ref, hash, { kind: "rejected", rejection: "validation" });
+    assert.equal(rejected.kind, "committed");
+    assert.equal((await ledger.read(ref.key))?.state, "confirmed_failed");
+  } finally { sqlite.close(); }
+});
+
+test("accepted delivery repairs frozen aliases once without changing existing notification evidence", async () => {
+  const { sqlite, d1 } = await createEmailDeliveryDatabase();
+  try {
+    const ledger = new D1EmailDeliveryLedger(d1 as unknown as D1Database);
+    const value = await freezeDelivery({ ...digest, mode: "degraded", reason: "ai_unavailable", items: [{
+      kind: "raw", candidate: { candidateId: "c1", normalizedUrl: "https://example.test/story#one",
+        aliasKey: "https://example.test/story", aliases: ["https://example.test/story#one"],
+        source: { title: "Story", url: "https://example.test/story#one" },
+        provenance: [{ kind: "brave", queryOrdinal: 1, resultOrdinal: 1 }] },
+    }] }, deliveryIdentity(new Date("2026-11-04T08:00:00.000Z")), {
+      from: "AI Radar <radar@example.test>", subject: "Daily", text: "Story", html: "<p>Story</p>",
+    }, "owner@example.test");
+    await ledger.reserve(value);
+    const claim = await ledger.claim(value.identity.key, "repair-attempt");
+    if (claim.kind !== "committed" || !claim.record.claim) throw new Error("claim missing");
+    await ledger.admitDispatch(claim.record.claim);
+    await ledger.recordOutcome(claim.record.claim, value.payloadSha256, { kind: "accepted", id: "email-repair" });
+    sqlite.prepare("INSERT INTO notifications(normalized_url,channel,sent_at,provider_message_id) VALUES(?,?,?,?)")
+      .run("https://example.test/story", "email", "2020-01-01T00:00:00.000Z", "older-id");
+    const repaired = await ledger.reconcileAccepted(value.identity.key);
+    assert.equal(repaired.kind, "committed");
+    assert.equal((await ledger.read(value.identity.key))?.reconciledAt !== null, true);
+    const existing = sqlite.prepare("SELECT sent_at,provider_message_id FROM notifications WHERE normalized_url=?").get("https://example.test/story");
+    assert.deepEqual(existing, { sent_at: "2020-01-01T00:00:00.000Z", provider_message_id: "older-id" });
+    assert.equal((sqlite.prepare("SELECT count(*) AS count FROM notifications").get() as { count: number }).count, value.aliases.length);
+    assert.equal((await ledger.reconcileAccepted(value.identity.key)).kind, "committed");
+  } finally { sqlite.close(); }
+});
