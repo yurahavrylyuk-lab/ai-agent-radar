@@ -1,5 +1,11 @@
 # AI Agent Radar project state
 
+## 2026-11-06 — Final payload-conflict concurrency correction ready for re-review
+
+**Source-control status only:** commit `37293147ef38b8d4cc77d205881d7e04c02341e2` on `codex/idempotent-email-delivery-implementation` closes the two remaining payload-conflict races. A genuine provider conflict tied to the exact durable pending slot and frozen payload can atomically establish the hold after claim reclamation, while unadmitted tokens fail closed. Once established, the same conditional storage boundary prevents a stale accepted outcome from clearing the hold; ordinary non-conflict late acceptance and ambiguity recovery remain unchanged.
+
+RED reproduced both defects in the real local D1 adapter. GREEN passed focused 133/133, full 800/800, build, Worker typecheck, and the email Workerd/D1 restart harness. The Workerd proof includes reclaimed-owner fencing, unchanged one-slot evidence, zero recovery transport calls, late-acceptance rejection, and restart persistence; the existing 24 uncertainty cases were not redesigned. Migration `0010` is unchanged and unapplied. No push, merge, deployment, provider call, monitoring run, production D1 mutation, or other production action occurred. Status remains **IMPLEMENTED / OFFLINE-TESTED / AWAITING FOCUSED INDEPENDENT ANALYST RE-REVIEW**.
+
 ## 2026-11-06 — Idempotent Email Delivery Analyst corrections ready for re-review
 
 **Source-control status only:** the two IMPORTANT findings against reviewed commit `6bd81ad250eeccae60c46959d9473585de8883af` are corrected in commit `bd80a8d6b0123b2938ddec9956d6a849abb0cbf1` on `codex/idempotent-email-delivery-implementation`. A durable `payload_conflict` can no longer be reclaimed or admitted for another dispatch, including after restart/concurrency; ordinary non-conflict ambiguity remains recoverable.

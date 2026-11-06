@@ -1,5 +1,12 @@
 # Daily Self-Improvement Summary
 
+## 2026-11-06 — Final payload-conflict concurrency correction
+
+- Corrected both remaining Analyst findings in runtime/test commit `37293147ef38b8d4cc77d205881d7e04c02341e2`: an exact durable pending slot may establish `payload_conflict` after its claim is stale, and a later accepted outcome cannot overwrite an established conflict hold.
+- The conflict transition is one D1 compare-and-set over delivery key, frozen payload hash, exact dispatch journal, permitted state, empty acceptance evidence, and the admitted pending token. It clears any replacement claim atomically; an unadmitted token cannot establish the hold. Ordinary accepted monotonicity and non-conflict ambiguity recovery remain unchanged.
+- RED: the local D1 suite failed exactly two new regressions—stale conflict returned `blocked`, and late acceptance returned `committed`. GREEN: focused email-delivery suite 133/133; full suite 800/800; build and Worker typecheck passed; real Workerd D1 restart/fencing regression passed with no additional provider request.
+- Migration `0010` is unchanged and unapplied. The protected untracked historical design remained byte-identical at SHA-256 `67ebe90fdda67d9312f952cb477d38e5c78fff69396f8e4bbbc6bc6405d09a66`. No push, merge, deployment, provider call, monitoring run, or production D1 action occurred. Status: awaiting focused independent Analyst re-review.
+
 ## 2026-11-06 — Idempotent Email Delivery Analyst corrections
 
 - Corrected reviewed HEAD `6bd81ad250eeccae60c46959d9473585de8883af` in runtime/test commit `bd80a8d6b0123b2938ddec9956d6a849abb0cbf1`: `payload_conflict` is now a durable storage-level claim/admission hold, while ordinary ambiguity recovery remains unchanged.

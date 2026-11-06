@@ -1,5 +1,12 @@
 # Self-improvement changelog
 
+## 2026-11-06 — Fence stale payload-conflict races
+
+- Added an exact D1 conditional transition that lets a provider-confirmed conflict from a durable pending slot establish the no-send hold even after another claimant has reclaimed the lease.
+- Made the conflict hold monotonic against later accepted outcomes, claim/retry admission and restart; invalid or unadmitted stale tokens cannot freeze a delivery, and already accepted deliveries cannot be downgraded.
+- Added local D1 and Workerd restart regressions for reclaimed claims, late acceptance, invalid stale identity, zero additional transport, ordinary ambiguity recovery and existing slot/cutoff behavior. Focused 133/133 and full 800/800 passed with build and Worker typecheck.
+- Runtime/test correction commit: `37293147ef38b8d4cc77d205881d7e04c02341e2`. Migration `0010` remains unchanged/unapplied; no production or provider action occurred.
+
 ## 2026-11-06 — Correct idempotent email delivery review findings
 
 - Made `payload_conflict` a durable no-send integrity hold at the D1 claim and dispatch-admission boundaries; restart, lease expiry and concurrent/stale claimants cannot erase it or consume another slot.
