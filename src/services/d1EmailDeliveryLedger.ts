@@ -1,0 +1,141 @@
+import {
+  DeliveryStateUnavailableError,
+  validateDeliveryRecord,
+  type ClaimRef,
+  type DeliveryKey,
+  type DeliveryLedger,
+  type DeliveryReason,
+  type DeliveryRecord,
+  type DispatchSlot,
+  type FrozenDelivery,
+  type MutationResult,
+  type ResendOutcome,
+} from "./emailDeliveryLedger.js";
+
+interface DeliveryRow {
+  delivery_key: DeliveryKey; logical_date: string; state: DeliveryRecord["state"];
+  payload_version: number | null; content_json: string | null; payload_sha256: string;
+  mode: FrozenDelivery["mode"] | null; reason: FrozenDelivery["reason"] | null; aliases_json: string | null;
+  created_at: string; updated_at: string; first_provider_attempt_at: string | null;
+  last_provider_attempt_at: string | null; retry_before: string | null; claim_token: string | null;
+  claim_generation: number; lease_until: string | null; dispatch_evidence_json: string;
+  provider_message_id: string | null; accepted_at: string | null; reconciled_at: string | null;
+  last_reason: DeliveryReason;
+}
+
+const selectRow = `SELECT delivery_key,logical_date,state,payload_version,content_json,payload_sha256,mode,reason,aliases_json,
+  created_at,updated_at,first_provider_attempt_at,last_provider_attempt_at,retry_before,claim_token,claim_generation,
+  lease_until,dispatch_evidence_json,provider_message_id,accepted_at,reconciled_at,last_reason FROM email_deliveries`;
+
+function parseJson<T>(value: string, label: string): T {
+  try { return JSON.parse(value) as T; } catch { throw new DeliveryStateUnavailableError(); }
+}
+
+function fromRow(row: DeliveryRow): DeliveryRecord {
+  const slots = parseJson<DispatchSlot[]>(row.dispatch_evidence_json, "dispatch journal");
+  const frozen = row.content_json === null ? null : (() => {
+    const value = parseJson<{ scheduledAt: string; content: FrozenDelivery["content"] }>(row.content_json, "frozen content");
+    return {
+      identity: { key: row.delivery_key, logicalDate: row.logical_date, scheduledAt: value.scheduledAt },
+      payloadVersion: row.payload_version as 1,
+      content: value.content,
+      payloadSha256: row.payload_sha256,
+      mode: row.mode!, reason: row.reason!,
+      aliases: parseJson<string[]>(row.aliases_json!, "aliases"),
+    } satisfies FrozenDelivery;
+  })();
+  const record: DeliveryRecord = {
+    key: row.delivery_key, logicalDate: row.logical_date, payloadSha256: row.payload_sha256, frozen,
+    state: row.state, createdAt: row.created_at, updatedAt: row.updated_at,
+    firstProviderAttemptAt: row.first_provider_attempt_at, lastProviderAttemptAt: row.last_provider_attempt_at,
+    retryBefore: row.retry_before,
+    claim: row.claim_token === null ? null : { key: row.delivery_key, token: row.claim_token, generation: row.claim_generation },
+    leaseUntil: row.lease_until, slots, providerMessageId: row.provider_message_id,
+    acceptedAt: row.accepted_at, reconciledAt: row.reconciled_at, lastReason: row.last_reason,
+  };
+  validateDeliveryRecord(record);
+  return record;
+}
+
+type SessionDatabase = D1Database & { withSession?: (constraint: "first-primary") => D1Database };
+
+export class D1EmailDeliveryLedger implements DeliveryLedger {
+  constructor(private readonly database: D1Database) {}
+
+  private primary(): D1Database {
+    const database = this.database as SessionDatabase;
+    return database.withSession?.("first-primary") ?? database;
+  }
+
+  async read(key: DeliveryKey): Promise<DeliveryRecord | null> {
+    try {
+      const row = await this.primary().prepare(`${selectRow} WHERE delivery_key=?1`).bind(key).first<DeliveryRow>();
+      return row ? fromRow(row) : null;
+    } catch (error) {
+      if (error instanceof DeliveryStateUnavailableError) throw error;
+      throw new DeliveryStateUnavailableError();
+    }
+  }
+
+  private classifyReservation(existing: DeliveryRecord, frozen: FrozenDelivery): MutationResult {
+    return existing.payloadSha256 === frozen.payloadSha256
+      ? { kind: "committed", record: existing }
+      : { kind: "superseded", record: existing };
+  }
+
+  private async insertReservation(frozen: FrozenDelivery): Promise<void> {
+    const content = JSON.stringify({ scheduledAt: frozen.identity.scheduledAt, content: frozen.content });
+    await this.database.prepare(`INSERT INTO email_deliveries(
+      delivery_key,logical_date,state,payload_version,content_json,payload_sha256,mode,reason,aliases_json,
+      created_at,updated_at,dispatch_evidence_json,last_reason
+    ) VALUES(?1,?2,'prepared',1,?3,?4,?5,?6,?7,
+      strftime('%Y-%m-%dT%H:%M:%fZ','now'),strftime('%Y-%m-%dT%H:%M:%fZ','now'),'[]','prepared')`)
+      .bind(frozen.identity.key, frozen.identity.logicalDate, content, frozen.payloadSha256,
+        frozen.mode, frozen.reason, JSON.stringify(frozen.aliases)).run();
+  }
+
+  async reserve(frozen: FrozenDelivery): Promise<MutationResult> {
+    let firstError = false;
+    try { await this.insertReservation(frozen); }
+    catch { firstError = true; }
+    let existing = await this.read(frozen.identity.key);
+    if (existing) return this.classifyReservation(existing, frozen);
+    if (!firstError) throw new DeliveryStateUnavailableError();
+    try { await this.insertReservation(frozen); } catch { /* authoritative final read decides */ }
+    existing = await this.read(frozen.identity.key);
+    if (!existing) throw new DeliveryStateUnavailableError();
+    return this.classifyReservation(existing, frozen);
+  }
+
+  private async updateClaim(key: DeliveryKey, token: string): Promise<void> {
+    await this.database.prepare(`UPDATE email_deliveries SET
+      state='attempting',claim_token=?1,claim_generation=claim_generation+1,
+      lease_until=strftime('%Y-%m-%dT%H:%M:%fZ','now','+2 minutes'),
+      updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),last_reason='claimed'
+      WHERE delivery_key=?2 AND state IN ('prepared','ambiguous','attempting')
+        AND (claim_token IS NULL OR lease_until <= strftime('%Y-%m-%dT%H:%M:%fZ','now'))`).bind(token, key).run();
+  }
+
+  async claim(key: DeliveryKey, token: string): Promise<MutationResult> {
+    if (!token || new TextEncoder().encode(token).byteLength > 256) return { kind: "blocked", reason: "integrity_hold" };
+    try { await this.updateClaim(key, token); } catch { /* authoritative read decides */ }
+    let record = await this.read(key);
+    if (!record) return { kind: "blocked", reason: "integrity_hold" };
+    if (record.claim?.token === token) return { kind: "committed", record };
+    if (record.claim && record.leaseUntil && record.leaseUntil > new Date().toISOString()) return { kind: "blocked", reason: "in_progress" };
+    if (["accepted", "confirmed_failed"].includes(record.state) || record.lastReason === "integrity_hold" || record.lastReason === "payload_conflict") {
+      return { kind: "blocked", reason: record.state === "accepted" ? "already_accepted" : "integrity_hold" };
+    }
+    try { await this.updateClaim(key, token); } catch { /* final authoritative read decides */ }
+    record = await this.read(key);
+    if (record?.claim?.token === token) return { kind: "committed", record };
+    return { kind: "blocked", reason: record?.claim ? "in_progress" : "ledger_unavailable" };
+  }
+
+  async admitDispatch(_ref: ClaimRef): Promise<MutationResult> { throw new Error("Dispatch admission is not implemented."); }
+  async verifyDispatch(_ref: ClaimRef): Promise<{ record: DeliveryRecord; databaseNow: string }> { throw new Error("Dispatch verification is not implemented."); }
+  async cancelUndispatched(_ref: ClaimRef): Promise<MutationResult> { throw new Error("Dispatch cancellation is not implemented."); }
+  async recordOutcome(_ref: ClaimRef, _hash: string, _outcome: ResendOutcome): Promise<MutationResult> { throw new Error("Delivery outcome recording is not implemented."); }
+  async reconcileAccepted(_key: DeliveryKey): Promise<MutationResult> { throw new Error("Delivery reconciliation is not implemented."); }
+  async reconcileOneOlder(_logicalDate: string): Promise<void> { throw new Error("Delivery reconciliation is not implemented."); }
+}
