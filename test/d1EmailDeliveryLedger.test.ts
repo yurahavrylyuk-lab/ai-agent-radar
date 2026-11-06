@@ -219,6 +219,70 @@ test("payload conflict is a durable integrity hold across expiry and concurrent 
   } finally { sqlite.close(); }
 });
 
+test("stale admitted claimant can establish payload-conflict hold after lease reclaim", async () => {
+  const { sqlite, d1 } = await createEmailDeliveryDatabase();
+  try {
+    const ledger = new D1EmailDeliveryLedger(d1 as unknown as D1Database);
+    const stale = await admitted(ledger, "stale-conflict-slot");
+    const hash = (await ledger.read(stale.key))!.payloadSha256;
+    sqlite.prepare("UPDATE email_deliveries SET lease_until='2020-01-01T00:00:00.000Z' WHERE delivery_key=?")
+      .run(stale.key);
+    const reclaimed = await ledger.claim(stale.key, "reclaimed-owner");
+    assert.equal(reclaimed.kind, "committed");
+    if (reclaimed.kind !== "committed" || !reclaimed.record.claim) throw new Error("reclaimed claim missing");
+
+    const conflict = await ledger.recordOutcome(stale, hash, { kind: "payload_conflict" });
+    assert.equal(conflict.kind, "committed");
+    const held = await ledger.read(stale.key);
+    assert.equal(held?.state, "ambiguous");
+    assert.equal(held?.lastReason, "payload_conflict");
+    assert.equal(held?.claim, null);
+    assert.deepEqual(held?.slots.map(slot => [slot.token, slot.evidence, slot.outcome]), [
+      ["stale-conflict-slot", "dispatched", "payload_conflict"],
+    ]);
+
+    assert.equal((await ledger.admitDispatch(reclaimed.record.claim)).kind, "blocked");
+    const restarted = new D1EmailDeliveryLedger(d1 as unknown as D1Database);
+    assert.equal((await restarted.claim(stale.key, "restart-owner")).kind, "blocked");
+    assert.equal((await restarted.read(stale.key))?.slots.length, 1);
+  } finally { sqlite.close(); }
+});
+
+test("late acceptance cannot clear an established payload-conflict hold", async () => {
+  const { sqlite, d1 } = await createEmailDeliveryDatabase();
+  try {
+    const ledger = new D1EmailDeliveryLedger(d1 as unknown as D1Database);
+    const ref = await admitted(ledger, "held-slot");
+    const hash = (await ledger.read(ref.key))!.payloadSha256;
+    assert.equal((await ledger.recordOutcome(ref, hash, { kind: "payload_conflict" })).kind, "committed");
+
+    const late = await ledger.recordOutcome(ref, hash, { kind: "accepted", id: "email-too-late" });
+    assert.equal(late.kind, "blocked");
+    const held = await ledger.read(ref.key);
+    assert.equal(held?.state, "ambiguous");
+    assert.equal(held?.lastReason, "payload_conflict");
+    assert.equal(held?.providerMessageId, null);
+    assert.equal(held?.acceptedAt, null);
+    assert.deepEqual(held?.slots.map(slot => slot.outcome), ["payload_conflict"]);
+    assert.equal((await ledger.claim(ref.key, "later-owner")).kind, "blocked");
+  } finally { sqlite.close(); }
+});
+
+test("unadmitted stale token cannot establish a payload-conflict hold", async () => {
+  const { sqlite, d1 } = await createEmailDeliveryDatabase();
+  try {
+    const ledger = new D1EmailDeliveryLedger(d1 as unknown as D1Database);
+    const ref = await admitted(ledger, "real-slot");
+    const before = await ledger.read(ref.key);
+    const invalid = { ...ref, token: "never-admitted" };
+    const result = await ledger.recordOutcome(invalid, before!.payloadSha256, { kind: "payload_conflict" });
+    assert.equal(result.kind, "blocked");
+    const after = await ledger.read(ref.key);
+    assert.equal(after?.lastReason, "dispatch_admitted");
+    assert.deepEqual(after?.slots, before?.slots);
+  } finally { sqlite.close(); }
+});
+
 test("ordinary ambiguous outcome remains reclaimable after lease expiry", async () => {
   const { sqlite, d1 } = await createEmailDeliveryDatabase();
   try {

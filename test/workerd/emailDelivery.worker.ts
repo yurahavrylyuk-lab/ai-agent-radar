@@ -276,6 +276,27 @@ export default {
       return Response.json({ late: late.kind, repeated: repeated.kind, conflict: conflict.kind,
         acceptedAtPreserved: acceptedAt === (await ledger.read(key(date)))?.acceptedAt, record: summary(await ledger.read(key(date))) });
     }
+    if (url.pathname === "/stale-payload-conflict") {
+      const frozen = await proposal(date, "Stale payload conflict"); await ledger.reserve(frozen);
+      const stale = await admit(ledger, date, "stale-conflict-slot");
+      await env.DB.prepare("UPDATE email_deliveries SET lease_until='2020-01-01T00:00:00.000Z' WHERE delivery_key=?1")
+        .bind(key(date)).run();
+      const newer = await ledger.claim(key(date), "reclaimed-owner");
+      if (newer.kind !== "committed" || !newer.record.claim) throw new Error("reclaim failed");
+      const conflict = await ledger.recordOutcome(stale, frozen.payloadSha256, { kind: "payload_conflict" });
+      const admission = await ledger.admitDispatch(newer.record.claim);
+      return Response.json({ conflict: conflict.kind, admission: admission.kind,
+        record: summary(await ledger.read(key(date))) });
+    }
+    if (url.pathname === "/late-acceptance-after-conflict") {
+      const frozen = await proposal(date, "Conflict before late acceptance"); await ledger.reserve(frozen);
+      const ref = await admit(ledger, date, "held-conflict-slot");
+      const conflict = await ledger.recordOutcome(ref, frozen.payloadSha256, { kind: "payload_conflict" });
+      const late = await ledger.recordOutcome(ref, frozen.payloadSha256, { kind: "accepted", id: "email-too-late" });
+      const claim = await ledger.claim(key(date), "post-conflict-owner");
+      return Response.json({ conflict: conflict.kind, late: late.kind, claim: claim.kind,
+        record: summary(await ledger.read(key(date))) });
+    }
     return new Response("not found", { status: 404 });
   },
 };

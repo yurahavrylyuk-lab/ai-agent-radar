@@ -246,10 +246,25 @@ export class D1EmailDeliveryLedger implements DeliveryLedger {
       claim_token=NULL,lease_until=NULL,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),last_reason=?4
       WHERE delivery_key=?5 AND payload_sha256=?6 AND dispatch_evidence_json=?7
         AND state IN ('attempting','ambiguous')
+        AND last_reason NOT IN ('payload_conflict','integrity_hold')
         AND EXISTS (SELECT 1 FROM json_each(dispatch_evidence_json) WHERE json_extract(value,'$.token')=?8)
         AND (?1='accepted' OR (claim_token=?8 AND claim_generation=?9))`)
       .bind(state, slots, outcome.kind === "accepted" ? outcome.id : null, reason,
         ref.key, record.payloadSha256, JSON.stringify(record.slots), ref.token, ref.generation).run();
+  }
+
+  private async persistPayloadConflict(ref: ClaimRef, record: DeliveryRecord): Promise<void> {
+    const slots = JSON.stringify(this.outcomeSlots(record, ref, { kind: "payload_conflict" }));
+    await this.database.prepare(`UPDATE email_deliveries SET
+      state='ambiguous',dispatch_evidence_json=?1,provider_message_id=NULL,accepted_at=NULL,
+      claim_token=NULL,lease_until=NULL,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),last_reason='payload_conflict'
+      WHERE delivery_key=?2 AND payload_sha256=?3 AND dispatch_evidence_json=?4
+        AND state IN ('attempting','ambiguous')
+        AND last_reason NOT IN ('payload_conflict','integrity_hold')
+        AND provider_message_id IS NULL AND accepted_at IS NULL
+        AND EXISTS (SELECT 1 FROM json_each(dispatch_evidence_json)
+          WHERE json_extract(value,'$.token')=?5 AND json_extract(value,'$.outcome')='pending')`)
+      .bind(slots, ref.key, record.payloadSha256, JSON.stringify(record.slots), ref.token).run();
   }
 
   async recordOutcome(ref: ClaimRef, hash: string, outcome: ResendOutcome): Promise<MutationResult> {
@@ -260,9 +275,20 @@ export class D1EmailDeliveryLedger implements DeliveryLedger {
       if (outcome.kind === "accepted" && outcome.id === record.providerMessageId) return { kind: "committed", record };
       return outcome.kind === "accepted" ? { kind: "blocked", reason: "integrity_hold" } : { kind: "superseded", record };
     }
-    if (!this.slot(record, ref.token)) return { kind: "blocked", reason: "integrity_hold" };
-    if (outcome.kind !== "accepted" && !this.owns(record, ref)) return { kind: "blocked", reason: "in_progress" };
-    try { await this.persistOutcome(ref, record, outcome); } catch { /* authoritative read decides */ }
+    const existing = this.slot(record, ref.token);
+    if (!existing) return { kind: "blocked", reason: "integrity_hold" };
+    if (record.lastReason === "payload_conflict" || record.lastReason === "integrity_hold") {
+      return outcome.kind === "payload_conflict" && existing.outcome === "payload_conflict"
+        ? { kind: "committed", record }
+        : { kind: "blocked", reason: "integrity_hold" };
+    }
+    if (outcome.kind !== "accepted" && outcome.kind !== "payload_conflict" && !this.owns(record, ref)) {
+      return { kind: "blocked", reason: "in_progress" };
+    }
+    try {
+      if (outcome.kind === "payload_conflict") await this.persistPayloadConflict(ref, record);
+      else await this.persistOutcome(ref, record, outcome);
+    } catch { /* authoritative read decides */ }
     let after = await this.read(ref.key);
     if (!after) return { kind: "blocked", reason: "ledger_unavailable" };
     if (after.state === "accepted") {
@@ -270,11 +296,24 @@ export class D1EmailDeliveryLedger implements DeliveryLedger {
       return outcome.kind === "accepted" ? { kind: "blocked", reason: "integrity_hold" } : { kind: "superseded", record: after };
     }
     const slot = this.slot(after, ref.token);
+    if (after.lastReason === "payload_conflict" || after.lastReason === "integrity_hold") {
+      return outcome.kind === "payload_conflict" && slot?.outcome === "payload_conflict"
+        ? { kind: "committed", record: after }
+        : { kind: "blocked", reason: "integrity_hold" };
+    }
     if (slot && slot.outcome !== "pending") return { kind: "committed", record: after };
-    if (outcome.kind === "accepted") {
-      try { await this.persistOutcome(ref, after, outcome); } catch { /* final read decides */ }
+    if (outcome.kind === "accepted" || outcome.kind === "payload_conflict") {
+      try {
+        if (outcome.kind === "payload_conflict") await this.persistPayloadConflict(ref, after);
+        else await this.persistOutcome(ref, after, outcome);
+      } catch { /* final read decides */ }
       after = await this.read(ref.key);
-      if (after?.state === "accepted" && after.providerMessageId === outcome.id) return { kind: "committed", record: after };
+      if (outcome.kind === "accepted" && after?.state === "accepted" && after.providerMessageId === outcome.id) {
+        return { kind: "committed", record: after };
+      }
+      const afterSlot = after && this.slot(after, ref.token);
+      if (outcome.kind === "payload_conflict" && after?.lastReason === "payload_conflict"
+        && afterSlot?.outcome === "payload_conflict") return { kind: "committed", record: after };
     }
     return { kind: "blocked", reason: "ledger_unavailable" };
   }

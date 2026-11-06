@@ -148,6 +148,27 @@ try {
   }
   assert.equal(uncertainty.providerRequests,0);
 
+  const staleConflict=await invoke(workerPort,"/stale-payload-conflict","2026-11-17");
+  assert.deepEqual([staleConflict.conflict,staleConflict.admission],["committed","blocked"]);
+  assert.equal(staleConflict.record.lastReason,"payload_conflict");
+  assert.equal(staleConflict.record.slots,1);
+  assert.deepEqual(staleConflict.record.outcomes,["payload_conflict"]);
+  assert.equal(staleConflict.record.claim,null);
+  await stop(worker.child); workerPort=await unusedPort(); worker=start(workerPort); await worker.ready;
+  const requestsBeforeStaleConflictRecovery=requests;
+  const staleConflictRecovery=await invoke(workerPort,"/recover","2026-11-17",receiverUrl);
+  assert.equal(staleConflictRecovery.outcome.emailAttempts,0);
+  assert.equal(staleConflictRecovery.record.lastReason,"payload_conflict");
+  assert.equal(staleConflictRecovery.record.slots,1);
+  assert.equal(requests,requestsBeforeStaleConflictRecovery,"payload-conflict restart must not dispatch another email");
+
+  const lateAfterConflict=await invoke(workerPort,"/late-acceptance-after-conflict","2026-11-18");
+  assert.deepEqual([lateAfterConflict.conflict,lateAfterConflict.late,lateAfterConflict.claim],["committed","blocked","blocked"]);
+  assert.equal(lateAfterConflict.record.state,"ambiguous");
+  assert.equal(lateAfterConflict.record.lastReason,"payload_conflict");
+  assert.equal(lateAfterConflict.record.providerMessageId,null);
+  assert.deepEqual(lateAfterConflict.record.outcomes,["payload_conflict"]);
+
   providerNow+=24*60*60*1000;
   const expiryKey="daily-digest/2026-11-16";
   const expiryBody=JSON.stringify({from:"AI Radar <radar@example.test>",to:["owner@example.test"],subject:"Expiry",text:"Expiry",html:"<p>Expiry</p>"});
