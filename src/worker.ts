@@ -6,7 +6,7 @@ import { D1MonitoringTelemetry } from "./services/d1MonitoringTelemetry.js";
 import { D1OpenAIFallbackUsageStore } from "./services/d1OpenAIFallbackUsageStore.js";
 import { D1EmailDeliveryLedger } from "./services/d1EmailDeliveryLedger.js";
 import { deliveryIdentity } from "./services/emailDeliveryLedger.js";
-import { isTotalDiscoveryOutage, validateAnalyzerFailoverObservation, validateThreadsCycleMetrics, type AnalyzerFailoverObservation, type CycleLatencyV1, type CycleSnapshotV1, type GeminiAttemptTiming, type MonitoringTelemetry } from "./services/monitoringTelemetry.js";
+import { isTotalDiscoveryOutage, validateAnalyzerFailoverObservation, validateDeliveryLedgerObservation, validateThreadsCycleMetrics, type AnalyzerFailoverObservation, type CycleLatencyV1, type CycleSnapshotV1, type GeminiAttemptTiming, type MonitoringTelemetry } from "./services/monitoringTelemetry.js";
 import { inspectGeminiAvailability } from "./services/geminiUsageGuard.js";
 import { analyzeBatch, BatchAnalysisError } from "./services/analysisAgent.js";
 import { analyzeBatchWithFailover } from "./services/batchAnalyzerFailover.js";
@@ -120,6 +120,7 @@ export interface ScheduledCycleSummary {
     emailOutcome: "accepted" | "failed" | "unknown" | "not_attempted";
     historyOutcome: "not_required" | "recorded" | "unavailable" | "persistence_failed";
     finalizationReached: boolean;
+    deliveryLedger?: import("./types/index.js").DeliveryLedgerObservation;
   };
 }
 
@@ -329,6 +330,9 @@ export function createScheduledCycleSummary(
   const deliveryReason = allowedString(delivery?.deliveryReason, ["selected", "no_eligible_stories", "ai_unavailable", "ai_no_selections", "discovery_unavailable", "history_unavailable", "preparation_unavailable", "persistence_unavailable"] as const) ?? "preparation_unavailable";
   const emailOutcome = allowedString(delivery?.emailOutcome, ["accepted", "failed", "unknown", "not_attempted"] as const) ?? "unknown";
   const historyOutcome = allowedString(delivery?.historyOutcome, ["not_required", "recorded", "unavailable", "persistence_failed"] as const) ?? "unavailable";
+  let deliveryLedger: import("./types/index.js").DeliveryLedgerObservation | undefined;
+  try { if (delivery?.deliveryLedger) deliveryLedger = validateDeliveryLedgerObservation(structuredClone(delivery.deliveryLedger)); }
+  catch { /* scheduled logs independently omit malformed ledger evidence */ }
 
   const threads = result.threads === undefined ? undefined : summarizeThreads(result.threads);
   return {
@@ -392,6 +396,7 @@ export function createScheduledCycleSummary(
       emailAttempts: boundedCount(delivery?.emailAttempts, 1) as 0 | 1,
       emailOutcome, historyOutcome,
       finalizationReached: delivery?.finalizationReached === true,
+      ...(deliveryLedger ? { deliveryLedger } : {}),
     },
   };
 }

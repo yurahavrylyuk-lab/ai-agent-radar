@@ -3,7 +3,7 @@ import Database from "better-sqlite3";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { D1MonitoringTelemetry } from "../src/services/d1MonitoringTelemetry.js";
-import { parseCycleSnapshot, serializeCycleSnapshot, validateCycleSnapshot, validateCycleStart, validateThreadsCycleMetrics } from "../src/services/monitoringTelemetry.js";
+import { parseCycleSnapshot, serializeCycleSnapshot, validateCycleSnapshot, validateCycleStart, validateDeliveryLedgerObservation, validateThreadsCycleMetrics } from "../src/services/monitoringTelemetry.js";
 
 const encoder = new TextEncoder();
 
@@ -158,6 +158,37 @@ test("delivery snapshot allowlists only bounded finalizer evidence", () => {
   assert.deepEqual(validateCycleSnapshot({ ...snapshot, delivery }).delivery, delivery);
   assert.throws(() => validateCycleSnapshot({ ...snapshot, delivery: { ...delivery, rawStories: 5 } }), /snapshot/i);
   assert.throws(() => validateCycleSnapshot({ ...snapshot, delivery: { ...delivery, message: "provider prose" } }), /snapshot/i);
+});
+
+test("optional delivery ledger observation is exact, bounded, redacted, and legacy compatible", () => {
+  const deliveryLedger = {
+    version: 1 as const,
+    key: "daily-digest/2026-11-04" as const,
+    action: "recovery" as const,
+    state: "ambiguous" as const,
+    reason: "provider_ambiguous" as const,
+    knownDispatchCount: 1,
+    uncertainSlotCount: 1,
+    reconciliation: "pending" as const,
+    replayEvidence: "same_key_requested" as const,
+  };
+  assert.deepEqual(validateDeliveryLedgerObservation(deliveryLedger), deliveryLedger);
+  const extended = { ...snapshot, delivery: {
+    deliveryMode: "status_only" as const, deliveryReason: "ai_unavailable" as const,
+    analyzedStories: 0, rawStories: 0, replayStories: 0, emailAttempts: 1 as const,
+    emailOutcome: "unknown" as const, historyOutcome: "not_required" as const, finalizationReached: true,
+    deliveryLedger,
+  } };
+  assert.deepEqual(parseCycleSnapshot(serializeCycleSnapshot(extended)), extended);
+  assert.equal(parseCycleSnapshot(JSON.stringify(snapshot)).delivery, null);
+  for (const malformed of [
+    { ...deliveryLedger, recipient: "private@example.test" },
+    { ...deliveryLedger, payload: "PRIVATE_PROVIDER_BODY" },
+    { ...deliveryLedger, action: "private" },
+    { ...deliveryLedger, knownDispatchCount: 3, uncertainSlotCount: 1 },
+    { ...deliveryLedger, key: "daily-digest/not-a-date" },
+    { ...deliveryLedger, reason: "x".repeat(1100) },
+  ]) assert.throws(() => validateDeliveryLedgerObservation(malformed), /delivery ledger/i);
 });
 
 class Statement {

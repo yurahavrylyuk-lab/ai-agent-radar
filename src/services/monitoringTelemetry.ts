@@ -1,5 +1,5 @@
 import type { ApprovedGeminiModel } from "../config/geminiModels.js";
-import type { BraveDiscoverySourceHealth, DiscoverySourceSuccessCounts, GeminiFailureClass, RssDiscoverySourceHealth, ThreadsCycleMetrics } from "../types/index.js";
+import type { BraveDiscoverySourceHealth, DeliveryLedgerObservation, DiscoverySourceSuccessCounts, GeminiFailureClass, RssDiscoverySourceHealth, ThreadsCycleMetrics } from "../types/index.js";
 import type { GeminiAmbiguityReason, GeminiUsageReservation, GeminiUsageSettlement } from "./geminiUsageTracker.js";
 
 export type AttemptRef = { cycleId: string; ordinal: 1 | 2 | 3 };
@@ -20,6 +20,7 @@ export interface CycleDeliverySnapshot {
   emailOutcome: "accepted" | "failed" | "unknown" | "not_attempted";
   historyOutcome: "not_required" | "recorded" | "unavailable" | "persistence_failed";
   finalizationReached: boolean;
+  deliveryLedger?: DeliveryLedgerObservation;
 }
 export interface GeminiAttemptTiming {
   ordinal: 1 | 2 | 3;
@@ -146,13 +147,32 @@ export function validateCycleStart(value: unknown): CycleStart {
   return value as unknown as CycleStart;
 }
 
+export function validateDeliveryLedgerObservation(value: unknown): DeliveryLedgerObservation {
+  const keys = ["version", "key", "action", "state", "reason", "knownDispatchCount", "uncertainSlotCount", "reconciliation", "replayEvidence"];
+  if (!isObject(value) || !exactKeys(value, keys) || value.version !== 1 ||
+    typeof value.key !== "string" || !/^daily-digest\/\d{4}-\d{2}-\d{2}$/.test(value.key) ||
+    !member(value.action, ["first", "recovery", "already_accepted", "in_progress", "blocked"]) ||
+    !(value.state === null || member(value.state, ["prepared", "attempting", "ambiguous", "accepted", "confirmed_failed"])) ||
+    !member(value.reason, ["prepared", "claimed", "dispatch_admitted", "cancelled_before_dispatch", "provider_accepted", "provider_rejected", "provider_ambiguous", "payload_conflict", "already_accepted", "in_progress", "recovery_required", "ledger_unavailable", "configuration_payload_mismatch", "history_pending", "history_reconciled", "integrity_hold"]) ||
+    !count(value.knownDispatchCount, 3) || !count(value.uncertainSlotCount, 3) ||
+    Number(value.knownDispatchCount) + Number(value.uncertainSlotCount) > 3 ||
+    !member(value.reconciliation, ["not_required", "pending", "complete", "failed"]) ||
+    !member(value.replayEvidence, ["same_key_requested", "unknown"])) {
+    throw new Error("Monitoring delivery ledger observation is invalid.");
+  }
+  if (encoder.encode(JSON.stringify(value)).byteLength > 1024) throw new Error("Monitoring delivery ledger observation exceeds its byte limit.");
+  return value as unknown as DeliveryLedgerObservation;
+}
+
 function validDelivery(value: unknown): value is CycleDeliverySnapshot {
-  if (!isObject(value) || !exactKeys(value, ["deliveryMode", "deliveryReason", "analyzedStories", "rawStories", "replayStories", "emailAttempts", "emailOutcome", "historyOutcome", "finalizationReached"])) return false;
+  const keys = ["deliveryMode", "deliveryReason", "analyzedStories", "rawStories", "replayStories", "emailAttempts", "emailOutcome", "historyOutcome", "finalizationReached"];
+  if (!isObject(value) || !exactKeys(value, [...keys, ...(Object.hasOwn(value, "deliveryLedger") ? ["deliveryLedger"] : [])])) return false;
   return member(value.deliveryMode, ["normal", "degraded", "status_only"]) &&
     member(value.deliveryReason, ["selected", "no_eligible_stories", "ai_unavailable", "ai_no_selections", "discovery_unavailable", "history_unavailable", "preparation_unavailable", "persistence_unavailable"]) &&
     count(value.analyzedStories, 4) && count(value.rawStories, 4) && count(value.replayStories, 4) && count(value.emailAttempts, 1) &&
     member(value.emailOutcome, ["accepted", "failed", "unknown", "not_attempted"]) &&
-    member(value.historyOutcome, ["not_required", "recorded", "unavailable", "persistence_failed"]) && typeof value.finalizationReached === "boolean";
+    member(value.historyOutcome, ["not_required", "recorded", "unavailable", "persistence_failed"]) && typeof value.finalizationReached === "boolean" &&
+    (!Object.hasOwn(value, "deliveryLedger") || (() => { try { validateDeliveryLedgerObservation(value.deliveryLedger); return true; } catch { return false; } })());
 }
 
 function validLatency(value: unknown): value is CycleLatencyV1 {

@@ -224,11 +224,26 @@ export interface PreparedDailyDigest {
 export interface DailyEmailContext { emailAttempted: boolean; finalizationEntered: boolean }
 export type DailyEmailOutcomeValue = "accepted" | "failed" | "unknown" | "not_attempted";
 export type DailyHistoryOutcome = "not_required" | "recorded" | "unavailable" | "persistence_failed";
+export interface DeliveryLedgerObservation {
+  version: 1;
+  key: `daily-digest/${string}`;
+  action: "first" | "recovery" | "already_accepted" | "in_progress" | "blocked";
+  state: "prepared" | "attempting" | "ambiguous" | "accepted" | "confirmed_failed" | null;
+  reason: "prepared" | "claimed" | "dispatch_admitted" | "cancelled_before_dispatch"
+    | "provider_accepted" | "provider_rejected" | "provider_ambiguous" | "payload_conflict"
+    | "already_accepted" | "in_progress" | "recovery_required" | "ledger_unavailable"
+    | "configuration_payload_mismatch" | "history_pending" | "history_reconciled" | "integrity_hold";
+  knownDispatchCount: number;
+  uncertainSlotCount: number;
+  reconciliation: "not_required" | "pending" | "complete" | "failed";
+  replayEvidence: "same_key_requested" | "unknown";
+}
 export interface DailyEmailOutcome {
   emailAttempts: 0 | 1;
   emailOutcome: DailyEmailOutcomeValue;
   historyOutcome: DailyHistoryOutcome;
   finalizationReached: boolean;
+  deliveryLedger?: DeliveryLedgerObservation;
 }
 
 export interface DailyDeliveryTelemetry extends DailyEmailOutcome {
