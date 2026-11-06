@@ -1,5 +1,19 @@
 # AI Agent Radar project state
 
+## 2026-11-06 — Idempotent Email Delivery ready for independent review
+
+**Source-control status only:** Idempotent Email Delivery is implemented and offline-tested on its feature branch, awaiting independent Analyst review. It adds migration `0010_email_delivery_ledger.sql`, a durable scheduled-email ledger, frozen Resend request identity/body recovery, fenced bounded dispatch admission, accepted-history reconciliation, bounded telemetry, and a loopback-only Workerd recovery harness. Verification passed: focused 59/59, full 794/794, build, Worker typecheck, all required Workerd regressions, Wrangler dry-run bundle audit and diff check.
+
+Production remains unchanged. Migration0010 is not applied; the branch is not merged or deployed; no provider or natural monitoring action occurred. A future authorized release must use an untouched logical UTC day outside old in-flight invocations, preserve the same Resend account/recipient, fail closed if the ledger is unavailable, never clear stale ambiguity, and retain only ledger-aware rollback versions after activation. Next implementation work remains Brave Request Timeout + Bounded Response, but has not started.
+
+## 2026-10-27 — Threads activation deferred; engineering roadmap unblocked
+
+**THREADS = IMPLEMENTED / OFFLINE-TESTED / PRODUCTION ACTIVATION DEFERRED / EXTERNALLY BLOCKED BY META BUSINESS REQUIREMENTS.** The merged official Threads implementation and its offline/review evidence remain valid and do not require reimplementation. The tester account demonstrated `threads_basic`, `threads_keyword_search`, Meta OAuth, and retrieval of the public tester post; the reviewer website and App Review screencast were completed. None of that establishes approval for public cross-user production search.
+
+The human has paused Meta Business Portfolio/domain/website/verification and public-search App Review work. Production Threads gates remain disabled; no production token or activation is recorded. Threads activation plus Brave + RSS + Threads production proof move to a parallel deferred/external-gate track. Brave + RSS remain the usable discovery sources, and the active roadmap continues with Idempotent Email Delivery. That design remains **DESIGN READY / AWAITING HUMAN APPROVAL**; no implementation plan, SQL, or runtime implementation is claimed.
+
+Resume Threads from activation/release—not implementation—only after the prerequisite checklist in `backlog.md` and `plan.md` is satisfied. In particular, `THREADS_PUBLIC_SEARCH_APPROVED=true` requires actual Meta approval and must not be inferred from tester-mode success or App Review submission. No runtime, production, provider, D1, credential, or Cloudflare action accompanies this documentation decision.
+
 ## 2026-10-26 — Threads discovery merged to main; production unchanged
 
 **THREADS DISCOVERY = MERGED TO MAIN / OFFLINE-TESTED / INDEPENDENTLY REVIEWED / NOT CONFIGURED / NOT DEPLOYED.** PR #37 merged reviewed head `e8ee22d6ac389b48eb19882653ad42e49122dd30` through normal merge commit `032a24f7eb5cd10469250d9e5e37646619ed3736` at `2026-10-26T08:05:04Z`. CI run `40288463290` (`validate`) succeeded. Final evidence: 763/763 tests plus passing build, Worker typecheck, Workerd, Wrangler dry-run, and bundle audit. Independent review returned `FINAL_APPROVE`; the remote implementation branch was deleted, leaving `origin/main` and `origin/self-improvement`.

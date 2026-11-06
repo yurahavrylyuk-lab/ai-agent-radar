@@ -1,5 +1,19 @@
 # Self-improvement changelog
 
+## 2026-11-06 — Implement idempotent scheduled email delivery
+
+- Added a durable one-row-per-UTC-day email ledger with exact frozen payload identity, three fenced possible-dispatch slots, immutable first-admission +23-hour recovery cutoff, monotonic provider acceptance, and independent notification-history repair.
+- Added typed bounded Resend outcomes, one-request-per-invocation scheduled finalization, strict recovery telemetry and real Workerd/D1 concurrency, restart, cutoff and late-success evidence.
+- Added migration `0010_email_delivery_ledger.sql`; it is created and tested locally only, not applied. Full offline suite passed 794/794 with all required build/typecheck/Workerd/dry-run gates.
+- Status is awaiting independent review. No merge, deployment, production D1 change, migration application or provider call occurred.
+
+## 2026-10-27 — Defer Threads activation and continue roadmap
+
+- Marked Threads **IMPLEMENTED / OFFLINE-TESTED / PRODUCTION ACTIVATION DEFERRED / EXTERNALLY BLOCKED BY META BUSINESS REQUIREMENTS** without removing or rewriting the implementation.
+- Recorded the Meta business/App Review/token prerequisites and the later Cloudflare/release/natural-validation steps. Tester-mode success cannot set `THREADS_PUBLIC_SEARCH_APPROVED=true`.
+- Moved Threads activation and combined-source proof to a parallel deferred track. Brave + RSS remain usable; Idempotent Email Delivery is now the next active buildable item and remains design-ready/awaiting human approval.
+- Documentation only; no runtime, configuration, credential, provider, D1, migration, deployment, or production change.
+
 ## 2026-10-26 — Merge Threads discovery source
 
 - Merged PR #37 reviewed head `e8ee22d6ac389b48eb19882653ad42e49122dd30` into `main` as normal merge commit `032a24f7eb5cd10469250d9e5e37646619ed3736`; CI `validate` and independent review passed.
