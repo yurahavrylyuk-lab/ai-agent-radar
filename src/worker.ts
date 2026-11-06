@@ -4,6 +4,8 @@ import { D1GeminiUsageStore } from "./services/d1GeminiUsageStore.js";
 import { D1NotificationHistory } from "./services/d1NotificationHistory.js";
 import { D1MonitoringTelemetry } from "./services/d1MonitoringTelemetry.js";
 import { D1OpenAIFallbackUsageStore } from "./services/d1OpenAIFallbackUsageStore.js";
+import { D1EmailDeliveryLedger } from "./services/d1EmailDeliveryLedger.js";
+import { deliveryIdentity } from "./services/emailDeliveryLedger.js";
 import { isTotalDiscoveryOutage, validateAnalyzerFailoverObservation, validateThreadsCycleMetrics, type AnalyzerFailoverObservation, type CycleLatencyV1, type CycleSnapshotV1, type GeminiAttemptTiming, type MonitoringTelemetry } from "./services/monitoringTelemetry.js";
 import { inspectGeminiAvailability } from "./services/geminiUsageGuard.js";
 import { analyzeBatch, BatchAnalysisError } from "./services/analysisAgent.js";
@@ -11,10 +13,10 @@ import { analyzeBatchWithFailover } from "./services/batchAnalyzerFailover.js";
 import { parseOpenAIFallbackLimits } from "./config/openaiFallback.js";
 import { createMonitoringRuntimeConfiguration } from "./services/radarRuntimeConfiguration.js";
 import { createGeminiBatchCycleContext, generateBatchWithGemini } from "./tools/llm/gemini.js";
-import { sendWithResend } from "./tools/email/resend.js";
+import { RESEND_ONBOARDING_SENDER, sendFrozenWithResend, sendWithResend } from "./tools/email/resend.js";
 import { searchWebPage } from "./tools/webSearch.js";
 import { createMonitoringCycleSnapshot, finalizeStatusOnlyMonitoringCycle, runBatchMonitoringCycle, type BatchMonitoringDependencies } from "./services/monitor.js";
-import { createDailyEmailContext } from "./services/notificationOrchestrator.js";
+import { createDailyEmailContext, type DailyDeliveryDependencies } from "./services/notificationOrchestrator.js";
 import { collectRss } from "./services/rssDiscovery.js";
 import { RSS_FEEDS } from "./config/rssSources.js";
 import { collectThreads } from "./services/threadsDiscovery.js";
@@ -402,6 +404,7 @@ export function createWorkerPersistence(env: RadarWorkerEnv) {
     braveUsageStore: new D1BraveUsageStore(env.DB),
     geminiUsageStore: new D1GeminiUsageStore(env.DB),
     openaiFallbackUsageStore: new D1OpenAIFallbackUsageStore(env.DB),
+    emailDeliveryLedger: new D1EmailDeliveryLedger(env.DB),
   };
 }
 
@@ -414,6 +417,7 @@ export interface WorkerMonitoringDependencyOverrides {
   readonly onAttemptTiming?: (timing: GeminiAttemptTiming) => Promise<void>;
   readonly cycleStartedAtMonotonic?: number;
   readonly monotonicNow?: () => number;
+  readonly dailyDelivery?: DailyDeliveryDependencies;
 }
 
 export const workerdRssFetch: typeof fetch = (input, init) => globalThis.fetch(input, init);
@@ -497,6 +501,7 @@ export function createWorkerMonitoringDependencies(
         environment: configuration.environment,
       }),
     },
+    ...(overrides.dailyDelivery === undefined ? {} : { dailyDelivery: overrides.dailyDelivery }),
   };
 }
 
@@ -511,6 +516,16 @@ export async function runScheduledMonitoring(
     const telemetry = dependencies.telemetry ?? new D1MonitoringTelemetry(env.DB);
     const scheduledAt = dependencies.scheduledAt ?? new Date();
     const startedAt = dependencies.startedAt ?? new Date();
+    const identity = deliveryIdentity(scheduledAt);
+    const ledger = new D1EmailDeliveryLedger(env.DB);
+    let emailCheckpoint: () => Promise<void> = async () => {};
+    const dailyDelivery: DailyDeliveryDependencies = {
+      context, identity, ledger,
+      recipient: env.NOTIFICATION_EMAIL,
+      sender: RESEND_ONBOARDING_SENDER,
+      sendFrozen: (body, key) => sendFrozenWithResend(body, key, { environment: env as unknown as Record<string, string | undefined> }),
+      beforeEmailAttempt: () => emailCheckpoint(),
+    };
     const cycleId = dependencies.cycleId ?? crypto.randomUUID();
     let cycleCreated = false;
     let latestSnapshot: CycleSnapshotV1 | undefined;
@@ -521,10 +536,10 @@ export async function runScheduledMonitoring(
     const beforeEmailAttempt = async () => {
       if (cycleCreated && latestSnapshot) await telemetry.checkpoint(cycleId, "email_attempting", latestSnapshot);
     };
+    emailCheckpoint = beforeEmailAttempt;
     try {
       if (!cycleCreated) return await finalizeStatusOnlyMonitoringCycle(
-        context, content => sendWithResend(content, { environment: env as unknown as Record<string, string | undefined> }),
-        startedAt.toISOString(), "preparation_unavailable",
+        dailyDelivery, "preparation_unavailable",
       );
       const onAttemptTiming = async (timing: GeminiAttemptTiming) => {
         if (!latestSnapshot?.latency) throw new Error("Gemini timing cannot be checkpointed before source telemetry.");
@@ -542,22 +557,19 @@ export async function runScheduledMonitoring(
         attemptTelemetry: { repository: telemetry, cycleId },
         onAttemptTiming,
         cycleStartedAtMonotonic,
+        dailyDelivery,
       });
       cycleDependencies.onTelemetryCheckpoint = async (phase, snapshot) => {
         latestSnapshot = snapshot;
         await telemetry.checkpoint(cycleId, phase, snapshot);
       };
-      cycleDependencies.notification.beforeEmailAttempt = beforeEmailAttempt;
       const result = await runBatchMonitoringCycle({ ...cycleDependencies, dailyEmailContext: context });
       try { await telemetry.completeCycle(cycleId, createMonitoringCycleSnapshot(result)); } catch { /* never retry delivery */ }
       return result;
     } catch {
       const result = await finalizeStatusOnlyMonitoringCycle(
-        context,
-        content => sendWithResend(content, { environment: env as unknown as Record<string, string | undefined> }),
-        startedAt.toISOString(),
+        dailyDelivery,
         "history_unavailable",
-        beforeEmailAttempt,
       );
       if (cycleCreated) try { await telemetry.completeCycle(cycleId, createMonitoringCycleSnapshot(result)); } catch { /* never retry delivery */ }
       return result;

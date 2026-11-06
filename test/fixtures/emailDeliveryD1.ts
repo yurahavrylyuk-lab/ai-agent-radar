@@ -73,3 +73,15 @@ export async function createEmailDeliveryDatabase(): Promise<{ sqlite: Database.
   sqlite.exec(await readFile(new URL("../../migrations/0010_email_delivery_ledger.sql", import.meta.url), "utf8"));
   return { sqlite, d1: new SqliteD1(sqlite) };
 }
+
+export async function createProductionEmailDeliveryDatabase(): Promise<{ sqlite: Database.Database; d1: SqliteD1 }> {
+  const sqlite = new Database(":memory:");
+  const apply = async (name: string) => sqlite.exec(await readFile(new URL(`../../migrations/${name}`, import.meta.url), "utf8"));
+  for (const name of ["0001_initial.sql", "0002_controlled_execution_lock.sql", "0003_gemini_usage_model.sql",
+    "0005_gemini_ambiguity_accounting.sql", "0006_gemini_timeout_admission.sql"]) await apply(name);
+  sqlite.prepare("INSERT INTO gemini_usage (id,timestamp,provider,operation,request_count,input_tokens,output_tokens,total_tokens,model,accounting_status,ambiguity_reason,accounting_through,settled_at,retired_at) VALUES (22,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+    .run("2026-10-12T08:00:10.882Z", "gemini", "analysis", 1, 0, 0, 0, "gemini-3.8-flash", "transport_ambiguous", "abandoned_reservation", "2026-10-12T08:00:10.947Z", null, null);
+  for (const name of ["0007_row22_exact_recovery.sql", "0008_monitoring_cycle_observability.sql",
+    "0009_openai_fallback_usage.sql", "0010_email_delivery_ledger.sql"]) await apply(name);
+  return { sqlite, d1: new SqliteD1(sqlite) };
+}
