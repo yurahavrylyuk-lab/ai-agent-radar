@@ -1,5 +1,11 @@
 # AI Agent Radar — Backlog
 
+## 2026-11-06 — Idempotent Email Delivery locally merged; D1 release safeguard pending review
+
+**IDEMPOTENT EMAIL DELIVERY = INDEPENDENTLY ANALYST-APPROVED / LOCALLY MERGED / NOT PUBLISHED / NOT DEPLOYED.** Local `main` merge commit `06dd71b82fc72fe9b2cc717c725fd79840149ee4` contains the approved implementation; its merge verification passed 800/800 tests. GitHub publication is not authorized, migration `0010_email_delivery_ledger.sql` is not applied, and production is unchanged. The next roadmap item remains **BRAVE REQUEST TIMEOUT + BOUNDED RESPONSE**.
+
+**D1 RELEASE SAFEGUARD = IMPLEMENTED LOCALLY / AWAITING INDEPENDENT REVIEW.** The production D1 binding now explicitly allowlists migrations `0001`, `0002`, `0003`, and `0005` through `0010`, deliberately excluding `0004_x_discovery.sql`. Future migrations are excluded by default and require an explicit source-controlled allowlist extension plus review. Local Wrangler evidence proves the allowlist selects and applies `0010` without selecting `0004` or a synthetic future migration; no remote migration or deployment occurred.
+
 ## 2026-11-06 — Idempotent Email Delivery implementation complete offline
 
 **IDEMPOTENT EMAIL DELIVERY = IMPLEMENTED / OFFLINE-TESTED / AWAITING INDEPENDENT ANALYST REVIEW.** The feature branch now contains the approved daily D1 ledger, exact frozen Resend request bytes and `daily-digest/YYYY-MM-DD` key, fenced three-slot recovery bounded by the first dispatch admission plus 23 hours, accepted-email history repair, bounded telemetry, and real Workerd crash/concurrency/restart proof. Offline evidence: focused aggregate 59/59, full suite 794/794, build, Worker typecheck, five Workerd harnesses, Wrangler dry-run bundle audit, and diff check all passed.

@@ -1,5 +1,11 @@
 # AI Agent Radar project state
 
+## 2026-11-06 — Local email-delivery merge and D1 release safeguard
+
+**Source-control authority:** Idempotent Email Delivery is independently Analyst-approved and locally merged into `main` at `06dd71b82fc72fe9b2cc717c725fd79840149ee4`; local merge verification passed 800/800 tests. GitHub publication is not authorized. Migration `0010_email_delivery_ledger.sql` remains unapplied, production is unchanged, and no provider or monitoring action accompanied the merge.
+
+**Release safeguard:** the D1 binding now has an explicit migration allowlist for `0001`, `0002`, `0003`, and `0005` through `0010`. It excludes intentionally unapplied `0004_x_discovery.sql` and excludes future migrations until their names are explicitly reviewed and added. Isolated local Wrangler proof selected and applied the approved sequence through `0010`, preserved seeded data, omitted both `0004` and a synthetic future migration, and reported no migrations on repeat. This safeguard is local and awaiting independent Analyst review; no remote D1 migration or deployment occurred. The next roadmap item remains Brave Request Timeout + Bounded Response.
+
 ## 2026-11-06 — Final payload-conflict concurrency correction ready for re-review
 
 **Source-control status only:** commit `37293147ef38b8d4cc77d205881d7e04c02341e2` on `codex/idempotent-email-delivery-implementation` closes the two remaining payload-conflict races. A genuine provider conflict tied to the exact durable pending slot and frozen payload can atomically establish the hold after claim reclamation, while unadmitted tokens fail closed. Once established, the same conditional storage boundary prevents a stale accepted outcome from clearing the hold; ordinary non-conflict late acceptance and ambiguity recovery remain unchanged.

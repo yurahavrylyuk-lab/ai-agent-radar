@@ -1,5 +1,11 @@
 # Self-improvement changelog
 
+## 2026-11-06 — Add explicit D1 migration release allowlist
+
+- Added a source-controlled Wrangler migration pattern that permits the existing production sequence through `0010_email_delivery_ledger.sql` while deliberately excluding `0004_x_discovery.sql` and all unreviewed future migrations.
+- Added focused configuration coverage and isolated local Wrangler selection/application proof: `0010` applied, seeded data remained intact, `0004` and synthetic `0011` did not apply, and a repeated apply was a no-op.
+- Recorded Idempotent Email Delivery as independently approved and locally merged at `06dd71b82fc72fe9b2cc717c725fd79840149ee4`, but not published, migrated, or deployed. Future migrations require an explicit allowlist extension and review.
+
 ## 2026-11-06 — Fence stale payload-conflict races
 
 - Added an exact D1 conditional transition that lets a provider-confirmed conflict from a durable pending slot establish the no-send hold even after another claimant has reclaimed the lease.
