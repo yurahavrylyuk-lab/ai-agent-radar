@@ -1,6 +1,6 @@
 import { D1EmailDeliveryLedger } from "../../src/services/d1EmailDeliveryLedger.js";
 import { deliveryIdentity, freezeDelivery, type DeliveryKey } from "../../src/services/emailDeliveryLedger.js";
-import { createDailyEmailContext, recoverDailyDelivery, type DailyDeliveryDependencies } from "../../src/services/notificationOrchestrator.js";
+import { createDailyEmailContext, finalizeDailyDigest, recoverDailyDelivery, type DailyDeliveryDependencies } from "../../src/services/notificationOrchestrator.js";
 import { sendFrozenWithResend } from "../../src/tools/email/resend.js";
 import type { PreparedDailyDigest } from "../../src/types/index.js";
 // @ts-expect-error local Workerd harness imports reviewed migrations as text.
@@ -26,16 +26,18 @@ function identity(date: string) { return deliveryIdentity(new Date(`${date}T08:0
 function digest(date: string): PreparedDailyDigest {
   return { mode: "status_only", reason: "no_eligible_stories", cycleDate: `${date}T08:00:00.000Z`, items: [] };
 }
+function aliasedDigest(date: string): PreparedDailyDigest {
+  const url = "https://example.test/story#source";
+  return { mode: "degraded", reason: "ai_unavailable", cycleDate: `${date}T08:00:00.000Z`, items: [{
+    kind: "raw", candidate: { candidateId: "c1", source: { title: "Story", url }, normalizedUrl: url,
+      aliasKey: "https://example.test/story", aliases: [url], provenance: [{ kind: "brave", queryOrdinal: 1, resultOrdinal: 1 }] },
+  }] };
+}
 async function proposal(date: string, subject: string) {
   return freezeDelivery(digest(date), identity(date), { from: sender, subject, text: subject, html: `<p>${subject}</p>` }, recipient);
 }
 async function aliasedProposal(date: string, subject: string) {
-  const url = "https://example.test/story#source";
-  const value: PreparedDailyDigest = { mode: "degraded", reason: "ai_unavailable", cycleDate: `${date}T08:00:00.000Z`, items: [{
-    kind: "raw", candidate: { candidateId: "c1", source: { title: "Story", url }, normalizedUrl: url,
-      aliasKey: "https://example.test/story", aliases: [url], provenance: [{ kind: "brave", queryOrdinal: 1, resultOrdinal: 1 }] },
-  }] };
-  return freezeDelivery(value, identity(date), { from: sender, subject, text: subject, html: `<p>${subject}</p>` }, recipient);
+  return freezeDelivery(aliasedDigest(date), identity(date), { from: sender, subject, text: subject, html: `<p>${subject}</p>` }, recipient);
 }
 function key(date: string): DeliveryKey { return `daily-digest/${date}`; }
 function dependencies(db: D1Database, date: string, target: string): DailyDeliveryDependencies {
@@ -54,7 +56,65 @@ function summary(record: Awaited<ReturnType<D1EmailDeliveryLedger["read"]>>) {
   return record && { state: record.state, hash: record.payloadSha256, slots: record.slots.length,
     outcomes: record.slots.map(slot => slot.outcome), first: record.firstProviderAttemptAt,
     retryBefore: record.retryBefore, providerMessageId: record.providerMessageId,
-    acceptedAt: record.acceptedAt, reconciled: record.reconciledAt !== null, claim: record.claim?.token ?? null };
+    acceptedAt: record.acceptedAt, reconciled: record.reconciledAt !== null, claim: record.claim?.token ?? null,
+    lastReason: record.lastReason };
+}
+
+type FaultOperation = "reservation" | "claim" | "admission" | "ambiguous" | "accepted" | "reconciliation";
+type FaultMode = "before" | "after" | "before_unreadable" | "after_unreadable";
+
+class FaultStatement {
+  constructor(readonly owner: FaultDatabase, readonly raw: D1PreparedStatement, readonly sql: string) {}
+  bind(...values: unknown[]): FaultStatement { return new FaultStatement(this.owner, this.raw.bind(...values), this.sql); }
+  async first<T>(): Promise<T | null> { this.owner.failRead(this.sql); return this.raw.first<T>(); }
+  async all<T>(): Promise<D1Result<T>> { this.owner.failRead(this.sql); return this.raw.all<T>(); }
+  async run(): Promise<D1Result> {
+    this.owner.failMutation(this.sql, "before");
+    const result = await this.raw.run();
+    this.owner.failMutation(this.sql, "after");
+    return result;
+  }
+}
+
+class FaultDatabase {
+  private mutationFailures: number;
+  private readFailures: number;
+  private triggered = false;
+  constructor(readonly raw: D1Database, readonly operation: FaultOperation, readonly mode: FaultMode) {
+    this.mutationFailures = mode.startsWith("before") ? 2 : 1;
+    this.readFailures = mode.endsWith("unreadable") ? 12 : 0;
+  }
+  private matches(sql: string): boolean {
+    if (this.operation === "reservation") return /^INSERT INTO email_deliveries/.test(sql);
+    if (this.operation === "claim") return /^UPDATE email_deliveries SET\s+state='attempting'/.test(sql);
+    if (this.operation === "admission") return /^UPDATE email_deliveries SET\s+dispatch_evidence_json=json_insert/.test(sql);
+    if (this.operation === "ambiguous" || this.operation === "accepted") return /^UPDATE email_deliveries SET\s+state=\?1,dispatch_evidence_json/.test(sql);
+    return false;
+  }
+  prepare(sql: string): FaultStatement { return new FaultStatement(this, this.raw.prepare(sql), sql); }
+  withSession(_constraint: "first-primary"): FaultDatabase { return this; }
+  failMutation(sql: string, phase: "before" | "after"): void {
+    if (this.operation === "reconciliation" || !this.matches(sql) || !this.mode.startsWith(phase) || this.mutationFailures <= 0) return;
+    this.mutationFailures -= 1; this.triggered = true;
+    throw new Error(`simulated ${this.operation} ${phase} uncertainty`);
+  }
+  failRead(sql: string): void {
+    if (!this.triggered || this.readFailures <= 0 || !/FROM email_deliveries/.test(sql)) return;
+    this.readFailures -= 1;
+    throw new Error(`simulated ${this.operation} authoritative read outage`);
+  }
+  async batch(statements: FaultStatement[]): Promise<D1Result[]> {
+    if (this.operation === "reconciliation" && this.mode.startsWith("before") && this.mutationFailures > 0) {
+      this.mutationFailures -= 1; this.triggered = true;
+      throw new Error("simulated reconciliation before uncertainty");
+    }
+    const result = await this.raw.batch(statements.map(statement => statement.raw));
+    if (this.operation === "reconciliation" && this.mode.startsWith("after") && this.mutationFailures > 0) {
+      this.mutationFailures -= 1; this.triggered = true;
+      throw new Error("simulated reconciliation after uncertainty");
+    }
+    return result;
+  }
 }
 
 async function admit(ledger: D1EmailDeliveryLedger, date: string, token: string) {
@@ -63,6 +123,47 @@ async function admit(ledger: D1EmailDeliveryLedger, date: string, token: string)
   const admitted = await ledger.admitDispatch(claimed.record.claim);
   if (admitted.kind !== "committed") throw new Error("admission failed");
   return claimed.record.claim;
+}
+
+async function runFaultCase(db: D1Database, date: string, operation: FaultOperation, mode: FaultMode) {
+  const base = new D1EmailDeliveryLedger(db);
+  const frozen = operation === "reconciliation" ? await aliasedProposal(date, `Fault ${date}`) : await proposal(date, `Fault ${date}`);
+  let ref: Awaited<ReturnType<typeof admit>> | null = null;
+  if (operation !== "reservation") await base.reserve(frozen);
+  if (["admission", "ambiguous", "accepted", "reconciliation"].includes(operation)) {
+    const claimed = await base.claim(key(date), `fault-${operation}`);
+    if (claimed.kind !== "committed" || !claimed.record.claim) throw new Error("fault setup claim failed");
+    ref = claimed.record.claim;
+  }
+  if (["ambiguous", "accepted", "reconciliation"].includes(operation)) {
+    const admitted = await base.admitDispatch(ref!);
+    if (admitted.kind !== "committed") throw new Error("fault setup admission failed");
+  }
+  if (operation === "reconciliation") {
+    const accepted = await base.recordOutcome(ref!, frozen.payloadSha256, { kind: "accepted", id: `email-${date}` });
+    if (accepted.kind !== "committed") throw new Error("fault setup acceptance failed");
+  }
+
+  const faulty = new D1EmailDeliveryLedger(new FaultDatabase(db, operation, mode) as unknown as D1Database);
+  let resultKind = "threw";
+  try {
+    const result = operation === "reservation" ? await faulty.reserve(frozen)
+      : operation === "claim" ? await faulty.claim(key(date), "fault-claim")
+        : operation === "admission" ? await faulty.admitDispatch(ref!)
+          : operation === "ambiguous" ? await faulty.recordOutcome(ref!, frozen.payloadSha256, { kind: "ambiguous", reason: "transport" })
+            : operation === "accepted" ? await faulty.recordOutcome(ref!, frozen.payloadSha256, { kind: "accepted", id: `email-${date}` })
+              : await faulty.reconcileAccepted(key(date));
+    resultKind = result.kind;
+  } catch { resultKind = "threw"; }
+
+  const record = await base.read(key(date));
+  const achieved = operation === "reservation" ? record !== null
+    : operation === "claim" ? record?.claim?.token === "fault-claim"
+      : operation === "admission" ? record?.slots.some(slot => slot.token === ref?.token) === true
+        : operation === "ambiguous" ? record?.slots.some(slot => slot.token === ref?.token && slot.outcome === "ambiguous") === true
+          : operation === "accepted" ? record?.state === "accepted" && record.providerMessageId === `email-${date}`
+            : record?.reconciledAt !== null;
+  return { operation, mode, resultKind, achieved };
 }
 
 export default {
@@ -76,6 +177,11 @@ export default {
     if (url.pathname === "/notifications") {
       const rows = await env.DB.prepare("SELECT normalized_url,provider_message_id FROM notifications ORDER BY normalized_url").all();
       return Response.json(rows.results);
+    }
+    if (url.pathname === "/expire-lease") {
+      await env.DB.prepare("UPDATE email_deliveries SET lease_until='2020-01-01T00:00:00.000Z' WHERE delivery_key=?1 AND state='attempting'")
+        .bind(key(date)).run();
+      return Response.json(summary(await ledger.read(key(date))));
     }
     if (url.pathname === "/race") {
       const [left, right] = await Promise.all([ledger.reserve(await proposal(date, "Winner A")), ledger.reserve(await proposal(date, "Winner B"))]);
@@ -97,6 +203,32 @@ export default {
     if (url.pathname === "/recover") {
       const outcome = await recoverDailyDelivery(dependencies(env.DB, date, target));
       return Response.json({ outcome, record: summary(await ledger.read(key(date))) });
+    }
+    if (url.pathname === "/deliver") {
+      const outcome = await finalizeDailyDigest(digest(date), dependencies(env.DB, date, target));
+      return Response.json({ outcome, record: summary(await ledger.read(key(date))) });
+    }
+    if (url.pathname === "/deliver-fault") {
+      const faultDb = new FaultDatabase(env.DB, "accepted", "after");
+      const outcome = await finalizeDailyDigest(digest(date), dependencies(faultDb as unknown as D1Database, date, target));
+      return Response.json({ outcome, record: summary(await ledger.read(key(date))) });
+    }
+    if (url.pathname === "/deliver-aliased-fault") {
+      const faultDb = new FaultDatabase(env.DB, "reconciliation", "before");
+      const outcome = await finalizeDailyDigest(aliasedDigest(date), dependencies(faultDb as unknown as D1Database, date, target));
+      return Response.json({ outcome, record: summary(await ledger.read(key(date))) });
+    }
+    if (url.pathname === "/uncertainty-suite") {
+      const operations: FaultOperation[] = ["reservation", "claim", "admission", "ambiguous", "accepted", "reconciliation"];
+      const modes: FaultMode[] = ["before", "after", "before_unreadable", "after_unreadable"];
+      const cases = [];
+      let ordinal = 0;
+      for (const operation of operations) for (const mode of modes) {
+        ordinal += 1;
+        const scenarioDate = `2026-12-${String(ordinal).padStart(2, "0")}`;
+        cases.push(await runFaultCase(env.DB, scenarioDate, operation, mode));
+      }
+      return Response.json({ cases, providerRequests: 0 });
     }
     if (url.pathname === "/three-slots") {
       const frozen = await proposal(date, "Three slots"); await ledger.reserve(frozen);

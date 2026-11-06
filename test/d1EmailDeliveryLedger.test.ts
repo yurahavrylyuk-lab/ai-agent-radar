@@ -191,6 +191,50 @@ test("only a sole authoritative rejection can become confirmed_failed", async ()
   } finally { sqlite.close(); }
 });
 
+test("payload conflict is a durable integrity hold across expiry and concurrent claims", async () => {
+  const { sqlite, d1 } = await createEmailDeliveryDatabase();
+  try {
+    const ledger = new D1EmailDeliveryLedger(d1 as unknown as D1Database);
+    const ref = await admitted(ledger, "conflicted-attempt");
+    const hash = (await ledger.read(ref.key))!.payloadSha256;
+    const conflict = await ledger.recordOutcome(ref, hash, { kind: "payload_conflict" });
+    assert.equal(conflict.kind, "committed");
+    const held = await ledger.read(ref.key);
+    assert.equal(held?.state, "ambiguous");
+    assert.equal(held?.lastReason, "payload_conflict");
+    assert.equal(held?.slots.length, 1);
+
+    const claims = await Promise.all([
+      ledger.claim(ref.key, "restart-owner"),
+      ledger.claim(ref.key, "concurrent-owner"),
+    ]);
+    assert.deepEqual(claims.map(result => result.kind), ["blocked", "blocked"]);
+    const after = await ledger.read(ref.key);
+    assert.equal(after?.state, "ambiguous");
+    assert.equal(after?.lastReason, "payload_conflict");
+    assert.equal(after?.slots.length, 1);
+    assert.equal(after?.claim, null);
+    assert.equal((await ledger.admitDispatch(ref)).kind, "blocked");
+    assert.equal((await ledger.read(ref.key))?.slots.length, 1);
+  } finally { sqlite.close(); }
+});
+
+test("ordinary ambiguous outcome remains reclaimable after lease expiry", async () => {
+  const { sqlite, d1 } = await createEmailDeliveryDatabase();
+  try {
+    const ledger = new D1EmailDeliveryLedger(d1 as unknown as D1Database);
+    const ref = await admitted(ledger, "ambiguous-attempt");
+    const hash = (await ledger.read(ref.key))!.payloadSha256;
+    await ledger.recordOutcome(ref, hash, { kind: "ambiguous", reason: "transport" });
+    const reclaimed = await ledger.claim(ref.key, "recovery-owner");
+    assert.equal(reclaimed.kind, "committed");
+    if (reclaimed.kind === "committed") {
+      assert.equal(reclaimed.record.lastReason, "claimed");
+      assert.equal(reclaimed.record.slots.length, 1);
+    }
+  } finally { sqlite.close(); }
+});
+
 test("accepted delivery repairs frozen aliases once without changing existing notification evidence", async () => {
   const { sqlite, d1 } = await createEmailDeliveryDatabase();
   try {

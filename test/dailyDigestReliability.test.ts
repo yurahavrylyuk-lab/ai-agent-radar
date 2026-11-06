@@ -195,6 +195,38 @@ test("durable daily finalizer retains ambiguous transport and never sends twice 
   } finally { sqlite.close(); }
 });
 
+test("durable payload conflict blocks recovery without another Resend transport call", async () => {
+  const { sqlite, d1 } = await createEmailDeliveryDatabase();
+  try {
+    const ledger = new D1EmailDeliveryLedger(d1 as unknown as D1Database);
+    const identity = deliveryIdentity(new Date("2026-11-04T08:00:00.000Z"));
+    const daily: PreparedDailyDigest = { mode: "status_only", reason: "no_eligible_stories", cycleDate: identity.scheduledAt, items: [] };
+    let sends = 0;
+    const first = await finalizeDailyDigest(daily, {
+      context: createDailyEmailContext(), identity, ledger,
+      recipient: "owner@example.test", sender: "AI Radar <radar@example.test>",
+      sendFrozen: async () => { sends += 1; return { kind: "payload_conflict" as const }; },
+    });
+    assert.equal(first.emailOutcome, "unknown");
+    assert.equal(sends, 1);
+    assert.equal((await ledger.read(identity.key))?.lastReason, "payload_conflict");
+
+    const recovered = await finalizeDailyDigest(daily, {
+      context: createDailyEmailContext(), identity,
+      ledger: new D1EmailDeliveryLedger(d1 as unknown as D1Database),
+      recipient: "owner@example.test", sender: "AI Radar <radar@example.test>",
+      sendFrozen: async () => { sends += 1; return { kind: "accepted" as const, id: "must-not-send" }; },
+    });
+    assert.equal(recovered.emailAttempts, 0);
+    assert.equal(recovered.emailOutcome, "unknown");
+    assert.equal(sends, 1);
+    const held = await ledger.read(identity.key);
+    assert.equal(held?.state, "ambiguous");
+    assert.equal(held?.lastReason, "payload_conflict");
+    assert.equal(held?.slots.length, 1);
+  } finally { sqlite.close(); }
+});
+
 test("failed daily transport is not retried and status delivery writes no story history", async () => {
   const context = createDailyEmailContext();
   let sends = 0;

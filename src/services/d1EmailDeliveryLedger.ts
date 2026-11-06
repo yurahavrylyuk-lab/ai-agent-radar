@@ -113,6 +113,7 @@ export class D1EmailDeliveryLedger implements DeliveryLedger {
       lease_until=strftime('%Y-%m-%dT%H:%M:%fZ','now','+2 minutes'),
       updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),last_reason='claimed'
       WHERE delivery_key=?2 AND state IN ('prepared','ambiguous','attempting')
+        AND last_reason NOT IN ('payload_conflict','integrity_hold')
         AND (claim_token IS NULL OR lease_until <= strftime('%Y-%m-%dT%H:%M:%fZ','now'))`).bind(token, key).run();
   }
 
@@ -149,6 +150,7 @@ export class D1EmailDeliveryLedger implements DeliveryLedger {
       retry_before=coalesce(retry_before,strftime('%Y-%m-%dT%H:%M:%fZ','now','+23 hours')),
       updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),last_reason='dispatch_admitted'
       WHERE delivery_key=?2 AND claim_token=?1 AND claim_generation=?3 AND state='attempting'
+        AND last_reason NOT IN ('payload_conflict','integrity_hold')
         AND lease_until>strftime('%Y-%m-%dT%H:%M:%fZ','now')
         AND json_array_length(dispatch_evidence_json)<3
         AND (retry_before IS NULL OR retry_before>strftime('%Y-%m-%dT%H:%M:%fZ','now'))
@@ -159,6 +161,9 @@ export class D1EmailDeliveryLedger implements DeliveryLedger {
   async admitDispatch(ref: ClaimRef): Promise<MutationResult> {
     let record = await this.read(ref.key);
     if (!record) return { kind: "blocked", reason: "integrity_hold" };
+    if (record.lastReason === "payload_conflict" || record.lastReason === "integrity_hold") {
+      return { kind: "blocked", reason: "integrity_hold" };
+    }
     const existing = this.slot(record, ref.token);
     if (existing) return { kind: this.owns(record, ref) ? "committed" : "superseded", record };
     if (!this.owns(record, ref)) return { kind: "blocked", reason: record.claim ? "in_progress" : "integrity_hold" };
