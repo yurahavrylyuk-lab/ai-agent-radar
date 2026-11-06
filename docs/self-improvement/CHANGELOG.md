@@ -1,5 +1,12 @@
 # Self-improvement changelog
 
+## 2026-11-06 — Correct idempotent email delivery review findings
+
+- Made `payload_conflict` a durable no-send integrity hold at the D1 claim and dispatch-admission boundaries; restart, lease expiry and concurrent/stale claimants cannot erase it or consume another slot.
+- Added focused storage/finalizer regressions and extended the real Workerd harness for provider-accepted crash recovery, accepted-write and notification-repair uncertainty, provider key conflict/expiry, and 24 critical D1 adapter uncertainty cases.
+- Verification passed: focused 130/130, full 797/797, build, Worker typecheck, all required Workerd harnesses, Wrangler dry-run bundle audit and diff checks. Runtime/test correction commit: `bd80a8d6b0123b2938ddec9956d6a849abb0cbf1`.
+- Offline correction only. Migration `0010` remains unapplied; no push, merge, deployment, provider call, monitoring run or production D1 mutation occurred.
+
 ## 2026-11-06 — Implement idempotent scheduled email delivery
 
 - Added a durable one-row-per-UTC-day email ledger with exact frozen payload identity, three fenced possible-dispatch slots, immutable first-admission +23-hour recovery cutoff, monotonic provider acceptance, and independent notification-history repair.

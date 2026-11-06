@@ -1,5 +1,13 @@
 # Daily Self-Improvement Summary
 
+## 2026-11-06 — Idempotent Email Delivery Analyst corrections
+
+- Corrected reviewed HEAD `6bd81ad250eeccae60c46959d9473585de8883af` in runtime/test commit `bd80a8d6b0123b2938ddec9956d6a849abb0cbf1`: `payload_conflict` is now a durable storage-level claim/admission hold, while ordinary ambiguity recovery remains unchanged.
+- Expanded the persistent local Workerd harness with a real crash after provider acceptance, exact replay after restart, accepted-write response loss, restart-safe history repair, provider key conflict/expiry, and distinct intent-before-fetch evidence. Added 24 actual-adapter/local-D1 uncertainty cases across six critical transitions and four commit/readback outcomes.
+- RED: focused delivery suite failed 2/29 on conflict reclaim and a second transport call; Workerd RED timed out waiting for the missing crash-delivery route. GREEN: focused delivery/Resend/Worker suite 130/130; full suite 797/797; build, Worker typecheck, all five Workerd harnesses, Wrangler dry-run/bundle audit and diff checks passed.
+- Coverage: mandatory cases 3, 5, 6 and 19 now have explicit runtime evidence. The Workerd fault layer injects uncertainty at the actual local D1 adapter boundary; it cannot reproduce Cloudflare's remote control-plane/network loss and does not claim that limitation as direct remote-runtime proof.
+- Protected untracked historical design remained byte-identical at SHA-256 `67ebe90fdda67d9312f952cb477d38e5c78fff69396f8e4bbbc6bc6405d09a66`. No push, merge, migration application, deployment, provider call, monitoring run, or production D1 action occurred. Status: awaiting independent Analyst re-review.
+
 ## 2026-11-06 — Idempotent Email Delivery Builder completion
 
 - Completed all eleven approved TDD tasks on the feature branch: daily identity/frozen payload, migration0010, fenced D1 adapter, dispatch admission/cutoff, acceptance/history repair, typed Resend transport, durable finalizer, scheduled integration, bounded telemetry, Workerd proof and release verification.

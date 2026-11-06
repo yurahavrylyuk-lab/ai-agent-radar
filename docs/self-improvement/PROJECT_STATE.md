@@ -1,5 +1,13 @@
 # AI Agent Radar project state
 
+## 2026-11-06 — Idempotent Email Delivery Analyst corrections ready for re-review
+
+**Source-control status only:** the two IMPORTANT findings against reviewed commit `6bd81ad250eeccae60c46959d9473585de8883af` are corrected in commit `bd80a8d6b0123b2938ddec9956d6a849abb0cbf1` on `codex/idempotent-email-delivery-implementation`. A durable `payload_conflict` can no longer be reclaimed or admitted for another dispatch, including after restart/concurrency; ordinary non-conflict ambiguity remains recoverable.
+
+The local Workerd harness now proves provider acceptance followed by a Worker crash before accepted-state persistence, exact same-key/body replay without a second provider-created email, committed accepted-state response loss, restart repair of accepted notification history with zero new provider calls, payload-conflict restart blocking, provider key expiry, and the separate intent-before-fetch crash boundary. It also runs 24 adapter cases over real local Workerd D1 for reservation, claim, dispatch admission, ambiguous outcome, accepted/provider-ID outcome, and notification reconciliation: not committed vs committed-response-lost, each with readable vs unavailable authoritative reread. The injected D1 API-boundary loss is a faithful local-runtime adapter test; it does not claim to reproduce Cloudflare's remote network transport itself.
+
+Verification passed: focused 130/130, full 797/797, build, Worker typecheck, email/Gemini/OpenAI/RSS/Threads Workerd harnesses, Wrangler dry-run bundle audit, diff and scoped secret checks. Migration `0010` remains unapplied; no push, merge, deployment, provider call, production D1 mutation, or monitoring action occurred. Status remains **IMPLEMENTED / OFFLINE-TESTED / AWAITING INDEPENDENT ANALYST RE-REVIEW**.
+
 ## 2026-11-06 — Idempotent Email Delivery ready for independent review
 
 **Source-control status only:** Idempotent Email Delivery is implemented and offline-tested on its feature branch, awaiting independent Analyst review. It adds migration `0010_email_delivery_ledger.sql`, a durable scheduled-email ledger, frozen Resend request identity/body recovery, fenced bounded dispatch admission, accepted-history reconciliation, bounded telemetry, and a loopback-only Workerd recovery harness. Verification passed: focused 59/59, full 794/794, build, Worker typecheck, all required Workerd regressions, Wrangler dry-run bundle audit and diff check.
