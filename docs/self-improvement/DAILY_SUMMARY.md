@@ -1,5 +1,17 @@
 # Daily Self-Improvement Summary
 
+## 2026-11-09 — Correct D1 release-safeguard verification
+
+- Reproduced the Analyst finding with real local Wrangler: the new integration test initially failed at `0007_row22_exact_recovery.sql` with `row 22 recovery precondition failed` when the historical row was absent.
+- Added the exact reviewed row-22 fixture after real application of `0001`, `0002`, `0003`, `0005`, and `0006`, then used Wrangler to apply `0007` through `0009`, establish only `0010` pending, apply it once, and verify the actual migration ledger, email-delivery objects, unchanged sentinel data, excluded `0004`/X schema, excluded synthetic `0011`, and no-op repeat.
+- Corrected governance to distinguish the earlier exploratory local commands from this committed regression and from independent review. Focused migration tests passed 5/5 and full suite passed 802/802. The allowlist and all migration SQL remain unchanged. No remote migration, production D1, deployment, provider, monitoring, push, merge, or PR action occurred; status is awaiting focused Analyst re-review.
+
+## 2026-11-06 — D1 migration release safeguard
+
+- Reconciled the independently approved Idempotent Email Delivery implementation with its authorized local merge: local `main` is `06dd71b82fc72fe9b2cc717c725fd79840149ee4`, merge verification passed 800/800, GitHub publication is not authorized, and migration `0010` remains unapplied.
+- Added an explicit Wrangler D1 migration allowlist for `0001`, `0002`, `0003`, and `0005` through `0010`; intentionally unapplied `0004_x_discovery.sql` and unreviewed future migrations are excluded by default.
+- Isolated local Wrangler evidence selected and applied the approved sequence through `0010`, preserved seeded data, omitted `0004` and a synthetic `0011`, and was idempotent on repeat. Focused safeguard/migration tests passed 4/4. No remote D1, deployment, monitoring, provider, push, or production action occurred. Status: awaiting independent Analyst review.
+
 ## 2026-11-06 — Final payload-conflict concurrency correction
 
 - Corrected both remaining Analyst findings in runtime/test commit `37293147ef38b8d4cc77d205881d7e04c02341e2`: an exact durable pending slot may establish `payload_conflict` after its claim is stale, and a later accepted outcome cannot overwrite an established conflict hold.

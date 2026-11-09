@@ -1,5 +1,17 @@
 # Self-improvement changelog
 
+## 2026-11-09 — Make D1 release-safeguard proof reproducible
+
+- Added an isolated real-Wrangler regression that constructs the exact production-shaped predecessor state required by migration `0007`, rather than treating an empty database as representative.
+- Verified Wrangler-selected history through `0010`, exact ledger objects, preserved seeded data, no-op repeat application, and exclusion of both intentionally unapplied `0004` and a disposable synthetic `0011`.
+- Reclassified the earlier Builder migration run as exploratory evidence and retained independent review as the readiness gate. Focused migration tests pass 5/5 and the full suite passes 802/802; no migration SQL or production configuration changed in this correction.
+
+## 2026-11-06 — Add explicit D1 migration release allowlist
+
+- Added a source-controlled Wrangler migration pattern that permits the existing production sequence through `0010_email_delivery_ledger.sql` while deliberately excluding `0004_x_discovery.sql` and all unreviewed future migrations.
+- Added focused configuration coverage and isolated local Wrangler selection/application proof: `0010` applied, seeded data remained intact, `0004` and synthetic `0011` did not apply, and a repeated apply was a no-op.
+- Recorded Idempotent Email Delivery as independently approved and locally merged at `06dd71b82fc72fe9b2cc717c725fd79840149ee4`, but not published, migrated, or deployed. Future migrations require an explicit allowlist extension and review.
+
 ## 2026-11-06 — Fence stale payload-conflict races
 
 - Added an exact D1 conditional transition that lets a provider-confirmed conflict from a durable pending slot establish the no-send hold even after another claimant has reclaimed the lease.
