@@ -1,5 +1,9 @@
 # AI Agent Radar — Architecture and roadmap
 
+## 2026-11-09 — Reproducible D1 release-safeguard verification
+
+**Current verification authority:** the allowlist strategy is unchanged, while its evidence is corrected. A fresh empty database is not a valid predecessor for `0007_row22_exact_recovery.sql`; it must contain the exact reviewed historical row-22 state. A committed integration test now reconstructs that state using real local Wrangler migration execution and history recording, demonstrates `0010` as the sole pending approved migration after `0009`, and verifies that `0004` and synthetic future `0011` remain excluded. The previous Builder run is retained as exploratory evidence only. Passing Builder tests do not authorize or certify a production migration; focused independent review and separate human production authorization remain mandatory.
+
 ## 2026-11-06 — Local merge and explicit D1 migration release selection
 
 **IDEMPOTENT EMAIL DELIVERY = INDEPENDENTLY ANALYST-APPROVED / LOCALLY MERGED / NOT PUBLISHED / NOT DEPLOYED.** Approved runtime history is present on local `main` at merge commit `06dd71b82fc72fe9b2cc717c725fd79840149ee4`; merge verification passed 800/800 tests. Migration `0010_email_delivery_ledger.sql` remains unapplied, and neither GitHub publication nor production deployment is authorized. **BRAVE REQUEST TIMEOUT + BOUNDED RESPONSE** remains next in execution order.

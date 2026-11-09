@@ -1,5 +1,11 @@
 # AI Agent Radar project state
 
+## 2026-11-09 — D1 safeguard verification correction ready for review
+
+The Analyst accepted the migration allowlist but demonstrated that an empty local database is not production-shaped: `0007_row22_exact_recovery.sql` intentionally fails without its exact historical row-22 precondition. The 2026-11-06 Builder application narrative below is therefore classified as exploratory execution evidence rather than reproducible committed regression coverage.
+
+The correction adds a real installed-Wrangler test with temporary configuration and isolated local persistence. It applies approved migrations through `0006`, inserts the exact historical row 22 plus an unchanged-data sentinel, applies `0007` through `0009`, proves `0010` is the only pending allowlisted migration, applies `0010`, inspects the actual `d1_migrations` history and email-ledger objects, verifies the sentinel, excludes `0004`/X objects and synthetic `0011`, and proves repeat application is a no-op. Focused migration tests pass 5/5; the full suite passes 802/802. Status is **CORRECTED / OFFLINE-TESTED / AWAITING FOCUSED INDEPENDENT REVIEW**, not production-approved. No production D1, deployment, provider, monitoring, or GitHub action occurred.
+
 ## 2026-11-06 — Local email-delivery merge and D1 release safeguard
 
 **Source-control authority:** Idempotent Email Delivery is independently Analyst-approved and locally merged into `main` at `06dd71b82fc72fe9b2cc717c725fd79840149ee4`; local merge verification passed 800/800 tests. GitHub publication is not authorized. Migration `0010_email_delivery_ledger.sql` remains unapplied, production is unchanged, and no provider or monitoring action accompanied the merge.

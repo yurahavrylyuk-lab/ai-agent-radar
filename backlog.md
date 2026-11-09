@@ -1,5 +1,9 @@
 # AI Agent Radar — Backlog
 
+## 2026-11-09 — D1 release safeguard verification corrected
+
+**D1 RELEASE SAFEGUARD = CORRECTED / OFFLINE-TESTED / AWAITING FOCUSED INDEPENDENT REVIEW.** The Analyst confirmed the allowlist itself but found that applying it to an empty database correctly fails at historical recovery migration `0007`; the earlier Builder application report was exploratory evidence and was not a committed regression test. The committed test now drives installed Wrangler against isolated local D1 persistence, applies `0001`, `0002`, `0003`, `0005`, and `0006`, inserts the exact historical row-22 precondition plus a preservation sentinel, applies `0007` through `0009`, proves only `0010` is pending, applies it once, verifies the ledger/schema/data, and proves a repeat is a no-op. `0004` and synthetic future `0011` are present in the disposable migration directory but remain unselected and unapplied. Focused migration tests pass 5/5 and the full suite passes 802/802. This is Builder evidence, not production-readiness approval; no remote migration or deployment occurred.
+
 ## 2026-11-06 — Idempotent Email Delivery locally merged; D1 release safeguard pending review
 
 **IDEMPOTENT EMAIL DELIVERY = INDEPENDENTLY ANALYST-APPROVED / LOCALLY MERGED / NOT PUBLISHED / NOT DEPLOYED.** Local `main` merge commit `06dd71b82fc72fe9b2cc717c725fd79840149ee4` contains the approved implementation; its merge verification passed 800/800 tests. GitHub publication is not authorized, migration `0010_email_delivery_ledger.sql` is not applied, and production is unchanged. The next roadmap item remains **BRAVE REQUEST TIMEOUT + BOUNDED RESPONSE**.
