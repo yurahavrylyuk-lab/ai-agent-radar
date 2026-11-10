@@ -14,7 +14,7 @@ import { createGeminiCycleContext, getGeminiProviderFailureClass, type GeminiBat
 import { xPostIdFromUrl, type XDiscoveryResult } from "./xDiscovery.js";
 import { BraveUsageGuardDeniedError } from "../tools/webSearch.js";
 import { sendWithResend } from "../tools/email/resend.js";
-import { isTotalDiscoveryOutage, type AnalyzerFailoverObservation, type CycleSnapshotV1 } from "./monitoringTelemetry.js";
+import { attachRssDiagnostics, isTotalDiscoveryOutage, projectRssDiagnostics, type AnalyzerFailoverObservation, type CycleSnapshotV1 } from "./monitoringTelemetry.js";
 import type { BatchAnalysisResult, BatchCycleMetrics, BatchDeliveryCandidate, BatchObservation, BraveSearchPage, DailyEmailContext, DeliveryCandidate, DiscoveryProcessingResult, MonitoringCycleResult, MonitoringSearchFailure, NotificationResult, PreparedBatch, RssDiscoveryResult, SearchResult, StoredDiscovery, ThreadsCycleMetrics, ThreadsDiscoveryResult, XSourceProvenance } from "../types/index.js";
 
 export const MONITORING_QUERY = "new AI agent developer tool framework release";
@@ -64,13 +64,14 @@ export interface BatchMonitoringDependencies {
   /** Required by the production scheduled path; omitted only by legacy offline fixtures. */
   dailyDelivery?: DailyDeliveryDependencies;
   onTelemetryCheckpoint?: (phase: "sources_complete" | "gemini_complete", snapshot: CycleSnapshotV1) => Promise<void>;
+  onRssDiagnosticsOmission?: (reason: "invalid_metrics" | "snapshot_budget") => void;
   getAnalyzerFailoverObservation?: () => AnalyzerFailoverObservation | undefined;
 }
 
-function cycleSnapshot(result: MonitoringCycleResult): CycleSnapshotV1 {
+function cycleSnapshot(result: MonitoringCycleResult, onOmission?: (reason: "invalid_metrics" | "snapshot_budget") => void): CycleSnapshotV1 {
   const batch = result.batch;
   const attempts = batch?.attempts ?? [];
-  return {
+  const core: CycleSnapshotV1 = {
     version: 1,
     braveHealth: batch?.discoverySourceHealth.brave ?? null,
     rssHealth: batch?.discoverySourceHealth.rss ?? null,
@@ -96,6 +97,11 @@ function cycleSnapshot(result: MonitoringCycleResult): CycleSnapshotV1 {
     ...(batch?.analyzerFailover===undefined?{}:{analyzerFailover:{...batch.analyzerFailover,usage:batch.analyzerFailover.usage?{...batch.analyzerFailover.usage}:null}}),
     ...(result.threads === undefined ? {} : { threads: result.threads }),
   };
+  const attached = attachRssDiagnostics(core, projectRssDiagnostics(result.rss, batch?.discoverySourceHealth.rss ?? null));
+  if (attached.omission) {
+    try { onOmission?.(attached.omission); } catch { /* optional warning sinks never alter monitoring */ }
+  }
+  return attached.snapshot;
 }
 
 export function createMonitoringCycleSnapshot(result: MonitoringCycleResult): CycleSnapshotV1 {
@@ -225,6 +231,12 @@ async function runBatchMonitoringCycleInternal(dependencies: BatchMonitoringDepe
   const cycleStartedAt = now();
   if (Number.isNaN(cycleStartedAt.getTime())) throw new Error("Monitoring cycle timestamp is invalid.");
   const result = emptyResult(MONITORING_QUERIES.join(" | "), 0);
+  let rssDiagnosticsWarningEmitted = false;
+  const snapshot = () => cycleSnapshot(result, reason => {
+    if (rssDiagnosticsWarningEmitted) return;
+    rssDiagnosticsWarningEmitted = true;
+    dependencies.onRssDiagnosticsOmission?.(reason);
+  });
   result.xBlockedReason = "disabled";
   if (dependencies.dailyDelivery) {
     const recovered = await recoverDailyDelivery(dependencies.dailyDelivery);
@@ -396,7 +408,7 @@ async function runBatchMonitoringCycleInternal(dependencies: BatchMonitoringDepe
 
   let sourceCheckpointReady = true;
   if (dependencies.onTelemetryCheckpoint) {
-    try { await dependencies.onTelemetryCheckpoint("sources_complete", cycleSnapshot(result)); }
+    try { await dependencies.onTelemetryCheckpoint("sources_complete", snapshot()); }
     catch {
       sourceCheckpointReady = false;
       prepared = undefined;
@@ -479,7 +491,7 @@ async function runBatchMonitoringCycleInternal(dependencies: BatchMonitoringDepe
   result.geminiProviderAttempts = geminiCycleContext.providerDispatches;
   result.geminiRequestsByModel["gemini-3.8-flash"] = geminiCycleContext.providerDispatches;
   if (dependencies.onTelemetryCheckpoint) {
-    try { await dependencies.onTelemetryCheckpoint("gemini_complete", cycleSnapshot(result)); }
+    try { await dependencies.onTelemetryCheckpoint("gemini_complete", snapshot()); }
     catch { result.failures += 1; }
   }
   const replayCandidates: BatchDeliveryCandidate[] = [...replay.values()]

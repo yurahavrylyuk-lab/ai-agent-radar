@@ -124,9 +124,9 @@ async function run(dependencies: monitor.BatchMonitoringDependencies) {
 
 test("all fifty observations reach one bounded analysis subset after all ten searches", async () => {
   const f = fixture();
-  const checkpoints: Array<{ phase: string; latency: unknown }> = [];
+  const checkpoints: Array<{ phase: string; latency: unknown; rssDiagnostics: unknown }> = [];
   f.dependencies.onTelemetryCheckpoint = async (phase, snapshot) => {
-    checkpoints.push({ phase, latency: snapshot.latency });
+    checkpoints.push({ phase, latency: snapshot.latency, rssDiagnostics: snapshot.rssDiagnostics });
   };
   f.dependencies.analyze = async batch => {
     f.events.push("analysis");
@@ -159,6 +159,32 @@ test("all fifty observations reach one bounded analysis subset after all ten sea
   assert.deepEqual((checkpoints[1]?.latency as { attemptTimings: unknown[] }).attemptTimings, [
     { ordinal: 1, requestStartedAt: "2026-10-14T08:00:01.000Z", elapsedMs: 1234 },
   ]);
+  assert.deepEqual(checkpoints[0]?.rssDiagnostics, {
+    version: 1, status: "recorded", collectionStatus: "collected", health: "healthy",
+    configuredFeeds: 4, attemptedFeeds: 4, succeededFeeds: 4, failedFeeds: 0,
+    outcomes: ["openai_news", "github_changelog", "cloudflare_ai", "chrome_developers"].map(feedId => ({ feedId, reason: "ok", elapsedMs: 1 })),
+  });
+  assert.deepEqual(checkpoints[1]?.rssDiagnostics, checkpoints[0]?.rssDiagnostics);
+});
+
+test("invalid optional RSS diagnostics use a bounded marker without blocking analysis", async () => {
+  const f = fixture();
+  const warnings: string[] = [];
+  const snapshots: unknown[] = [];
+  f.dependencies.collectRss = async () => emptyRss({ metrics: { ...emptyRss().metrics, outcomes: [
+    { feedId: "openai_news", reason: "ok", elapsedMs: -1 },
+    ...emptyRss().metrics.outcomes.slice(1),
+  ] } });
+  f.dependencies.onRssDiagnosticsOmission = reason => { warnings.push(reason); throw new Error("warning sink unavailable"); };
+  f.dependencies.onTelemetryCheckpoint = async (_phase, value) => { snapshots.push(value.rssDiagnostics); };
+  const result = await run(f.dependencies);
+  assert.equal(f.analyzeCalls(), 1);
+  assert.equal(result.batch?.status, "validated");
+  assert.deepEqual(snapshots, [
+    { version: 1, status: "unavailable", reason: "invalid_metrics" },
+    { version: 1, status: "unavailable", reason: "invalid_metrics" },
+  ]);
+  assert.deepEqual(warnings, ["invalid_metrics"], "one warning per cycle despite later checkpoints");
 });
 
 test("excluded_analysis_candidate_remains_in_raw_fallback", async () => {

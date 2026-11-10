@@ -20,6 +20,7 @@ import worker, {
 } from "../src/worker.js";
 import type { ThreadsCycleMetrics } from "../src/types/index.js";
 import { createProductionEmailDeliveryDatabase } from "./fixtures/emailDeliveryD1.js";
+import { parseCycleSnapshot } from "../src/services/monitoringTelemetry.js";
 
 function environment(): RadarWorkerEnv {
   return {
@@ -201,6 +202,15 @@ test("default scheduled Worker uses batch entry with no X tables and HTTP method
     assert.equal(result.xRequestsAttempted, 0);
     assert.equal(result.xBlockedReason, "disabled");
     assert.equal((fixture.sqlite.prepare("SELECT count(*) AS count FROM monitoring_cycles WHERE phase='completed'").get() as { count: number }).count, 1);
+    const persisted = fixture.sqlite.prepare("SELECT snapshot_json AS snapshot FROM monitoring_cycles WHERE phase='completed'").get() as { snapshot: string };
+    const rssDiagnostics = parseCycleSnapshot(persisted.snapshot).rssDiagnostics;
+    assert.deepEqual(rssDiagnostics && { ...rssDiagnostics, outcomes: rssDiagnostics.status === "recorded"
+      ? rssDiagnostics.outcomes.map(({ elapsedMs: _elapsedMs, ...outcome }) => outcome) : [] }, {
+      version: 1, status: "recorded", collectionStatus: "collected", health: "healthy",
+      configuredFeeds: 4, attemptedFeeds: 4, succeededFeeds: 4, failedFeeds: 0,
+      outcomes: ["openai_news", "github_changelog", "cloudflare_ai", "chrome_developers"].map(feedId => ({ feedId, reason: "ok" })),
+    });
+    assert.ok(rssDiagnostics?.status === "recorded" && rssDiagnostics.outcomes.every(outcome => outcome.elapsedMs >= 0 && outcome.elapsedMs <= 5000));
     assert.equal((fixture.sqlite.prepare("SELECT count(*) AS count FROM email_deliveries WHERE state='accepted'").get() as { count: number }).count, 1);
     providerUrls.length = 0;
     const cyclesBeforeHealth = (fixture.sqlite.prepare("SELECT count(*) AS count FROM monitoring_cycles").get() as { count: number }).count;

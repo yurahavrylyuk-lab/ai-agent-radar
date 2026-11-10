@@ -3,7 +3,7 @@ import Database from "better-sqlite3";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { D1MonitoringTelemetry } from "../src/services/d1MonitoringTelemetry.js";
-import { parseCycleSnapshot, serializeCycleSnapshot, validateCycleSnapshot, validateCycleStart, validateDeliveryLedgerObservation, validateThreadsCycleMetrics } from "../src/services/monitoringTelemetry.js";
+import { attachRssDiagnostics, parseCycleSnapshot, projectRssDiagnostics, serializeCycleSnapshot, validateCycleSnapshot, validateCycleStart, validateDeliveryLedgerObservation, validateRssDiagnostics, validateThreadsCycleMetrics } from "../src/services/monitoringTelemetry.js";
 
 const encoder = new TextEncoder();
 
@@ -62,6 +62,104 @@ const threads = {
   ],
   pipeline: { duplicates: 1, retainedOwned: 3, retainedAttributed: 4, submitted: 2, selected: 1, delivered: 1 },
 };
+
+const rssMetrics = {
+  status: "collected" as const, configuredFeeds: 4, attemptedFeeds: 4, succeededFeeds: 3, failedFeeds: 1,
+  observedPositions: 12, validCandidates: 9, rejectedItems: 3, itemLimitTruncations: 0,
+  outcomes: [
+    { feedId: "openai_news", reason: "ok" as const, elapsedMs: 10.9 },
+    { feedId: "github_changelog", reason: "http" as const, httpStatus: 503, elapsedMs: 20 },
+    { feedId: "cloudflare_ai", reason: "ok" as const, elapsedMs: 30 },
+    { feedId: "chrome_developers", reason: "ok" as const, elapsedMs: 9_999 },
+  ],
+};
+
+test("RSS diagnostics project only bounded approved primitives and preserve legacy snapshots", () => {
+  const projected = projectRssDiagnostics(rssMetrics, "degraded");
+  assert.deepEqual(projected, {
+    version: 1, status: "recorded", collectionStatus: "collected", health: "degraded",
+    configuredFeeds: 4, attemptedFeeds: 4, succeededFeeds: 3, failedFeeds: 1,
+    outcomes: [
+      { feedId: "openai_news", reason: "ok", elapsedMs: 10 },
+      { feedId: "github_changelog", reason: "http", httpStatus: 503, elapsedMs: 20 },
+      { feedId: "cloudflare_ai", reason: "ok", elapsedMs: 30 },
+      { feedId: "chrome_developers", reason: "ok", elapsedMs: 5000 },
+    ],
+  });
+  assert.deepEqual(validateRssDiagnostics(projected), projected);
+  assert.deepEqual(parseCycleSnapshot(serializeCycleSnapshot({ ...snapshot, rssDiagnostics: projected })), { ...snapshot, rssDiagnostics: projected });
+  assert.equal(parseCycleSnapshot(JSON.stringify(snapshot)).rssDiagnostics, undefined);
+  assert.equal(serializeCycleSnapshot(parseCycleSnapshot(JSON.stringify(snapshot))), JSON.stringify(snapshot));
+  assert.deepEqual(rssMetrics.outcomes[0], { feedId: "openai_news", reason: "ok", elapsedMs: 10.9 });
+  assert.ok(encoder.encode(JSON.stringify(projected)).byteLength <= 1024);
+});
+
+test("RSS diagnostic projection fails closed without retaining arbitrary or inconsistent input", () => {
+  assert.equal(projectRssDiagnostics(undefined, null), undefined);
+  for (const malformed of [
+    { ...rssMetrics, token: "PRIVATE_TOKEN" },
+    { ...rssMetrics, configuredFeeds: 6 },
+    { ...rssMetrics, attemptedFeeds: 3 },
+    { ...rssMetrics, succeededFeeds: 4, failedFeeds: 1 },
+    { ...rssMetrics, outcomes: [...rssMetrics.outcomes, { ...rssMetrics.outcomes[0] }] },
+    { ...rssMetrics, outcomes: [{ ...rssMetrics.outcomes[0], feedId: "unknown" }, ...rssMetrics.outcomes.slice(1) ] },
+    { ...rssMetrics, outcomes: [{ ...rssMetrics.outcomes[0], reason: "private provider body" }, ...rssMetrics.outcomes.slice(1) ] },
+    { ...rssMetrics, outcomes: [{ ...rssMetrics.outcomes[0], elapsedMs: -1 }, ...rssMetrics.outcomes.slice(1) ] },
+    { ...rssMetrics, outcomes: [{ ...rssMetrics.outcomes[0], elapsedMs: Number.NaN }, ...rssMetrics.outcomes.slice(1) ] },
+    { ...rssMetrics, outcomes: [{ ...rssMetrics.outcomes[0], httpStatus: 200 }, ...rssMetrics.outcomes.slice(1) ] },
+  ]) assert.deepEqual(projectRssDiagnostics(malformed, "degraded"), { version: 1, status: "unavailable", reason: "invalid_metrics" });
+  assert.deepEqual(projectRssDiagnostics(rssMetrics, "healthy"), { version: 1, status: "unavailable", reason: "invalid_metrics" });
+  assert.throws(() => validateRssDiagnostics({ ...projectRssDiagnostics(rssMetrics, "degraded"), secret: "PRIVATE" }), /RSS diagnostics/i);
+  assert.throws(() => validateCycleSnapshot({ ...snapshot, rssDiagnostics: { version: 1, status: "recorded", outcomes: [] } }), /snapshot/i);
+});
+
+test("RSS diagnostic attachment preserves valid core and uses bounded omission markers", () => {
+  const diagnostics = projectRssDiagnostics(rssMetrics, "degraded");
+  const attached = attachRssDiagnostics(snapshot, diagnostics);
+  assert.equal(attached.omission, null);
+  assert.deepEqual(attached.snapshot.rssDiagnostics, diagnostics);
+  assert.deepEqual(snapshot, { ...snapshot });
+  assert.throws(() => attachRssDiagnostics({ ...snapshot, candidateCounts: { ...snapshot.candidateCounts, submitted: 51 } }, diagnostics), /snapshot/i);
+  const oversizedCore = { ...snapshot, threads: { ...threads, outcomes: threads.outcomes.map(item => ({ ...item })) }, padding: "x".repeat(8000) } as never;
+  assert.throws(() => attachRssDiagnostics(oversizedCore, diagnostics), /snapshot/i);
+});
+
+test("RSS diagnostics accept every allowlisted collector outcome and reject persisted coercion", () => {
+  for (const reason of ["http", "redirect", "timeout", "body_limit", "encoding", "parse", "structure"] as const) {
+    const diagnostics = { version: 1 as const, status: "recorded" as const, collectionStatus: "collected" as const,
+      health: "unavailable" as const, configuredFeeds: 1, attemptedFeeds: 1, succeededFeeds: 0, failedFeeds: 1,
+      outcomes: [{ feedId: "openai_news" as const, reason, ...(reason === "http" ? { httpStatus: 500 } : {}), elapsedMs: 5000 }] };
+    assert.deepEqual(validateRssDiagnostics(diagnostics), diagnostics);
+  }
+  for (const collectionStatus of ["disabled", "configuration"] as const) {
+    const diagnostics = { version: 1 as const, status: "recorded" as const, collectionStatus, health: "unavailable" as const,
+      configuredFeeds: 0, attemptedFeeds: 0, succeededFeeds: 0, failedFeeds: 0, outcomes: [] };
+    assert.deepEqual(validateRssDiagnostics(diagnostics), diagnostics);
+  }
+  const valid = projectRssDiagnostics(rssMetrics, "degraded")!;
+  for (const malformed of [
+    { ...valid, version: 2 },
+    { ...valid, outcomes: [{ feedId: "openai_news", reason: "ok", elapsedMs: 1.5 }, ...rssMetrics.outcomes.slice(1) ] },
+    { ...valid, outcomes: [{ feedId: "openai_news", reason: "ok", elapsedMs: 5001 }, ...rssMetrics.outcomes.slice(1) ] },
+    { ...valid, outcomes: [{ feedId: "openai_news", reason: "ok", elapsedMs: 1, httpStatus: null }, ...rssMetrics.outcomes.slice(1) ] },
+    { ...valid, configuredFeeds: 5 },
+  ]) assert.throws(() => validateRssDiagnostics(malformed), /RSS diagnostics/i);
+});
+
+test("maximum current snapshot shape remains below the unchanged total byte cap", () => {
+  const deliveryLedger = { version: 1 as const, key: "daily-digest/2026-11-04" as const, action: "recovery" as const,
+    state: "ambiguous" as const, reason: "provider_ambiguous" as const, knownDispatchCount: 1, uncertainSlotCount: 1,
+    reconciliation: "pending" as const, replayEvidence: "same_key_requested" as const };
+  const maximumShape = {
+    ...snapshot, latency, analyzerFailover, threads,
+    delivery: { deliveryMode: "status_only" as const, deliveryReason: "ai_unavailable" as const,
+      analyzedStories: 4, rawStories: 4, replayStories: 4, emailAttempts: 1 as const, emailOutcome: "unknown" as const,
+      historyOutcome: "persistence_failed" as const, finalizationReached: true, deliveryLedger },
+  };
+  const attached = attachRssDiagnostics(maximumShape, projectRssDiagnostics(rssMetrics, "degraded"));
+  assert.equal(attached.omission, null);
+  assert.ok(encoder.encode(serializeCycleSnapshot(attached.snapshot)).byteLength < 8192);
+});
 
 test("cycle start accepts trusted null release metadata and rejects malformed identity", () => {
   assert.deepEqual(validateCycleStart(start), start);

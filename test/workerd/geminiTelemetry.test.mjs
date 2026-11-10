@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
@@ -10,6 +10,7 @@ const testDirectory = dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = join(testDirectory, "..", "..");
 const wrangler = join(repositoryRoot, "node_modules", ".bin", "wrangler");
 const persistence = await mkdtemp(join(tmpdir(), "gemini-telemetry-workerd-"));
+const config = join(testDirectory, "geminiTelemetry.wrangler.jsonc");
 
 async function unusedPort() {
   const server = createServer();
@@ -20,7 +21,7 @@ async function unusedPort() {
 }
 function start(port) {
   const output = { text: "" };
-  const child = spawn(wrangler, ["dev", "--config", join(testDirectory, "geminiTelemetry.wrangler.jsonc"), "--local", "--ip", "127.0.0.1", "--port", String(port), "--persist-to", persistence], {
+  const child = spawn(wrangler, ["dev", "--config", config, "--local", "--ip", "127.0.0.1", "--port", String(port), "--persist-to", persistence], {
     cwd: repositoryRoot,
     env: { ...process.env, WRANGLER_SEND_METRICS: "false", WRANGLER_LOG_PATH: join(persistence, "wrangler.log") },
     stdio: ["ignore", "pipe", "pipe"],
@@ -36,6 +37,11 @@ function start(port) {
 async function stop(child) { child.kill("SIGTERM"); await new Promise(resolve => child.once("exit", resolve)); }
 
 try {
+  const schema = spawnSync(wrangler, ["d1", "execute", "gemini-telemetry-regression", "--local", "--config", config, "--persist-to", persistence,
+    "--file", join(repositoryRoot, "migrations", "0008_monitoring_cycle_observability.sql")], {
+    cwd: repositoryRoot, env: { ...process.env, WRANGLER_SEND_METRICS: "false" }, encoding: "utf8",
+  });
+  assert.equal(schema.status, 0, `${schema.stdout}\n${schema.stderr}`);
   const firstPort = await unusedPort(); const first = start(firstPort); await first.ready;
   const result = await (await fetch(`http://127.0.0.1:${firstPort}/test`)).json();
   assert.equal(result.rollbackError, true, first.output.text);
@@ -54,8 +60,27 @@ try {
       accounting: { reserved: 0, exact: 1, confirmedZero: 0, ambiguous: 0, unavailable: false },
     },
   };
-  assert.deepEqual(result.rolledBack, { usage: { value: "reserved" }, attempt: { value: "pending" }, snapshots: expectedSnapshots });
-  assert.deepEqual(result.settled, { usage: { value: "confirmed_zero" }, attempt: { value: "settled" }, snapshots: expectedSnapshots });
+  const rssDiagnostics = {
+    version: 1, status: "recorded", collectionStatus: "collected", health: "degraded",
+    configuredFeeds: 4, attemptedFeeds: 4, succeededFeeds: 3, failedFeeds: 1,
+    outcomes: [
+      { feedId: "openai_news", reason: "http", httpStatus: 503, elapsedMs: 25 },
+      { feedId: "github_changelog", reason: "ok", elapsedMs: 10 },
+      { feedId: "cloudflare_ai", reason: "ok", elapsedMs: 20 },
+      { feedId: "chrome_developers", reason: "ok", elapsedMs: 30 },
+    ],
+  };
+  const rssSnapshot = {
+    version: 1, braveHealth: "healthy", rssHealth: "degraded", outage: false,
+    candidateCounts: { received: 60, unique: 41, submitted: 24 }, geminiDispatchCount: 1,
+    delivery: { deliveryMode: "status_only", deliveryReason: "no_eligible_stories", analyzedStories: 0, rawStories: 0, replayStories: 0,
+      emailAttempts: 1, emailOutcome: "accepted", historyOutcome: "not_required", finalizationReached: true },
+    accounting: { reserved: 0, exact: 1, confirmedZero: 0, ambiguous: 0, unavailable: false }, rssDiagnostics,
+  };
+  const common = { rssCycle: { cycleId: "11111111-1111-4111-8111-111111111111", phase: "completed", snapshot: rssSnapshot }, rssRaw: rssSnapshot,
+    legacyCycle: { phase: "started", rssDiagnostics: null }, corruptRejected: true };
+  assert.deepEqual(result.rolledBack, { usage: { value: "reserved" }, attempt: { value: "pending" }, snapshots: expectedSnapshots, ...common });
+  assert.deepEqual(result.settled, { usage: { value: "confirmed_zero" }, attempt: { value: "settled" }, snapshots: expectedSnapshots, ...common });
   assert.equal(result.oldStrictRejectsExtended, true);
   assert.deepEqual(result.changes, [1, 1]);
   assert.deepEqual(result.returned, [[{ id: 1 }], [{ id: 1 }]]);
@@ -65,5 +90,5 @@ try {
   const recovered = await (await fetch(`http://127.0.0.1:${secondPort}/read`)).json();
   assert.deepEqual(recovered, result.settled);
   await stop(second.child);
-  console.log("Workerd Gemini telemetry regression passed: failed batches rolled back and committed evidence survived restart.");
+  console.log("Workerd Gemini/RSS telemetry regression passed: failed batches rolled back and bounded RSS evidence survived D1 restart/readback.");
 } finally { await rm(persistence, { recursive: true, force: true }); }
