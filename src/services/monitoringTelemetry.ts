@@ -1,5 +1,5 @@
 import type { ApprovedGeminiModel } from "../config/geminiModels.js";
-import type { BraveDiscoverySourceHealth, DeliveryLedgerObservation, DiscoverySourceSuccessCounts, GeminiFailureClass, RssDiscoverySourceHealth, ThreadsCycleMetrics } from "../types/index.js";
+import type { BraveDiscoverySourceHealth, DeliveryLedgerObservation, DiscoverySourceSuccessCounts, GeminiFailureClass, RssCycleMetrics, RssDiscoverySourceHealth, ThreadsCycleMetrics } from "../types/index.js";
 import type { GeminiAmbiguityReason, GeminiUsageReservation, GeminiUsageSettlement } from "./geminiUsageTracker.js";
 
 export type AttemptRef = { cycleId: string; ordinal: 1 | 2 | 3 };
@@ -64,7 +64,16 @@ export interface CycleSnapshotV1 {
   latency?: CycleLatencyV1;
   analyzerFailover?: AnalyzerFailoverObservation;
   threads?: ThreadsCycleMetrics;
+  rssDiagnostics?: RssDiagnosticsV1;
 }
+
+export type RssDiagnosticFeedId = "openai_news" | "github_changelog" | "cloudflare_ai" | "chrome_developers";
+export type RssDiagnosticReason = "disabled" | "configuration" | "http" | "redirect" | "timeout" | "body_limit" | "encoding" | "parse" | "structure" | "ok";
+export type RssDiagnosticsV1 = {
+  version: 1; status: "recorded"; collectionStatus: "disabled" | "configuration" | "collected";
+  health: RssDiscoverySourceHealth; configuredFeeds: number; attemptedFeeds: number; succeededFeeds: number; failedFeeds: number;
+  outcomes: Array<{ feedId: RssDiagnosticFeedId; reason: RssDiagnosticReason; httpStatus?: number; elapsedMs: number }>;
+} | { version: 1; status: "unavailable"; reason: "invalid_metrics" | "snapshot_budget" };
 
 const threadQueryIds = ["ai_agents", "claude_code", "codex"] as const;
 const threadReasons = ["ok", "disabled", "configuration", "expired", "public_permission_unapproved", "auth", "permission_or_policy", "rate_limit", "redirect", "http", "transport", "timeout", "body_limit", "malformed", "api_error", "budget", "skipped"] as const;
@@ -122,6 +131,8 @@ export interface MonitoringTelemetry {
 }
 
 const encoder = new TextEncoder();
+const rssFeedIds = ["openai_news", "github_changelog", "cloudflare_ai", "chrome_developers"] as const;
+const rssReasons = ["disabled", "configuration", "http", "redirect", "timeout", "body_limit", "encoding", "parse", "structure", "ok"] as const;
 const isoUtc = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const exactKeys = (value: Record<string, unknown>, keys: readonly string[]) => {
@@ -216,9 +227,91 @@ export function validateAnalyzerFailoverObservation(value: unknown): AnalyzerFai
   return value as unknown as AnalyzerFailoverObservation;
 }
 
+export function validateRssDiagnostics(value: unknown): RssDiagnosticsV1 {
+  if (!isObject(value) || value.version !== 1 || !member(value.status, ["recorded", "unavailable"])) {
+    throw new Error("RSS diagnostics are invalid.");
+  }
+  if (value.status === "unavailable") {
+    if (!exactKeys(value, ["version", "status", "reason"]) || !member(value.reason, ["invalid_metrics", "snapshot_budget"])) {
+      throw new Error("RSS diagnostics are invalid.");
+    }
+  } else {
+    const keys = ["version", "status", "collectionStatus", "health", "configuredFeeds", "attemptedFeeds", "succeededFeeds", "failedFeeds", "outcomes"];
+    if (!exactKeys(value, keys) || !member(value.collectionStatus, ["disabled", "configuration", "collected"]) ||
+      !member(value.health, ["healthy", "degraded", "unavailable"]) || !count(value.configuredFeeds, 5) ||
+      !count(value.attemptedFeeds, 5) || !count(value.succeededFeeds, 5) || !count(value.failedFeeds, 5) ||
+      !Array.isArray(value.outcomes) || value.outcomes.length > 5 || Number(value.attemptedFeeds) > Number(value.configuredFeeds) ||
+      Number(value.succeededFeeds) + Number(value.failedFeeds) !== Number(value.attemptedFeeds) || value.outcomes.length !== Number(value.attemptedFeeds)) {
+      throw new Error("RSS diagnostics are invalid.");
+    }
+    const seen = new Set<string>();
+    let succeeded = 0;
+    let priorIndex = -1;
+    for (const outcome of value.outcomes) {
+      if (!isObject(outcome) || !exactKeys(outcome, ["feedId", "reason", ...(Object.hasOwn(outcome, "httpStatus") ? ["httpStatus"] : []), "elapsedMs"]) ||
+        !member(outcome.feedId, rssFeedIds) || seen.has(outcome.feedId as string) || !member(outcome.reason, rssReasons) ||
+        !count(outcome.elapsedMs, 5000) || (Object.hasOwn(outcome, "httpStatus") &&
+          (!(Number.isInteger(outcome.httpStatus) && Number(outcome.httpStatus) >= 100 && Number(outcome.httpStatus) <= 599) || outcome.reason !== "http"))) {
+        throw new Error("RSS diagnostics are invalid.");
+      }
+      const index = rssFeedIds.indexOf(outcome.feedId as RssDiagnosticFeedId);
+      if (index <= priorIndex) throw new Error("RSS diagnostics are invalid.");
+      priorIndex = index;
+      seen.add(outcome.feedId as string);
+      if (outcome.reason === "ok") succeeded += 1;
+    }
+    const collectionStatus = value.collectionStatus as "disabled" | "configuration" | "collected";
+    const expectedHealth = succeeded === 0 ? "unavailable" : Number(value.failedFeeds) > 0 ? "degraded" : "healthy";
+    if (collectionStatus === "collected") {
+      if (value.attemptedFeeds !== value.configuredFeeds || succeeded !== value.succeededFeeds || value.health !== expectedHealth ||
+        value.outcomes.some(outcome => outcome.reason === "disabled" || outcome.reason === "configuration")) throw new Error("RSS diagnostics are invalid.");
+    } else if (value.attemptedFeeds !== 0 || value.succeededFeeds !== 0 || value.failedFeeds !== 0 || value.outcomes.length !== 0 || value.health !== "unavailable") {
+      throw new Error("RSS diagnostics are invalid.");
+    }
+  }
+  if (encoder.encode(JSON.stringify(value)).byteLength > 1024) throw new Error("RSS diagnostics exceed their byte limit.");
+  return value as unknown as RssDiagnosticsV1;
+}
+
+export function projectRssDiagnostics(metrics: unknown, health: RssDiscoverySourceHealth | null): RssDiagnosticsV1 | undefined {
+  if (metrics === undefined) return undefined;
+  const unavailable = (): RssDiagnosticsV1 => ({ version: 1, status: "unavailable", reason: "invalid_metrics" });
+  if (!isObject(metrics) || !exactKeys(metrics, ["status", "configuredFeeds", "attemptedFeeds", "succeededFeeds", "failedFeeds", "observedPositions", "validCandidates", "rejectedItems", "itemLimitTruncations", "outcomes"]) ||
+    !member(metrics.status, ["disabled", "configuration", "collected"]) || !count(metrics.configuredFeeds, 5) || !count(metrics.attemptedFeeds, 5) ||
+    !count(metrics.succeededFeeds, 5) || !count(metrics.failedFeeds, 5) || !Array.isArray(metrics.outcomes) || health === null) return unavailable();
+  const outcomes: Array<{ feedId: RssDiagnosticFeedId; reason: RssDiagnosticReason; httpStatus?: number; elapsedMs: number }> = [];
+  for (const raw of metrics.outcomes) {
+    if (!isObject(raw) || !exactKeys(raw, ["feedId", "reason", ...(Object.hasOwn(raw, "httpStatus") ? ["httpStatus"] : []), "elapsedMs"]) ||
+      !member(raw.feedId, rssFeedIds) || !member(raw.reason, rssReasons) || typeof raw.elapsedMs !== "number" || !Number.isFinite(raw.elapsedMs) || raw.elapsedMs < 0 ||
+      (Object.hasOwn(raw, "httpStatus") && (!(Number.isInteger(raw.httpStatus) && Number(raw.httpStatus) >= 100 && Number(raw.httpStatus) <= 599) || raw.reason !== "http"))) return unavailable();
+    outcomes.push({ feedId: raw.feedId as RssDiagnosticFeedId, reason: raw.reason as RssDiagnosticReason,
+      ...(Object.hasOwn(raw, "httpStatus") ? { httpStatus: raw.httpStatus as number } : {}), elapsedMs: Math.min(5000, Math.floor(raw.elapsedMs)) });
+  }
+  const projected: RssDiagnosticsV1 = { version: 1, status: "recorded", collectionStatus: metrics.status as RssCycleMetrics["status"], health,
+    configuredFeeds: metrics.configuredFeeds as number, attemptedFeeds: metrics.attemptedFeeds as number,
+    succeededFeeds: metrics.succeededFeeds as number, failedFeeds: metrics.failedFeeds as number, outcomes };
+  try { return validateRssDiagnostics(projected); } catch { return unavailable(); }
+}
+
+export function attachRssDiagnostics(base: CycleSnapshotV1, diagnostics: RssDiagnosticsV1 | undefined): { snapshot: CycleSnapshotV1; omission: "invalid_metrics" | "snapshot_budget" | null } {
+  if (Object.hasOwn(base, "rssDiagnostics")) throw new Error("Monitoring cycle snapshot base already contains RSS diagnostics.");
+  const core = validateCycleSnapshot(base);
+  if (diagnostics === undefined) return { snapshot: core, omission: null };
+  let validated: RssDiagnosticsV1;
+  try { validated = validateRssDiagnostics(diagnostics); }
+  catch { validated = { version: 1, status: "unavailable", reason: "invalid_metrics" }; }
+  const omission = validated.status === "unavailable" ? validated.reason : null;
+  const candidate = { ...core, rssDiagnostics: validated };
+  if (encoder.encode(JSON.stringify(candidate)).byteLength <= 8192) return { snapshot: validateCycleSnapshot(candidate), omission };
+  const marker: RssDiagnosticsV1 = { version: 1, status: "unavailable", reason: "snapshot_budget" };
+  const marked = { ...core, rssDiagnostics: marker };
+  if (encoder.encode(JSON.stringify(marked)).byteLength <= 8192) return { snapshot: validateCycleSnapshot(marked), omission: "snapshot_budget" };
+  return { snapshot: core, omission: "snapshot_budget" };
+}
+
 export function validateCycleSnapshot(value: unknown): CycleSnapshotV1 {
   const keys = ["version", "braveHealth", "rssHealth", "outage", "candidateCounts", "geminiDispatchCount", "delivery", "accounting"];
-  if (!isObject(value) || !exactKeys(value, [...keys, ...(Object.hasOwn(value,"latency")?["latency"]:[]), ...(Object.hasOwn(value,"analyzerFailover")?["analyzerFailover"]:[]), ...(Object.hasOwn(value,"threads")?["threads"]:[])]) || value.version !== 1 ||
+  if (!isObject(value) || !exactKeys(value, [...keys, ...(Object.hasOwn(value,"latency")?["latency"]:[]), ...(Object.hasOwn(value,"analyzerFailover")?["analyzerFailover"]:[]), ...(Object.hasOwn(value,"threads")?["threads"]:[]), ...(Object.hasOwn(value,"rssDiagnostics")?["rssDiagnostics"]:[])]) || value.version !== 1 ||
     !(value.braveHealth === null || member(value.braveHealth, ["healthy", "degraded", "unavailable", "quota_blocked"])) ||
     !(value.rssHealth === null || member(value.rssHealth, ["healthy", "degraded", "unavailable"])) ||
     !(value.outage === null || typeof value.outage === "boolean") || !isObject(value.candidateCounts) ||
@@ -229,8 +322,15 @@ export function validateCycleSnapshot(value: unknown): CycleSnapshotV1 {
     !count(value.accounting.reserved, 3) || !count(value.accounting.exact, 3) || !count(value.accounting.confirmedZero, 3) ||
     !count(value.accounting.ambiguous, 3) || typeof value.accounting.unavailable !== "boolean" ||
     ("latency" in value && !validLatency(value.latency)) || ("analyzerFailover" in value && (()=>{try{validateAnalyzerFailoverObservation(value.analyzerFailover);return false;}catch{return true;}})()) ||
-    ("threads" in value && (()=>{try{validateThreadsCycleMetrics(value.threads);return false;}catch{return true;}})())) {
+    ("threads" in value && (()=>{try{validateThreadsCycleMetrics(value.threads);return false;}catch{return true;}})()) ||
+    ("rssDiagnostics" in value && (()=>{try{validateRssDiagnostics(value.rssDiagnostics);return false;}catch{return true;}})())) {
     throw new Error("Monitoring cycle snapshot is invalid.");
+  }
+  if (Object.hasOwn(value, "rssDiagnostics")) {
+    const diagnostics = validateRssDiagnostics(value.rssDiagnostics);
+    if (diagnostics.status === "recorded" && value.rssHealth !== null && diagnostics.health !== value.rssHealth) {
+      throw new Error("Monitoring cycle snapshot is invalid.");
+    }
   }
   const encoded = JSON.stringify(value);
   if (encoder.encode(encoded).byteLength > 8192) throw new Error("Monitoring cycle snapshot exceeds its byte limit.");

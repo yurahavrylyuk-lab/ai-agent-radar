@@ -6,7 +6,7 @@ import { D1MonitoringTelemetry } from "./services/d1MonitoringTelemetry.js";
 import { D1OpenAIFallbackUsageStore } from "./services/d1OpenAIFallbackUsageStore.js";
 import { D1EmailDeliveryLedger } from "./services/d1EmailDeliveryLedger.js";
 import { deliveryIdentity } from "./services/emailDeliveryLedger.js";
-import { isTotalDiscoveryOutage, validateAnalyzerFailoverObservation, validateDeliveryLedgerObservation, validateThreadsCycleMetrics, type AnalyzerFailoverObservation, type CycleLatencyV1, type CycleSnapshotV1, type GeminiAttemptTiming, type MonitoringTelemetry } from "./services/monitoringTelemetry.js";
+import { attachRssDiagnostics, isTotalDiscoveryOutage, validateAnalyzerFailoverObservation, validateDeliveryLedgerObservation, validateThreadsCycleMetrics, type AnalyzerFailoverObservation, type CycleLatencyV1, type CycleSnapshotV1, type GeminiAttemptTiming, type MonitoringTelemetry } from "./services/monitoringTelemetry.js";
 import { inspectGeminiAvailability } from "./services/geminiUsageGuard.js";
 import { analyzeBatch, BatchAnalysisError } from "./services/analysisAgent.js";
 import { analyzeBatchWithFailover } from "./services/batchAnalyzerFailover.js";
@@ -127,10 +127,24 @@ export interface ScheduledCycleSummary {
 export interface ScheduledMonitoringDependencies {
   runCycle?: () => Promise<MonitoringCycleResult>;
   logInfo?: (summary: ScheduledCycleSummary) => void;
+  logWarning?: (warning: { event: "rss_diagnostics_omitted"; cycleId: string; reason: "invalid_metrics" | "snapshot_budget" }) => void;
   telemetry?: MonitoringTelemetry;
   scheduledAt?: Date;
   startedAt?: Date;
   cycleId?: string;
+}
+
+export function createRssDiagnosticsOmissionReporter(
+  cycleId: string,
+  sink: (warning: { event: "rss_diagnostics_omitted"; cycleId: string; reason: "invalid_metrics" | "snapshot_budget" }) => void = warning => console.warn(warning),
+): (reason: "invalid_metrics" | "snapshot_budget") => void {
+  let emitted = false;
+  return reason => {
+    if (emitted) return;
+    emitted = true;
+    try { sink({ event: "rss_diagnostics_omitted", cycleId, reason }); }
+    catch { /* bounded diagnostic warning cannot affect monitoring */ }
+  };
 }
 
 function redactScheduledError(error: string, env: RadarWorkerEnv, maximumLength = MAX_SCHEDULED_ERROR_LENGTH): string {
@@ -537,6 +551,14 @@ export async function runScheduledMonitoring(
     const cycleId = dependencies.cycleId ?? crypto.randomUUID();
     let cycleCreated = false;
     let latestSnapshot: CycleSnapshotV1 | undefined;
+    const warnRssOmission = createRssDiagnosticsOmissionReporter(cycleId, dependencies.logWarning);
+    const finalSnapshot = (result: MonitoringCycleResult): CycleSnapshotV1 => {
+      const current = createMonitoringCycleSnapshot(result, warnRssOmission);
+      if (current.rssDiagnostics !== undefined || latestSnapshot?.rssDiagnostics === undefined) return current;
+      const attached = attachRssDiagnostics(current, latestSnapshot.rssDiagnostics);
+      if (attached.omission) warnRssOmission(attached.omission);
+      return attached.snapshot;
+    };
     try {
       await telemetry.createCycle({ cycleId, scheduledAt: scheduledAt.toISOString(), startedAt: startedAt.toISOString(), sourceSha: null, workerVersion: null });
       cycleCreated = true;
@@ -567,19 +589,20 @@ export async function runScheduledMonitoring(
         cycleStartedAtMonotonic,
         dailyDelivery,
       });
+      cycleDependencies.onRssDiagnosticsOmission = warnRssOmission;
       cycleDependencies.onTelemetryCheckpoint = async (phase, snapshot) => {
         latestSnapshot = snapshot;
         await telemetry.checkpoint(cycleId, phase, snapshot);
       };
       const result = await runBatchMonitoringCycle({ ...cycleDependencies, dailyEmailContext: context });
-      try { await telemetry.completeCycle(cycleId, createMonitoringCycleSnapshot(result)); } catch { /* never retry delivery */ }
+      try { await telemetry.completeCycle(cycleId, finalSnapshot(result)); } catch { /* never retry delivery */ }
       return result;
     } catch {
       const result = await finalizeStatusOnlyMonitoringCycle(
         dailyDelivery,
         "history_unavailable",
       );
-      if (cycleCreated) try { await telemetry.completeCycle(cycleId, createMonitoringCycleSnapshot(result)); } catch { /* never retry delivery */ }
+      if (cycleCreated) try { await telemetry.completeCycle(cycleId, finalSnapshot(result)); } catch { /* never retry delivery */ }
       return result;
     }
   });

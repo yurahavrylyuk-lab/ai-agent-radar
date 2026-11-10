@@ -1,5 +1,17 @@
 # AI Agent Radar project state
 
+## 2026-11-10 — RSS diagnostic persistence Analyst corrections ready for re-review
+
+Initial independent review returned `AI_RADAR_RSS_DIAGNOSTICS_CHANGES_REQUIRED`. The correction now rejects any persisted snapshot whose non-null root `rssHealth` contradicts a recorded nested diagnostic health; omission markers and root-null partial/error snapshots remain valid. Real local D1 and Workerd restart/readback tests prove contradictory persisted JSON cannot bypass the strict adapter parser.
+
+Final snapshot creation now passes every diagnostic omission through the same cycle-scoped one-shot warning reporter. Current maximum valid snapshot shape has more than the complete 1,024-byte RSS diagnostic envelope plus key overhead available under the unchanged 8,192-byte cap, proving `snapshot_budget` is presently latent; its closed warning reason is nevertheless one-shot tested at the final snapshot boundary. Focused tests pass 123/123; full tests pass 810/810; RSS, Gemini/RSS telemetry and email Workerd harnesses, build, Worker typecheck, Wrangler dry-run and diff checks pass. Status remains **LOCAL / UNMERGED / UNPUBLISHED / UNDEPLOYED / AWAITING FOCUSED INDEPENDENT RE-REVIEW**. No production action occurred.
+
+## 2026-11-10 — RSS diagnostic persistence ready for independent review
+
+The human-approved five-task design is implemented locally on `feature/rss-diagnostic-persistence` from baseline `7b47919e9527dc7a52d4c50b161f39dd067ec7ad`. The optional versioned `CycleSnapshotV1.rssDiagnostics` contract retains only approved feed IDs, allowlisted outcomes, optional validated HTTP status, bounded elapsed time, aggregate health/counts, or the bounded `invalid_metrics` / `snapshot_budget` omission marker. Per-field evidence is capped at 1,024 bytes inside the unchanged 8,192-byte cycle snapshot.
+
+Collection candidates, provider behavior, email delivery, quotas, Cron, bindings, and schemas are unchanged. Invalid optional diagnostics preserve a valid cycle while genuine snapshot/D1 integrity failures retain existing fail-closed behavior. Local Workerd/D1 evidence proves source/final replacement, restart/readback, legacy-row compatibility, and strict corrupt-row rejection. Focused tests pass 121/121; full tests pass 808/808; build, Worker typecheck, RSS/Gemini/email Workerd harnesses, Wrangler dry-run, and diff checks pass. Status is **IMPLEMENTED / OFFLINE-TESTED / AWAITING INDEPENDENT ANALYST REVIEW / NOT MERGED / NOT PUBLISHED / NOT DEPLOYED / NOT NATURALLY VALIDATED**. No migration, production D1, monitoring, provider, email, push, or deployment action occurred.
+
 ## 2026-11-09 — D1 safeguard verification correction ready for review
 
 The Analyst accepted the migration allowlist but demonstrated that an empty local database is not production-shaped: `0007_row22_exact_recovery.sql` intentionally fails without its exact historical row-22 precondition. The 2026-11-06 Builder application narrative below is therefore classified as exploratory execution evidence rather than reproducible committed regression coverage.

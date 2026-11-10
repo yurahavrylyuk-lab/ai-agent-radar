@@ -1,5 +1,17 @@
 # Self-improvement changelog
 
+## 2026-11-10 — Correct RSS diagnostic integrity and final warning coverage
+
+- Added persisted cross-field validation requiring non-null root RSS health to equal recorded nested diagnostic health, while preserving root-null partial snapshots, omission markers and historical rows without diagnostics.
+- Routed final snapshot omissions through the cycle-scoped one-shot bounded warning reporter and proved the current maximum valid snapshot has sufficient budget for every valid RSS diagnostic envelope.
+- Added direct validator, local D1, Workerd restart/readback and final snapshot warning regressions. Initial Analyst verdict remains historical; correction awaits focused independent re-review.
+
+## 2026-11-10 — Persist bounded RSS diagnostics in cycle snapshots
+
+- Added optional versioned RSS diagnostics to the existing monitoring snapshot JSON, with exact feed/reason allowlists, strict count/health/key validation, 1,024-byte field and unchanged 8,192-byte snapshot limits.
+- Attached the evidence at source collection and retained it through Gemini timing, email-attempt, successful completion, and status-only finalization. Invalid optional producer evidence degrades to a bounded omission marker without changing candidate/provider/email behavior; persisted corruption and real checkpoint failures remain fail-closed.
+- Added focused privacy/bounds/backward-compatibility tests and real isolated Workerd/D1 completion, restart, readback, legacy-row, and corrupt-row evidence. No migration or production action was added.
+
 ## 2026-11-09 — Make D1 release-safeguard proof reproducible
 
 - Added an isolated real-Wrangler regression that constructs the exact production-shaped predecessor state required by migration `0007`, rather than treating an empty database as representative.
