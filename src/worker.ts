@@ -134,6 +134,19 @@ export interface ScheduledMonitoringDependencies {
   cycleId?: string;
 }
 
+export function createRssDiagnosticsOmissionReporter(
+  cycleId: string,
+  sink: (warning: { event: "rss_diagnostics_omitted"; cycleId: string; reason: "invalid_metrics" | "snapshot_budget" }) => void = warning => console.warn(warning),
+): (reason: "invalid_metrics" | "snapshot_budget") => void {
+  let emitted = false;
+  return reason => {
+    if (emitted) return;
+    emitted = true;
+    try { sink({ event: "rss_diagnostics_omitted", cycleId, reason }); }
+    catch { /* bounded diagnostic warning cannot affect monitoring */ }
+  };
+}
+
 function redactScheduledError(error: string, env: RadarWorkerEnv, maximumLength = MAX_SCHEDULED_ERROR_LENGTH): string {
   const sensitiveValues = [
     env.BRAVE_SEARCH_API_KEY,
@@ -538,15 +551,9 @@ export async function runScheduledMonitoring(
     const cycleId = dependencies.cycleId ?? crypto.randomUUID();
     let cycleCreated = false;
     let latestSnapshot: CycleSnapshotV1 | undefined;
-    let rssWarningLogged = false;
-    const warnRssOmission = (reason: "invalid_metrics" | "snapshot_budget") => {
-      if (rssWarningLogged) return;
-      rssWarningLogged = true;
-      try { (dependencies.logWarning ?? (warning => console.warn(warning)))({ event: "rss_diagnostics_omitted", cycleId, reason }); }
-      catch { /* bounded diagnostic warning cannot affect monitoring */ }
-    };
+    const warnRssOmission = createRssDiagnosticsOmissionReporter(cycleId, dependencies.logWarning);
     const finalSnapshot = (result: MonitoringCycleResult): CycleSnapshotV1 => {
-      const current = createMonitoringCycleSnapshot(result);
+      const current = createMonitoringCycleSnapshot(result, warnRssOmission);
       if (current.rssDiagnostics !== undefined || latestSnapshot?.rssDiagnostics === undefined) return current;
       const attached = attachRssDiagnostics(current, latestSnapshot.rssDiagnostics);
       if (attached.omission) warnRssOmission(attached.omission);

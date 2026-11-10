@@ -94,6 +94,20 @@ test("RSS diagnostics project only bounded approved primitives and preserve lega
   assert.ok(encoder.encode(JSON.stringify(projected)).byteLength <= 1024);
 });
 
+test("cycle snapshots reject contradictory root and recorded RSS diagnostic health", () => {
+  const degraded = projectRssDiagnostics(rssMetrics, "degraded")!;
+  const healthy = projectRssDiagnostics({ ...rssMetrics, succeededFeeds: 4, failedFeeds: 0,
+    outcomes: rssMetrics.outcomes.map(({ feedId, elapsedMs }) => ({ feedId, reason: "ok" as const, elapsedMs })) }, "healthy")!;
+  assert.throws(() => validateCycleSnapshot({ ...snapshot, rssHealth: "healthy", rssDiagnostics: degraded }), /snapshot/i);
+  assert.throws(() => validateCycleSnapshot({ ...snapshot, rssHealth: "degraded", rssDiagnostics: healthy }), /snapshot/i);
+  assert.throws(() => validateCycleSnapshot({ ...snapshot, rssHealth: "unavailable", rssDiagnostics: degraded }), /snapshot/i);
+  assert.doesNotThrow(() => validateCycleSnapshot({ ...snapshot, rssHealth: "degraded", rssDiagnostics: degraded }));
+  assert.doesNotThrow(() => validateCycleSnapshot({ ...snapshot, rssHealth: null, rssDiagnostics: degraded }));
+  assert.doesNotThrow(() => validateCycleSnapshot({ ...snapshot, rssDiagnostics: { version: 1, status: "unavailable", reason: "invalid_metrics" } }));
+  assert.doesNotThrow(() => validateCycleSnapshot({ ...snapshot, rssDiagnostics: { version: 1, status: "unavailable", reason: "snapshot_budget" } }));
+  assert.doesNotThrow(() => validateCycleSnapshot(snapshot));
+});
+
 test("RSS diagnostic projection fails closed without retaining arbitrary or inconsistent input", () => {
   assert.equal(projectRssDiagnostics(undefined, null), undefined);
   for (const malformed of [
@@ -151,14 +165,24 @@ test("maximum current snapshot shape remains below the unchanged total byte cap"
     state: "ambiguous" as const, reason: "provider_ambiguous" as const, knownDispatchCount: 1, uncertainSlotCount: 1,
     reconciliation: "pending" as const, replayEvidence: "same_key_requested" as const };
   const maximumShape = {
-    ...snapshot, latency, analyzerFailover, threads,
+    ...snapshot,
+    latency: { ...latency, attemptTimings: [...latency.attemptTimings,
+      { ordinal: 3 as const, requestStartedAt: "2026-10-22T08:00:03.125Z", elapsedMs: 75_000 }] },
+    analyzerFailover,
+    threads: { ...threads, outcomes: [...threads.outcomes,
+      { queryId: "codex" as const, reason: "http" as const, httpStatus: 503, elapsedMs: 3000,
+        observedPositions: 0, itemTruncated: false, pagingIgnored: false, bodyTruncated: false }] },
     delivery: { deliveryMode: "status_only" as const, deliveryReason: "ai_unavailable" as const,
       analyzedStories: 4, rawStories: 4, replayStories: 4, emailAttempts: 1 as const, emailOutcome: "unknown" as const,
       historyOutcome: "persistence_failed" as const, finalizationReached: true, deliveryLedger },
   };
   const attached = attachRssDiagnostics(maximumShape, projectRssDiagnostics(rssMetrics, "degraded"));
   assert.equal(attached.omission, null);
-  assert.ok(encoder.encode(serializeCycleSnapshot(attached.snapshot)).byteLength < 8192);
+  const coreBytes = encoder.encode(serializeCycleSnapshot(maximumShape)).byteLength;
+  const attachedBytes = encoder.encode(serializeCycleSnapshot(attached.snapshot)).byteLength;
+  assert.ok(attachedBytes < 8192);
+  assert.ok(8192 - coreBytes > 1024 + encoder.encode(',"rssDiagnostics":').byteLength,
+    "the maximum valid current core has enough headroom for every valid bounded RSS diagnostic, so snapshot_budget is latent");
 });
 
 test("cycle start accepts trusted null release metadata and rejects malformed identity", () => {
@@ -333,5 +357,9 @@ test("D1 telemetry preserves two same-day invocations and recovers ordered attem
       historyOutcome: "not_required" as const, finalizationReached: true } };
     await repository.completeCycle(start.cycleId, finalSnapshot);
     assert.equal((await repository.readCycle(start.cycleId))?.phase, "completed");
+    const contradictory = { ...snapshot, rssHealth: "healthy", rssDiagnostics: projectRssDiagnostics(rssMetrics, "degraded") };
+    database.prepare("UPDATE monitoring_cycles SET snapshot_json=? WHERE cycle_id=?").run(JSON.stringify(contradictory), second.cycleId);
+    await assert.rejects(new D1MonitoringTelemetry(d1).readCycle(second.cycleId), /snapshot/i,
+      "persisted contradictory RSS health must fail strict adapter readback");
   } finally { database.close(); }
 });

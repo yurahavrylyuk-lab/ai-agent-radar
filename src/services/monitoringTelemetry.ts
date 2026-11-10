@@ -326,6 +326,12 @@ export function validateCycleSnapshot(value: unknown): CycleSnapshotV1 {
     ("rssDiagnostics" in value && (()=>{try{validateRssDiagnostics(value.rssDiagnostics);return false;}catch{return true;}})())) {
     throw new Error("Monitoring cycle snapshot is invalid.");
   }
+  if (Object.hasOwn(value, "rssDiagnostics")) {
+    const diagnostics = validateRssDiagnostics(value.rssDiagnostics);
+    if (diagnostics.status === "recorded" && value.rssHealth !== null && diagnostics.health !== value.rssHealth) {
+      throw new Error("Monitoring cycle snapshot is invalid.");
+    }
+  }
   const encoded = JSON.stringify(value);
   if (encoder.encode(encoded).byteLength > 8192) throw new Error("Monitoring cycle snapshot exceeds its byte limit.");
   return value as unknown as CycleSnapshotV1;

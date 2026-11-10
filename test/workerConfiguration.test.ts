@@ -9,6 +9,7 @@ import { parseOpenAIFallbackLimits } from "../src/config/openaiFallback.js";
 import { createMonitoringRuntimeConfiguration, createRadarRuntimeConfiguration } from "../src/services/radarRuntimeConfiguration.js";
 import type { BatchCycleMetrics, MonitoringCycleResult } from "../src/types/index.js";
 import worker, {
+  createRssDiagnosticsOmissionReporter,
   createWorkerMonitoringDependencies,
   createWorkerPersistence,
   createScheduledCycleSummary,
@@ -18,6 +19,7 @@ import worker, {
   type RadarWorkerEnv,
   type ScheduledCycleSummary,
 } from "../src/worker.js";
+import { createMonitoringCycleSnapshot } from "../src/services/monitor.js";
 import type { ThreadsCycleMetrics } from "../src/types/index.js";
 import { createProductionEmailDeliveryDatabase } from "./fixtures/emailDeliveryD1.js";
 import { parseCycleSnapshot } from "../src/services/monitoringTelemetry.js";
@@ -362,6 +364,44 @@ function batchMetrics(overrides: Partial<BatchCycleMetrics> = {}): BatchCycleMet
     attempts: [], retryEligible: false, retryAttempted: false, retrySkipReason: "none", ...overrides,
   };
 }
+
+test("final snapshot omission uses one bounded warning sink and normal diagnostics stay silent", () => {
+  const warnings: unknown[] = [];
+  const report = createRssDiagnosticsOmissionReporter("6d46738d-d269-4f9a-9f8f-1f615340fea8", warning => warnings.push(warning));
+  const malformedRss = {
+    status: "collected" as const, configuredFeeds: 4, attemptedFeeds: 4, succeededFeeds: 4, failedFeeds: 0,
+    observedPositions: 0, validCandidates: 0, rejectedItems: 0, itemLimitTruncations: 0,
+    outcomes: [
+      { feedId: "openai_news", reason: "ok" as const, elapsedMs: -1 },
+      { feedId: "github_changelog", reason: "ok" as const, elapsedMs: 1 },
+      { feedId: "cloudflare_ai", reason: "ok" as const, elapsedMs: 1 },
+      { feedId: "chrome_developers", reason: "ok" as const, elapsedMs: 1 },
+    ],
+  };
+  const finalResult = monitoringResult({ batch: batchMetrics(), rss: malformedRss });
+  assert.equal(createMonitoringCycleSnapshot(finalResult, report).rssDiagnostics?.status, "unavailable");
+  createMonitoringCycleSnapshot(finalResult, report);
+  assert.deepEqual(warnings, [{ event: "rss_diagnostics_omitted", cycleId: "6d46738d-d269-4f9a-9f8f-1f615340fea8", reason: "invalid_metrics" }]);
+
+  const earlierWarnings: unknown[] = [];
+  const earlierReport = createRssDiagnosticsOmissionReporter("44444444-4444-4444-8444-444444444444", warning => earlierWarnings.push(warning));
+  earlierReport("invalid_metrics");
+  createMonitoringCycleSnapshot(finalResult, earlierReport);
+  assert.deepEqual(earlierWarnings, [{ event: "rss_diagnostics_omitted", cycleId: "44444444-4444-4444-8444-444444444444", reason: "invalid_metrics" }],
+    "an earlier checkpoint omission owns the cycle's only warning and finalization cannot duplicate it");
+
+  const budgetWarnings: unknown[] = [];
+  const budgetReport = createRssDiagnosticsOmissionReporter("855a313a-2168-4a8f-8f8e-621f91d47f9c", warning => budgetWarnings.push(warning));
+  budgetReport("snapshot_budget");
+  budgetReport("snapshot_budget");
+  assert.deepEqual(budgetWarnings, [{ event: "rss_diagnostics_omitted", cycleId: "855a313a-2168-4a8f-8f8e-621f91d47f9c", reason: "snapshot_budget" }]);
+
+  const normalWarnings: unknown[] = [];
+  const normalReport = createRssDiagnosticsOmissionReporter("11111111-1111-4111-8111-111111111111", warning => normalWarnings.push(warning));
+  const validRss = { ...malformedRss, outcomes: malformedRss.outcomes.map(outcome => ({ ...outcome, elapsedMs: 1 })) };
+  assert.equal(createMonitoringCycleSnapshot(monitoringResult({ batch: batchMetrics(), rss: validRss }), normalReport).rssDiagnostics?.status, "recorded");
+  assert.deepEqual(normalWarnings, []);
+});
 
 test("scheduled summary independently allowlists discovery source health", () => {
   const summary = createScheduledCycleSummary(monitoringResult({ batch: batchMetrics({

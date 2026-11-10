@@ -72,9 +72,9 @@ export default {
     await telemetry.createCycle({ cycleId: legacyCycleId, scheduledAt: "2026-11-10T08:00:00.000Z", startedAt: "2026-11-10T08:00:01.000Z", sourceSha: null, workerVersion: null });
     await telemetry.createCycle({ cycleId: corruptCycleId, scheduledAt: "2026-11-10T08:00:00.000Z", startedAt: "2026-11-10T08:00:01.000Z", sourceSha: null, workerVersion: null });
     await env.DB.prepare("UPDATE monitoring_cycles SET snapshot_json=?1 WHERE cycle_id=?2")
-      .bind(JSON.stringify({ ...legacySnapshot, rssDiagnostics: { version: 1, status: "recorded", collectionStatus: "collected", health: "healthy",
-        configuredFeeds: 1, attemptedFeeds: 1, succeededFeeds: 1, failedFeeds: 0,
-        outcomes: [{ feedId: "unknown_feed", reason: "ok", elapsedMs: 1 }] } }), corruptCycleId).run();
+      .bind(JSON.stringify({ ...legacySnapshot, rssHealth: "healthy", rssDiagnostics: { version: 1, status: "recorded", collectionStatus: "collected", health: "degraded",
+        configuredFeeds: 1, attemptedFeeds: 1, succeededFeeds: 0, failedFeeds: 1,
+        outcomes: [{ feedId: "openai_news", reason: "timeout", elapsedMs: 5000 }] } }), corruptCycleId).run();
     let rollbackError = false;
     try {
       await env.DB.batch([

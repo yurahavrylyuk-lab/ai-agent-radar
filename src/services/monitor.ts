@@ -104,8 +104,11 @@ function cycleSnapshot(result: MonitoringCycleResult, onOmission?: (reason: "inv
   return attached.snapshot;
 }
 
-export function createMonitoringCycleSnapshot(result: MonitoringCycleResult): CycleSnapshotV1 {
-  return cycleSnapshot(result);
+export function createMonitoringCycleSnapshot(
+  result: MonitoringCycleResult,
+  onOmission?: (reason: "invalid_metrics" | "snapshot_budget") => void,
+): CycleSnapshotV1 {
+  return cycleSnapshot(result, onOmission);
 }
 
 const geminiBlockedReasons = new Set<GeminiBlockedReason>([
