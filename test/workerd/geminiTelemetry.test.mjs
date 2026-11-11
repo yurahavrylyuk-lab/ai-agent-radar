@@ -64,7 +64,7 @@ try {
     version: 1, status: "recorded", collectionStatus: "collected", health: "degraded",
     configuredFeeds: 4, attemptedFeeds: 4, succeededFeeds: 3, failedFeeds: 1,
     outcomes: [
-      { feedId: "openai_news", reason: "http", httpStatus: 503, elapsedMs: 25 },
+      { feedId: "openai_news", reason: "structure", subreason: "text_limit", elapsedMs: 25 },
       { feedId: "github_changelog", reason: "ok", elapsedMs: 10 },
       { feedId: "cloudflare_ai", reason: "ok", elapsedMs: 20 },
       { feedId: "chrome_developers", reason: "ok", elapsedMs: 30 },
@@ -78,10 +78,11 @@ try {
     accounting: { reserved: 0, exact: 1, confirmedZero: 0, ambiguous: 0, unavailable: false }, rssDiagnostics,
   };
   const common = { rssCycle: { cycleId: "11111111-1111-4111-8111-111111111111", phase: "completed", snapshot: rssSnapshot }, rssRaw: rssSnapshot,
-    legacyCycle: { phase: "started", rssDiagnostics: null }, corruptRejected: true };
+    legacyCycle: { phase: "started", rssDiagnostics: null }, corruptRejected: true, corruptSubreasonRejected: true };
   assert.deepEqual(result.rolledBack, { usage: { value: "reserved" }, attempt: { value: "pending" }, snapshots: expectedSnapshots, ...common });
   assert.deepEqual(result.settled, { usage: { value: "confirmed_zero" }, attempt: { value: "settled" }, snapshots: expectedSnapshots, ...common });
   assert.equal(result.oldStrictRejectsExtended, true);
+  assert.equal(result.oldStrictRejectsRssSubreason, true);
   assert.deepEqual(result.changes, [1, 1]);
   assert.deepEqual(result.returned, [[{ id: 1 }], [{ id: 1 }]]);
   await stop(first.child);

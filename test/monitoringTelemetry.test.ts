@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { D1MonitoringTelemetry } from "../src/services/d1MonitoringTelemetry.js";
 import { attachRssDiagnostics, parseCycleSnapshot, projectRssDiagnostics, serializeCycleSnapshot, validateCycleSnapshot, validateCycleStart, validateDeliveryLedgerObservation, validateRssDiagnostics, validateThreadsCycleMetrics } from "../src/services/monitoringTelemetry.js";
+import { rssStructuralSubreasons } from "../src/types/index.js";
 
 const encoder = new TextEncoder();
 
@@ -158,6 +159,69 @@ test("RSS diagnostics accept every allowlisted collector outcome and reject pers
     { ...valid, outcomes: [{ feedId: "openai_news", reason: "ok", elapsedMs: 1, httpStatus: null }, ...rssMetrics.outcomes.slice(1) ] },
     { ...valid, configuredFeeds: 5 },
   ]) assert.throws(() => validateRssDiagnostics(malformed), /RSS diagnostics/i);
+});
+
+test("RSS diagnostics round-trip every structural subreason and keep historical v1 readable", () => {
+  for (const subreason of rssStructuralSubreasons) {
+    const diagnostics = { version: 1 as const, status: "recorded" as const, collectionStatus: "collected" as const,
+      health: "unavailable" as const, configuredFeeds: 1, attemptedFeeds: 1, succeededFeeds: 0, failedFeeds: 1,
+      outcomes: [{ feedId: "openai_news" as const, reason: "structure" as const, subreason, elapsedMs: 1 }] };
+    assert.deepEqual(validateRssDiagnostics(diagnostics), diagnostics);
+    assert.deepEqual(parseCycleSnapshot(serializeCycleSnapshot({ ...snapshot, rssHealth: "unavailable", rssDiagnostics: diagnostics })).rssDiagnostics, diagnostics);
+  }
+  const historical = { version: 1 as const, status: "recorded" as const, collectionStatus: "collected" as const,
+    health: "unavailable" as const, configuredFeeds: 1, attemptedFeeds: 1, succeededFeeds: 0, failedFeeds: 1,
+    outcomes: [{ feedId: "openai_news" as const, reason: "structure" as const, elapsedMs: 1 }] };
+  assert.deepEqual(validateRssDiagnostics(historical), historical);
+});
+
+test("persisted RSS subreasons are exact, structure-only, and fail closed on corruption", () => {
+  const base = { version: 1 as const, status: "recorded" as const, collectionStatus: "collected" as const,
+    health: "unavailable" as const, configuredFeeds: 1, attemptedFeeds: 1, succeededFeeds: 0, failedFeeds: 1 };
+  const outcome = { feedId: "openai_news", reason: "structure", subreason: "text_limit", elapsedMs: 1 };
+  const invalid = [
+    { ...outcome, subreason: "private provider response" },
+    { ...outcome, subreason: null },
+    { ...outcome, subreason: 1 },
+    { ...outcome, subreason: undefined },
+    { ...outcome, privateField: "PRIVATE_XML_TEXT" },
+    { ...outcome, reason: "parse" },
+    { ...outcome, reason: "body_limit" },
+    { ...outcome, reason: "ok" },
+  ];
+  for (const [index, badOutcome] of invalid.entries()) {
+    const corrupt = { ...base, outcomes: [badOutcome] };
+    assert.throws(() => validateRssDiagnostics(corrupt), /RSS diagnostics/i);
+    if (index === 3) {
+      assert.doesNotThrow(() => parseCycleSnapshot(JSON.stringify({ ...snapshot, rssHealth: "unavailable", rssDiagnostics: corrupt })),
+        "JSON omission of undefined produces the valid historical no-subreason shape");
+    } else assert.throws(() => parseCycleSnapshot(JSON.stringify({ ...snapshot, rssHealth: "unavailable", rssDiagnostics: corrupt })), /snapshot/i);
+  }
+});
+
+test("producer projection copies bounded structural codes or omits the entire invalid optional envelope", () => {
+  const metrics = { ...rssMetrics, succeededFeeds: 3, failedFeeds: 1,
+    outcomes: rssMetrics.outcomes.map((outcome, index) => index === 1
+      ? { feedId: outcome.feedId, reason: "structure" as const, subreason: "text_limit" as const, elapsedMs: outcome.elapsedMs }
+      : outcome) };
+  const projected = projectRssDiagnostics(metrics, "degraded");
+  assert.equal(projected?.status === "recorded" ? projected.outcomes[1]?.subreason : undefined, "text_limit");
+  for (const subreason of ["PRIVATE_XML_TEXT", null, undefined]) {
+    const malformed = { ...metrics, outcomes: metrics.outcomes.map((outcome, index) => index === 1 ? { ...outcome, subreason } : outcome) };
+    assert.deepEqual(projectRssDiagnostics(malformed, "degraded"), { version: 1, status: "unavailable", reason: "invalid_metrics" });
+  }
+});
+
+test("maximum structural RSS diagnostics remain inside unchanged diagnostic and snapshot byte caps", () => {
+  const diagnostics = { version: 1 as const, status: "recorded" as const, collectionStatus: "collected" as const,
+    health: "unavailable" as const, configuredFeeds: 4, attemptedFeeds: 4, succeededFeeds: 0, failedFeeds: 4,
+    outcomes: ["openai_news", "github_changelog", "cloudflare_ai", "chrome_developers"].map(feedId => ({
+      feedId, reason: "structure" as const, subreason: "channel_cardinality" as const, elapsedMs: 5000,
+    })) };
+  assert.deepEqual(validateRssDiagnostics(diagnostics), diagnostics);
+  assert.ok(encoder.encode(JSON.stringify(diagnostics)).byteLength <= 1024);
+  const serialized = serializeCycleSnapshot({ ...snapshot, rssHealth: "unavailable", rssDiagnostics: diagnostics });
+  assert.ok(encoder.encode(serialized).byteLength <= 8192);
 });
 
 test("maximum current snapshot shape remains below the unchanged total byte cap", () => {

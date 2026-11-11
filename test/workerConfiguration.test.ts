@@ -320,6 +320,31 @@ test("scheduled summary independently allowlists and bounds daily delivery telem
   assert.doesNotMatch(JSON.stringify(createScheduledCycleSummary(result, environment())), /PRIVATE_PROVIDER_BODY|PRIVATE_CANDIDATE_TEXT/);
 });
 
+test("scheduled summary allowlists structural RSS subreasons without provider text", () => {
+  const result = monitoringResult({
+    rss: {
+      status: "collected", configuredFeeds: 4, attemptedFeeds: 4, succeededFeeds: 1, failedFeeds: 3,
+      observedPositions: 1, validCandidates: 1, rejectedItems: 0, itemLimitTruncations: 0,
+      outcomes: [
+        { feedId: "openai_news", reason: "structure", subreason: "text_limit", elapsedMs: 10 },
+        { feedId: "github_changelog", reason: "ok", elapsedMs: 11 },
+        { feedId: "cloudflare_ai", reason: "parse", elapsedMs: 12 },
+        { feedId: "chrome_developers", reason: "timeout", elapsedMs: 5000 },
+      ],
+    },
+  });
+  (result.rss!.outcomes[2] as unknown as Record<string, unknown>).subreason = "PRIVATE_PROVIDER_RESPONSE";
+  (result.rss!.outcomes[3] as unknown as Record<string, unknown>).subreason = "text_limit";
+  const summary = createScheduledCycleSummary(result, environment());
+  assert.deepEqual(summary.rss?.outcomes, [
+    { feedId: "openai_news", reason: "structure", subreason: "text_limit", elapsedMs: 10 },
+    { feedId: "github_changelog", reason: "ok", elapsedMs: 11 },
+    { feedId: "cloudflare_ai", reason: "parse", elapsedMs: 12 },
+    { feedId: "chrome_developers", reason: "timeout", elapsedMs: 5000 },
+  ]);
+  assert.doesNotMatch(JSON.stringify(summary), /PRIVATE_PROVIDER_RESPONSE/);
+});
+
 test("scheduled summary exposes only the exact bounded Gemini blocked reason", async () => {
   const summaries: ScheduledCycleSummary[] = [];
   await runScheduledMonitoring(environment(), {

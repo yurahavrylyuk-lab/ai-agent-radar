@@ -126,6 +126,63 @@ test("parser rejects unsafe or incomplete documents after retained positions", (
   for (const xml of documents) assert.throws(() => parseRssFeed(xml, rssFeed, now));
 });
 
+function rssFailure(action: () => unknown): { reason: string; subreason?: string } {
+  try { action(); }
+  catch (error) {
+    assert.ok(error && typeof error === "object");
+    const failure = error as { reason?: unknown; subreason?: unknown };
+    assert.equal(typeof failure.reason, "string");
+    return {
+      reason: failure.reason as string,
+      ...(Object.hasOwn(failure, "subreason") ? { subreason: failure.subreason as string } : {}),
+    };
+  }
+  assert.fail("Expected RSS parsing to fail.");
+}
+
+test("structural parser predicates expose only the approved bounded subreasons", () => {
+  const channel = (content = "") => `<rss version="2.0"><channel>${content}</channel></rss>`;
+  const cases: Array<[string, string, Date]> = [
+    ["element_limit", channel("<x/>".repeat(9999)), now],
+    ["depth_limit", channel(`${"<x>".repeat(31)}${"</x>".repeat(31)}`), now],
+    ["attribute_limit", channel(`<x value="${"x".repeat(8193)}"/>`), now],
+    ["multiple_roots", `${channel()}<rss/>`, now],
+    ["text_limit", channel(`<x>${"x".repeat(8193)}</x>`), now],
+    ["doctype", `<!DOCTYPE rss>${channel()}`, now],
+    ["channel_cardinality", `<rss version="2.0"><channel/><channel/></rss>`, now],
+    ["unsupported_root", `<feed xmlns="urn:not-atom"/>`, now],
+    ["invalid_clock", channel(), new Date(Number.NaN)],
+  ];
+  for (const [subreason, xml, clock] of cases) {
+    assert.deepEqual(rssFailure(() => parseRssFeed(xml, rssFeed, clock)), {
+      reason: "structure",
+      subreason,
+    });
+  }
+});
+
+test("structural boundaries remain accepted and text/CDATA share one exact limit", () => {
+  const channel = (content: string) => `<rss version="2.0"><channel>${content}</channel></rss>`;
+  assert.doesNotThrow(() => parseRssFeed(channel("<x/>".repeat(9998)), rssFeed, now));
+  assert.doesNotThrow(() => parseRssFeed(channel(`${"<x>".repeat(30)}${"</x>".repeat(30)}`), rssFeed, now));
+  assert.doesNotThrow(() => parseRssFeed(channel(`<x value="${"x".repeat(8192)}"/>`), rssFeed, now));
+  assert.doesNotThrow(() => parseRssFeed(channel(`<x>${"x".repeat(8192)}</x>`), rssFeed, now));
+  assert.doesNotThrow(() => parseRssFeed(channel(`<x><![CDATA[${"x".repeat(8192)}]]></x>`), rssFeed, now));
+  assert.equal(rssFailure(() => parseRssFeed(channel(`<x><![CDATA[${"x".repeat(8193)}]]></x>`), rssFeed, now)).subreason, "text_limit");
+  assert.equal(rssFailure(() => parseRssFeed(channel(`<x>${"🙂".repeat(2049)}</x>`), rssFeed, now)).subreason, "text_limit");
+});
+
+test("oversized irrelevant content remains rejected as text_limit", () => {
+  const xml = `<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/"><channel><content:encoded><![CDATA[${"x".repeat(8193)}]]></content:encoded></channel></rss>`;
+  assert.deepEqual(rssFailure(() => parseRssFeed(xml, rssFeed, now)), { reason: "structure", subreason: "text_limit" });
+});
+
+test("malformed XML keeps parse precedence over defensive missing-root and unclosed-element guards", () => {
+  for (const xml of ["", `<rss version="2.0"><channel>`]) {
+    assert.deepEqual(rssFailure(() => parseRssFeed(xml, rssFeed, now)), { reason: "parse" });
+  }
+});
+
 const healthyXml = `<rss version="2.0"><channel><title>F</title><item><title>One</title><link>https://example.com/news/one</link><pubDate>Thu, 16 Oct 2026 07:00:00 GMT</pubDate></item></channel></rss>`;
 
 const encoder = new TextEncoder();
@@ -409,6 +466,36 @@ test("collector isolates malformed, HTTP, media-type and body-limit failures", a
   assert.equal(result.observations.length, 1);
 });
 
+test("collector propagates only typed structural subreasons and keeps later feeds isolated", async () => {
+  const feeds = [
+    feed({ id: "structural", endpoint: "https://example.com/structural.xml" }),
+    feed({ id: "malformed", endpoint: "https://example.com/malformed.xml" }),
+    feed({ id: "provider_text", endpoint: "https://example.com/provider.xml" }),
+    feed({ id: "healthy", endpoint: "https://example.com/healthy.xml" }),
+  ];
+  const calls: string[] = [];
+  const result = await collectRss({ now, feeds, fetch: async input => {
+    const url = String(input);
+    calls.push(url);
+    if (url.endsWith("/structural.xml")) return new Response(
+      `<rss version="2.0"><channel><content:encoded xmlns:content="http://purl.org/rss/1.0/modules/content/"><![CDATA[${"x".repeat(8193)}]]></content:encoded></channel></rss>`,
+      { headers: { "content-type": "application/xml" } },
+    );
+    if (url.endsWith("/malformed.xml")) return new Response(`<rss><channel>`, { headers: { "content-type": "application/xml" } });
+    if (url.endsWith("/provider.xml")) throw new Error("PRIVATE_PROVIDER_RESPONSE UNIQUE_PRIVATE_FEED_TEXT");
+    return new Response(healthyXml, { headers: { "content-type": "application/xml" } });
+  } });
+  assert.deepEqual(calls, feeds.map(entry => entry.endpoint));
+  assert.deepEqual(result.metrics.outcomes.map(({ elapsedMs: _elapsedMs, ...outcome }) => outcome), [
+    { feedId: "structural", reason: "structure", subreason: "text_limit" },
+    { feedId: "malformed", reason: "parse" },
+    { feedId: "provider_text", reason: "http" },
+    { feedId: "healthy", reason: "ok" },
+  ]);
+  assert.doesNotMatch(JSON.stringify(result.metrics), /PRIVATE_PROVIDER_RESPONSE|UNIQUE_PRIVATE_FEED_TEXT/);
+  assert.equal(result.observations.length, 1);
+});
+
 test("collector rejects invalid UTF-8 and decoded streamed bodies over the fixed limit", async () => {
   const invalidUtf8 = new Uint8Array([0xc3, 0x28]);
   const oversized = new Uint8Array(RSS_LIMITS.bodyBytes + 1).fill(0x78);
@@ -434,6 +521,7 @@ test("collector deadline covers a stalled response body and cancels its reader",
   context.mock.timers.tick(RSS_LIMITS.timeoutMs);
   const result = await pending;
   assert.equal(result.metrics.outcomes[0]?.reason, "timeout");
+  assert.equal(Object.hasOwn(result.metrics.outcomes[0]!, "subreason"), false);
   assert.equal(cancelled, true);
 });
 

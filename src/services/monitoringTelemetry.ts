@@ -1,5 +1,5 @@
 import type { ApprovedGeminiModel } from "../config/geminiModels.js";
-import type { BraveDiscoverySourceHealth, DeliveryLedgerObservation, DiscoverySourceSuccessCounts, GeminiFailureClass, RssCycleMetrics, RssDiscoverySourceHealth, ThreadsCycleMetrics } from "../types/index.js";
+import { rssStructuralSubreasons, type BraveDiscoverySourceHealth, type DeliveryLedgerObservation, type DiscoverySourceSuccessCounts, type GeminiFailureClass, type RssCycleMetrics, type RssDiscoverySourceHealth, type RssStructuralSubreason, type ThreadsCycleMetrics } from "../types/index.js";
 import type { GeminiAmbiguityReason, GeminiUsageReservation, GeminiUsageSettlement } from "./geminiUsageTracker.js";
 
 export type AttemptRef = { cycleId: string; ordinal: 1 | 2 | 3 };
@@ -72,7 +72,7 @@ export type RssDiagnosticReason = "disabled" | "configuration" | "http" | "redir
 export type RssDiagnosticsV1 = {
   version: 1; status: "recorded"; collectionStatus: "disabled" | "configuration" | "collected";
   health: RssDiscoverySourceHealth; configuredFeeds: number; attemptedFeeds: number; succeededFeeds: number; failedFeeds: number;
-  outcomes: Array<{ feedId: RssDiagnosticFeedId; reason: RssDiagnosticReason; httpStatus?: number; elapsedMs: number }>;
+  outcomes: Array<{ feedId: RssDiagnosticFeedId; reason: RssDiagnosticReason; httpStatus?: number; subreason?: RssStructuralSubreason; elapsedMs: number }>;
 } | { version: 1; status: "unavailable"; reason: "invalid_metrics" | "snapshot_budget" };
 
 const threadQueryIds = ["ai_agents", "claude_code", "codex"] as const;
@@ -248,10 +248,12 @@ export function validateRssDiagnostics(value: unknown): RssDiagnosticsV1 {
     let succeeded = 0;
     let priorIndex = -1;
     for (const outcome of value.outcomes) {
-      if (!isObject(outcome) || !exactKeys(outcome, ["feedId", "reason", ...(Object.hasOwn(outcome, "httpStatus") ? ["httpStatus"] : []), "elapsedMs"]) ||
+      if (!isObject(outcome) || !exactKeys(outcome, ["feedId", "reason", ...(Object.hasOwn(outcome, "httpStatus") ? ["httpStatus"] : []),
+        ...(Object.hasOwn(outcome, "subreason") ? ["subreason"] : []), "elapsedMs"]) ||
         !member(outcome.feedId, rssFeedIds) || seen.has(outcome.feedId as string) || !member(outcome.reason, rssReasons) ||
         !count(outcome.elapsedMs, 5000) || (Object.hasOwn(outcome, "httpStatus") &&
-          (!(Number.isInteger(outcome.httpStatus) && Number(outcome.httpStatus) >= 100 && Number(outcome.httpStatus) <= 599) || outcome.reason !== "http"))) {
+          (!(Number.isInteger(outcome.httpStatus) && Number(outcome.httpStatus) >= 100 && Number(outcome.httpStatus) <= 599) || outcome.reason !== "http")) ||
+        (Object.hasOwn(outcome, "subreason") && (outcome.reason !== "structure" || !member(outcome.subreason, rssStructuralSubreasons)))) {
         throw new Error("RSS diagnostics are invalid.");
       }
       const index = rssFeedIds.indexOf(outcome.feedId as RssDiagnosticFeedId);
@@ -279,13 +281,17 @@ export function projectRssDiagnostics(metrics: unknown, health: RssDiscoverySour
   if (!isObject(metrics) || !exactKeys(metrics, ["status", "configuredFeeds", "attemptedFeeds", "succeededFeeds", "failedFeeds", "observedPositions", "validCandidates", "rejectedItems", "itemLimitTruncations", "outcomes"]) ||
     !member(metrics.status, ["disabled", "configuration", "collected"]) || !count(metrics.configuredFeeds, 5) || !count(metrics.attemptedFeeds, 5) ||
     !count(metrics.succeededFeeds, 5) || !count(metrics.failedFeeds, 5) || !Array.isArray(metrics.outcomes) || health === null) return unavailable();
-  const outcomes: Array<{ feedId: RssDiagnosticFeedId; reason: RssDiagnosticReason; httpStatus?: number; elapsedMs: number }> = [];
+  const outcomes: Array<{ feedId: RssDiagnosticFeedId; reason: RssDiagnosticReason; httpStatus?: number; subreason?: RssStructuralSubreason; elapsedMs: number }> = [];
   for (const raw of metrics.outcomes) {
-    if (!isObject(raw) || !exactKeys(raw, ["feedId", "reason", ...(Object.hasOwn(raw, "httpStatus") ? ["httpStatus"] : []), "elapsedMs"]) ||
+    if (!isObject(raw) || !exactKeys(raw, ["feedId", "reason", ...(Object.hasOwn(raw, "httpStatus") ? ["httpStatus"] : []),
+      ...(Object.hasOwn(raw, "subreason") ? ["subreason"] : []), "elapsedMs"]) ||
       !member(raw.feedId, rssFeedIds) || !member(raw.reason, rssReasons) || typeof raw.elapsedMs !== "number" || !Number.isFinite(raw.elapsedMs) || raw.elapsedMs < 0 ||
-      (Object.hasOwn(raw, "httpStatus") && (!(Number.isInteger(raw.httpStatus) && Number(raw.httpStatus) >= 100 && Number(raw.httpStatus) <= 599) || raw.reason !== "http"))) return unavailable();
+      (Object.hasOwn(raw, "httpStatus") && (!(Number.isInteger(raw.httpStatus) && Number(raw.httpStatus) >= 100 && Number(raw.httpStatus) <= 599) || raw.reason !== "http")) ||
+      (Object.hasOwn(raw, "subreason") && (raw.reason !== "structure" || !member(raw.subreason, rssStructuralSubreasons)))) return unavailable();
     outcomes.push({ feedId: raw.feedId as RssDiagnosticFeedId, reason: raw.reason as RssDiagnosticReason,
-      ...(Object.hasOwn(raw, "httpStatus") ? { httpStatus: raw.httpStatus as number } : {}), elapsedMs: Math.min(5000, Math.floor(raw.elapsedMs)) });
+      ...(Object.hasOwn(raw, "httpStatus") ? { httpStatus: raw.httpStatus as number } : {}),
+      ...(Object.hasOwn(raw, "subreason") ? { subreason: raw.subreason as RssStructuralSubreason } : {}),
+      elapsedMs: Math.min(5000, Math.floor(raw.elapsedMs)) });
   }
   const projected: RssDiagnosticsV1 = { version: 1, status: "recorded", collectionStatus: metrics.status as RssCycleMetrics["status"], health,
     configuredFeeds: metrics.configuredFeeds as number, attemptedFeeds: metrics.attemptedFeeds as number,

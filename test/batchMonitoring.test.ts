@@ -187,6 +187,35 @@ test("invalid optional RSS diagnostics use a bounded marker without blocking ana
   assert.deepEqual(warnings, ["invalid_metrics"], "one warning per cycle despite later checkpoints");
 });
 
+test("typed structural RSS evidence survives every Batch checkpoint without changing provider or delivery counts", async () => {
+  const f = fixture();
+  const checkpoints: unknown[] = [];
+  f.dependencies.collectRss = async () => emptyRss({ metrics: {
+    ...emptyRss().metrics, succeededFeeds: 3, failedFeeds: 1,
+    outcomes: [
+      { feedId: "openai_news", reason: "structure", subreason: "text_limit", elapsedMs: 7 },
+      ...emptyRss().metrics.outcomes.slice(1),
+    ],
+  } });
+  f.dependencies.onTelemetryCheckpoint = async (_phase, snapshot) => { checkpoints.push(snapshot.rssDiagnostics); };
+  const result = await run(f.dependencies);
+  const expected = {
+    version: 1, status: "recorded", collectionStatus: "collected", health: "degraded",
+    configuredFeeds: 4, attemptedFeeds: 4, succeededFeeds: 3, failedFeeds: 1,
+    outcomes: [
+      { feedId: "openai_news", reason: "structure", subreason: "text_limit", elapsedMs: 7 },
+      ...emptyRss().metrics.outcomes.slice(1),
+    ],
+  };
+  assert.deepEqual(checkpoints, [expected, expected]);
+  assert.equal(f.searchCalls(), 10);
+  assert.equal(f.analyzeCalls(), 1);
+  assert.equal(result.analysesAttempted, 1);
+  assert.equal(result.geminiProviderAttempts, 0, "offline analyze seam performs no provider dispatch");
+  assert.equal(result.notificationsSent, 1);
+  assert.equal(f.sent.length, 1);
+});
+
 test("excluded_analysis_candidate_remains_in_raw_fallback", async () => {
   const f = fixture();
   let queryOrdinal = 0;

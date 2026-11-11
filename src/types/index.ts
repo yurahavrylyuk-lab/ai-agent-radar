@@ -109,11 +109,27 @@ export interface CandidatePool {
 
 export type RssFailureReason = "disabled" | "configuration" | "http" | "redirect" | "timeout" | "body_limit" | "encoding" | "parse" | "structure" | "ok";
 
+export const rssStructuralSubreasons = [
+  "invalid_clock",
+  "element_limit",
+  "depth_limit",
+  "attribute_limit",
+  "multiple_roots",
+  "text_limit",
+  "doctype",
+  "missing_root",
+  "unclosed_elements",
+  "channel_cardinality",
+  "unsupported_root",
+] as const;
+
+export type RssStructuralSubreason = (typeof rssStructuralSubreasons)[number];
+
 export interface RssCycleMetrics {
   status: "disabled" | "configuration" | "collected";
   configuredFeeds: number; attemptedFeeds: number; succeededFeeds: number; failedFeeds: number;
   observedPositions: number; validCandidates: number; rejectedItems: number; itemLimitTruncations: number;
-  outcomes: Array<{ feedId: string; reason: RssFailureReason; httpStatus?: number; elapsedMs: number }>;
+  outcomes: Array<{ feedId: string; reason: RssFailureReason; httpStatus?: number; subreason?: RssStructuralSubreason; elapsedMs: number }>;
 }
 
 export interface RssDiscoveryResult {
