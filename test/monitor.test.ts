@@ -4,7 +4,7 @@ import { DISCOVERY_QUERY_DESCRIPTORS, MONITORING_FRESHNESS } from "../src/config
 import { MAX_NEW_ANALYSES_PER_CYCLE, MAX_SEARCH_FAILURE_ERROR_LENGTH, MONITORING_QUERIES, MONITORING_QUERY, runMonitoringCycle as runProductionMonitoringCycle, type MonitoringCycleDependencies } from "../src/services/monitor.js";
 import type { DiscoveryHistory } from "../src/services/discoveryHistory.js";
 import type { NotificationHistory } from "../src/services/notificationHistory.js";
-import { BraveUsageGuardDeniedError } from "../src/tools/webSearch.js";
+import { BraveRequestError, BraveUsageGuardDeniedError } from "../src/tools/webSearch.js";
 import { createGeminiCycleContext, MAX_GEMINI_ATTEMPTS_PER_ANALYSIS } from "../src/tools/llm/gemini.js";
 import type { GeminiAvailability, GeminiBlockedReason } from "../src/services/geminiUsageGuard.js";
 import type { AgentAnalysis, DeliveryCandidate, DiscoveryProcessingResult, NotificationRecord, NotificationResult, SearchResult, StoredDiscovery } from "../src/types/index.js";
@@ -640,6 +640,21 @@ test("recorded search-failure diagnostics are bounded and redact credential-shap
   for (const forbidden of ["example.test", "person@example.test", "bearer-value", "credential-value"]) {
     assert.equal(diagnostic.includes(forbidden), false);
   }
+});
+
+test("bounded Brave transport failures reach monitoring diagnostics without provider or query content", async () => {
+  const outcome = await runMonitoringCycle(undefined, {
+    search: async (query) => {
+      if (query === MONITORING_QUERIES[0]) return [searchResult("usable-for-brave-error")];
+      if (query === MONITORING_QUERIES[1]) throw new BraveRequestError("http", 503);
+      return [];
+    },
+    hasDiscovery: async () => true,
+    process: async (item) => processed(item, "duplicate"),
+    notify: batchNotify("not_eligible"),
+  });
+  assert.deepEqual(outcome.searchFailures, [{ queryOrdinal: 2, error: "Brave Search API returned 503." }]);
+  assert.equal(outcome.searchFailures[0]?.error.includes(MONITORING_QUERIES[1] ?? ""), false);
 });
 
 test("default monitoring rejects when non-quota failures leave zero usable results without retrying", async () => {
