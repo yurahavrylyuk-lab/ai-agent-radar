@@ -1,5 +1,12 @@
 # Self-improvement changelog
 
+## 2026-11-11 — Add bounded RSS structural diagnostic subreasons
+
+- Added a closed eleven-value structural subreason contract derived only from known RSS parser predicates, with typed collector propagation, strict producer projection, persisted snapshot validation, and independent scheduled-summary allowlisting. Arbitrary exception/feed text cannot enter the diagnostic field.
+- Preserved malformed-XML `parse` precedence, every RSS acquisition/parser limit, historical v1 snapshots without the field, the 1,024-byte RSS diagnostic limit, and the 8,192-byte complete-snapshot limit. No schema or migration was added.
+- Added parser-boundary, collector-isolation, telemetry corruption/compatibility, Batch checkpoint, scheduled-summary, and real Workerd/D1 restart/readback coverage. Full offline suite passes 821/821; build, typecheck, Workerd, Wrangler dry-run/bundle, and diff gates pass.
+- Local implementation only in `cd507135589845ca2c365e47f71c6436af55f8a2`; awaiting independent review. Older strict exact-key readers may reject snapshots containing the extension, so compatible-reader rollback is a release prerequisite.
+
 ## 2026-11-10 — Correct RSS diagnostic integrity and final warning coverage
 
 - Added persisted cross-field validation requiring non-null root RSS health to equal recorded nested diagnostic health, while preserving root-null partial snapshots, omission markers and historical rows without diagnostics.

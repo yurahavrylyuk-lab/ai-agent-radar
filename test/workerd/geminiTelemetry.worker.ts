@@ -23,7 +23,7 @@ const rssSnapshot: CycleSnapshotV1 = {
     version: 1, status: "recorded", collectionStatus: "collected", health: "degraded",
     configuredFeeds: 4, attemptedFeeds: 4, succeededFeeds: 3, failedFeeds: 1,
     outcomes: [
-      { feedId: "openai_news", reason: "http", httpStatus: 503, elapsedMs: 25 },
+      { feedId: "openai_news", reason: "structure", subreason: "text_limit", elapsedMs: 25 },
       { feedId: "github_changelog", reason: "ok", elapsedMs: 10 },
       { feedId: "cloudflare_ai", reason: "ok", elapsedMs: 20 },
       { feedId: "chrome_developers", reason: "ok", elapsedMs: 30 },
@@ -33,6 +33,7 @@ const rssSnapshot: CycleSnapshotV1 = {
 const cycleId = "11111111-1111-4111-8111-111111111111";
 const legacyCycleId = "22222222-2222-4222-8222-222222222222";
 const corruptCycleId = "33333333-3333-4333-8333-333333333333";
+const corruptSubreasonCycleId = "44444444-4444-4444-8444-444444444444";
 
 async function readState(db: D1Database) {
   const snapshots = await db.prepare("SELECT kind,value FROM workerd_snapshots ORDER BY kind").all<{ kind: string; value: string }>();
@@ -41,6 +42,8 @@ async function readState(db: D1Database) {
   const legacyCycle = await telemetry.readCycle(legacyCycleId);
   let corruptRejected = false;
   try { await telemetry.readCycle(corruptCycleId); } catch { corruptRejected = true; }
+  let corruptSubreasonRejected = false;
+  try { await telemetry.readCycle(corruptSubreasonCycleId); } catch { corruptSubreasonRejected = true; }
   const raw = await db.prepare("SELECT snapshot_json FROM monitoring_cycles WHERE cycle_id=?1").bind(cycleId).first<{ snapshot_json: string }>();
   return {
     usage: await db.prepare("SELECT value FROM workerd_usage WHERE id=1").first<{ value: string }>(),
@@ -49,7 +52,7 @@ async function readState(db: D1Database) {
     rssCycle: persisted && { cycleId: persisted.cycle.cycleId, phase: persisted.phase, snapshot: persisted.snapshot },
     rssRaw: raw ? JSON.parse(raw.snapshot_json) : null,
     legacyCycle: legacyCycle && { phase: legacyCycle.phase, rssDiagnostics: legacyCycle.snapshot.rssDiagnostics ?? null },
-    corruptRejected,
+    corruptRejected, corruptSubreasonRejected,
   };
 }
 
@@ -71,10 +74,15 @@ export default {
     } });
     await telemetry.createCycle({ cycleId: legacyCycleId, scheduledAt: "2026-11-10T08:00:00.000Z", startedAt: "2026-11-10T08:00:01.000Z", sourceSha: null, workerVersion: null });
     await telemetry.createCycle({ cycleId: corruptCycleId, scheduledAt: "2026-11-10T08:00:00.000Z", startedAt: "2026-11-10T08:00:01.000Z", sourceSha: null, workerVersion: null });
+    await telemetry.createCycle({ cycleId: corruptSubreasonCycleId, scheduledAt: "2026-11-10T08:00:00.000Z", startedAt: "2026-11-10T08:00:01.000Z", sourceSha: null, workerVersion: null });
     await env.DB.prepare("UPDATE monitoring_cycles SET snapshot_json=?1 WHERE cycle_id=?2")
       .bind(JSON.stringify({ ...legacySnapshot, rssHealth: "healthy", rssDiagnostics: { version: 1, status: "recorded", collectionStatus: "collected", health: "degraded",
         configuredFeeds: 1, attemptedFeeds: 1, succeededFeeds: 0, failedFeeds: 1,
         outcomes: [{ feedId: "openai_news", reason: "timeout", elapsedMs: 5000 }] } }), corruptCycleId).run();
+    await env.DB.prepare("UPDATE monitoring_cycles SET snapshot_json=?1 WHERE cycle_id=?2")
+      .bind(JSON.stringify({ ...legacySnapshot, rssHealth: "unavailable", rssDiagnostics: { version: 1, status: "recorded", collectionStatus: "collected", health: "unavailable",
+        configuredFeeds: 1, attemptedFeeds: 1, succeededFeeds: 0, failedFeeds: 1,
+        outcomes: [{ feedId: "openai_news", reason: "structure", subreason: "PRIVATE_XML_TEXT", elapsedMs: 1 }] } }), corruptSubreasonCycleId).run();
     let rollbackError = false;
     try {
       await env.DB.batch([
@@ -89,6 +97,7 @@ export default {
     ]);
     const legacyKeys = ["version", "braveHealth", "rssHealth", "outage", "candidateCounts", "geminiDispatchCount", "delivery", "accounting"];
     const oldStrictRejectsExtended = Object.keys(latencySnapshot).some(key => !legacyKeys.includes(key));
-    return Response.json({ rollbackError, rolledBack, settled: await readState(env.DB), changes: results.map(result => result.meta.changes), returned: results.map(result => result.results), oldStrictRejectsExtended });
+    const oldStrictRejectsRssSubreason = rssSnapshot.rssDiagnostics.outcomes.some(outcome => Object.keys(outcome).some(key => !["feedId", "reason", "httpStatus", "elapsedMs"].includes(key)));
+    return Response.json({ rollbackError, rolledBack, settled: await readState(env.DB), changes: results.map(result => result.meta.changes), returned: results.map(result => result.results), oldStrictRejectsExtended, oldStrictRejectsRssSubreason });
   },
 };

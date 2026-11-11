@@ -1,5 +1,13 @@
 # AI Agent Radar project state
 
+## 2026-11-11 — RSS structural subreasons ready for independent review
+
+The human-approved five-task RSS Structural Subreasons design is implemented locally on `feature/rss-structural-subreasons` from baseline `d9573439542421b65d1a6d807c97f724c3b7252e`. The existing persisted `reason: "structure"` outcome may now carry one optional exact allowlisted parser-predicate code; historical v1 snapshots without the field remain valid, while unknown, malformed, non-structure, expanded, or private-text values fail closed or are omitted at the optional producer boundary.
+
+Parser acceptance, failure precedence, feeds, request count, timeout/body/XML limits, sequential acquisition, candidate behavior, Gemini/Luna accounting, email delivery, Cron, bindings, and schemas are unchanged. Malformed XML remains `parse`; the oversized irrelevant-content case remains rejected as `structure/text_limit`. Focused tests pass 134/134, full tests pass 821/821, and build, Worker typecheck, RSS/Gemini/email Workerd harnesses, real local Workerd/D1 restart/readback, Wrangler dry-run/bundle audit, and diff checks pass.
+
+Status is **IMPLEMENTED / OFFLINE-TESTED / AWAITING INDEPENDENT ANALYST REVIEW / NOT MERGED / NOT PUBLISHED / NOT DEPLOYED / NOT NATURALLY VALIDATED**. The optional v1 field is backward-readable by the new code, but an older strict exact-key production reader may reject an extended record; a future release must therefore retain a compatible-reader rollback version. No migration or production/provider action occurred.
+
 ## 2026-11-10 — RSS diagnostic persistence Analyst corrections ready for re-review
 
 Initial independent review returned `AI_RADAR_RSS_DIAGNOSTICS_CHANGES_REQUIRED`. The correction now rejects any persisted snapshot whose non-null root `rssHealth` contradicts a recorded nested diagnostic health; omission markers and root-null partial/error snapshots remain valid. Real local D1 and Workerd restart/readback tests prove contradictory persisted JSON cannot bypass the strict adapter parser.

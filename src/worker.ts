@@ -19,6 +19,7 @@ import { createMonitoringCycleSnapshot, finalizeStatusOnlyMonitoringCycle, runBa
 import { createDailyEmailContext, type DailyDeliveryDependencies } from "./services/notificationOrchestrator.js";
 import { collectRss } from "./services/rssDiscovery.js";
 import { RSS_FEEDS } from "./config/rssSources.js";
+import { rssStructuralSubreasons } from "./types/index.js";
 import { collectThreads } from "./services/threadsDiscovery.js";
 import { THREADS_QUERIES } from "./config/threadsSources.js";
 import type { BatchCycleMetrics, MonitoringCycleResult, RssCycleMetrics, ThreadsCycleMetrics } from "./types/index.js";
@@ -303,7 +304,9 @@ function summarizeRss(rss: RssCycleMetrics): RssCycleMetrics {
     const reason = allowedString(outcome.reason, ["disabled", "configuration", "http", "redirect", "timeout", "body_limit", "encoding", "parse", "structure", "ok"] as const);
     if (!reason) return [];
     const httpStatus = Number.isInteger(outcome.httpStatus) && outcome.httpStatus! >= 100 && outcome.httpStatus! <= 599 ? outcome.httpStatus : undefined;
-    return [{ feedId: outcome.feedId, reason, ...(httpStatus === undefined ? {} : { httpStatus }), elapsedMs: boundedCount(outcome.elapsedMs, 5000) }];
+    const subreason = reason === "structure" ? allowedString(outcome.subreason, rssStructuralSubreasons) : undefined;
+    return [{ feedId: outcome.feedId, reason, ...(httpStatus === undefined ? {} : { httpStatus }),
+      ...(subreason === undefined ? {} : { subreason }), elapsedMs: boundedCount(outcome.elapsedMs, 5000) }];
   });
   return {
     status: allowedString(rss.status, ["disabled", "configuration", "collected"] as const) ?? "configuration",

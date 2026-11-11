@@ -1,7 +1,7 @@
 import { SaxesParser, type SaxesTagNS } from "saxes";
 
 import { isApprovedRssArticleUrl, RSS_FEEDS, RSS_LIMITS, validateRssFeeds, type RssFeedDefinition } from "../config/rssSources.js";
-import type { RssCycleMetrics, RssDiscoveryResult, RssFailureReason, SearchResult } from "../types/index.js";
+import { rssStructuralSubreasons, type RssCycleMetrics, type RssDiscoveryResult, type RssFailureReason, type RssStructuralSubreason, type SearchResult } from "../types/index.js";
 import { truncateUtf8, utf8Length } from "./batchPrompt.js";
 
 const ATOM_NS = "http://www.w3.org/2005/Atom";
@@ -14,7 +14,15 @@ export interface RssParseResult {
 
 
 export class RssDocumentError extends Error {
-  constructor(readonly reason: "parse" | "structure") { super(`RSS ${reason} failure`); }
+  readonly reason: "parse" | "structure";
+  declare readonly subreason?: RssStructuralSubreason;
+  constructor(reason: "parse");
+  constructor(reason: "structure", subreason?: RssStructuralSubreason);
+  constructor(reason: "parse" | "structure", subreason?: RssStructuralSubreason) {
+    super(`RSS ${reason} failure`);
+    this.reason = reason;
+    if (subreason !== undefined) this.subreason = subreason;
+  }
 }
 
 interface XmlNode {
@@ -106,7 +114,7 @@ function parseAtomEntry(entry: XmlNode, feed: RssFeedDefinition, now: Date, xmlB
 
 /** Parses a complete bounded RSS 2.0 or namespace-correct Atom 1.0 document. */
 export function parseRssFeed(xml: string, feed: RssFeedDefinition, now: Date): RssParseResult {
-  if (!(now instanceof Date) || Number.isNaN(now.getTime())) throw new RssDocumentError("structure");
+  if (!(now instanceof Date) || Number.isNaN(now.getTime())) throw new RssDocumentError("structure", "invalid_clock");
   let root: XmlNode | undefined;
   const stack: XmlNode[] = [];
   let elements = 0;
@@ -117,17 +125,18 @@ export function parseRssFeed(xml: string, feed: RssFeedDefinition, now: Date): R
   parser.on("doctype", () => { unsafeDeclaration = true; });
   parser.on("opentag", (raw: SaxesTagNS) => {
     elements += 1;
-    if (elements > RSS_LIMITS.elements || stack.length + 1 > RSS_LIMITS.depth) throw new RssDocumentError("structure");
+    if (elements > RSS_LIMITS.elements) throw new RssDocumentError("structure", "element_limit");
+    if (stack.length + 1 > RSS_LIMITS.depth) throw new RssDocumentError("structure", "depth_limit");
     const attributes: Record<string, string> = {};
     for (const [name, attribute] of Object.entries(raw.attributes)) {
       const value = attribute.value;
-      if (utf8Length(value) > RSS_LIMITS.fieldBytes) throw new RssDocumentError("structure");
+      if (utf8Length(value) > RSS_LIMITS.fieldBytes) throw new RssDocumentError("structure", "attribute_limit");
       attributes[name] = value;
       if (name === "xml:base" || (attribute.uri === "http://www.w3.org/XML/1998/namespace" && attribute.local === "base")) xmlBasePresent = true;
     }
     const node: XmlNode = { local: raw.local, uri: raw.uri, attributes, text: "", children: [] };
     if (stack.length === 0) {
-      if (root) throw new RssDocumentError("structure");
+      if (root) throw new RssDocumentError("structure", "multiple_roots");
       root = node;
     } else stack.at(-1)!.children.push(node);
     stack.push(node);
@@ -136,7 +145,7 @@ export function parseRssFeed(xml: string, feed: RssFeedDefinition, now: Date): R
     const node = stack.at(-1);
     if (!node) return;
     node.text += text;
-    if (utf8Length(node.text) > RSS_LIMITS.fieldBytes) throw new RssDocumentError("structure");
+    if (utf8Length(node.text) > RSS_LIMITS.fieldBytes) throw new RssDocumentError("structure", "text_limit");
   };
   parser.on("text", append);
   parser.on("cdata", append);
@@ -147,19 +156,22 @@ export function parseRssFeed(xml: string, feed: RssFeedDefinition, now: Date): R
     if (error instanceof RssDocumentError) throw error;
     throw new RssDocumentError("parse");
   }
-  if (parseFailure || unsafeDeclaration || !root || stack.length !== 0) throw new RssDocumentError(parseFailure ? "parse" : "structure");
+  if (parseFailure) throw new RssDocumentError("parse");
+  if (unsafeDeclaration) throw new RssDocumentError("structure", "doctype");
+  if (!root) throw new RssDocumentError("structure", "missing_root");
+  if (stack.length !== 0) throw new RssDocumentError("structure", "unclosed_elements");
 
   let items: XmlNode[];
   let parseItem: (item: XmlNode) => SearchResult | null;
   if (root.local === "rss" && root.uri === "") {
     const channels = children(root, "channel", "");
-    if (channels.length !== 1) throw new RssDocumentError("structure");
+    if (channels.length !== 1) throw new RssDocumentError("structure", "channel_cardinality");
     items = children(channels[0]!, "item", "");
     parseItem = item => parseRssItem(item, feed, now, xmlBasePresent);
   } else if (root.local === "feed" && root.uri === ATOM_NS) {
     items = children(root, "entry", ATOM_NS);
     parseItem = item => parseAtomEntry(item, feed, now, xmlBasePresent);
-  } else throw new RssDocumentError("structure");
+  } else throw new RssDocumentError("structure", "unsupported_root");
 
   const positions = items.slice(0, RSS_LIMITS.itemsPerFeed).map((item, index) => ({ itemOrdinal: index + 1, result: parseItem(item) }));
   return {
@@ -241,6 +253,7 @@ export async function collectRss(options: { now: Date; fetch: typeof fetch; feed
     const timer = setTimeout(() => controller.abort(), RSS_LIMITS.timeoutMs);
     let reason: RssFailureReason = "http";
     let httpStatus: number | undefined;
+    let subreason: RssStructuralSubreason | undefined;
     try {
       const response = await withAbort(options.fetch(feed.endpoint, {
         method: "GET",
@@ -265,7 +278,12 @@ export async function collectRss(options: { now: Date; fetch: typeof fetch; feed
       }
       let parsed: RssParseResult;
       try { parsed = parseRssFeed(xml, feed, options.now); }
-      catch (error) { reason = error instanceof RssDocumentError ? error.reason : "parse"; throw error; }
+      catch (error) {
+        reason = error instanceof RssDocumentError ? error.reason : "parse";
+        if (error instanceof RssDocumentError && error.reason === "structure" && typeof error.subreason === "string" &&
+          rssStructuralSubreasons.includes(error.subreason)) subreason = error.subreason;
+        throw error;
+      }
       for (const position of parsed.positions) observations.push({ result: position.result, provenance: { kind: "rss", feedId: feed.id, itemOrdinal: position.itemOrdinal } });
       metrics.succeededFeeds += 1;
       metrics.observedPositions += parsed.positions.length;
@@ -275,10 +293,11 @@ export async function collectRss(options: { now: Date; fetch: typeof fetch; feed
       reason = "ok";
     } catch {
       metrics.failedFeeds += 1;
-      if (controller.signal.aborted) reason = "timeout";
+      if (controller.signal.aborted) { reason = "timeout"; subreason = undefined; }
     } finally {
       clearTimeout(timer);
-      metrics.outcomes.push({ feedId: feed.id, reason, ...(reason === "http" && httpStatus !== undefined ? { httpStatus } : {}), elapsedMs: Math.max(0, Date.now() - started) });
+      metrics.outcomes.push({ feedId: feed.id, reason, ...(reason === "http" && httpStatus !== undefined ? { httpStatus } : {}),
+        ...(subreason !== undefined ? { subreason } : {}), elapsedMs: Math.max(0, Date.now() - started) });
     }
   }
   return { observations, metrics };
