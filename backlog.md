@@ -2,14 +2,14 @@
 
 ## Current v1.0 authority — 2026-11-11
 
-This section supersedes conflicting status/priority labels in the dated historical entries below; those entries remain audit history, not current execution authority. Human authorization is ARCHITECTURE AND ROADMAP ONLY. No runtime or test implementation is authorized until human design review and Builder handoff.
+This section supersedes conflicting status/priority labels in the dated historical entries below; those entries remain audit history, not current execution authority. The human approved the Brave design and five-task Builder handoff; that bounded implementation is now local and awaiting independent Analyst review. Publication, merge and production remain separately gated.
 
 Baseline `e97440a99d918e7df905e4b22f5560c9649d6620`: local main and live GitHub main verified equal. RSS Structural Subreasons is independently approved, merged, published and CI-verified per the human release record; source publication is independently verified here. It is NOT DEPLOYED. RSS Diagnostic Persistence and Idempotent Email Delivery passed the supplied November 11 natural-cycle evidence; old awaiting-review/unpublished/unapplied labels describe earlier milestones, not current release state. No fresh production or CI query is claimed here.
 
 ### Mandatory v1.0 order
 
 0. **Release gate: RSS Structural Subreasons.** Before activation, designate and validate a rollback artifact whose strict snapshot reader accepts old and extended v1 RSS records and preserves email-ledger behavior. After any extended record exists, do not roll back to an old exact-key reader. Prefer the reviewed release or a narrowly corrected compatible release; if policy requires a distinct rollback artifact, approve a minimal reader-only backport first. No standalone rollback platform, history rewriting, telemetry deletion, or deployment in this task. Natural validation may be inconclusive if no structural failure occurs.
-1. **Brave Request Timeout + Bounded Response — next proposed Builder task.** Narrow transport/body bounds; existing budgets, successful-header accounting, queries, freshness and ranking remain unchanged. Design and sequential TDD plan await human review.
+1. **Brave Request Timeout + Bounded Response — IMPLEMENTED / OFFLINE-TESTED / AWAITING INDEPENDENT ANALYST REVIEW.** The local feature branch adds the approved five-second complete-operation deadline, 256 KiB success and 16 KiB error-body caps, strict decode/parse, manual redirect rejection and fixed content-free failures. Existing budgets, successful-header accounting, queries, freshness and ranking remain unchanged. It is not published, merged, deployed or naturally validated.
 2. **Email Feedback + Preference Learning MVP — HIGH PRIORITY / REQUIRED FOR V1.0.** Per-story Relevant / Not relevant links, safe explicit POST confirmation, durable idempotent/correctable votes and bounded deterministic preference ranking. Design only; public-route/security, migration, signing-key and payload-retention approval gates remain separate.
 3. **RSS Structural Failure Resolution.** Use new persisted predicate evidence for OpenAI/Cloudflare; do not assume the irrelevant-field hypothesis is either feed's cause. No parser/source change without evidence and bounded review.
 4. **Cross-Source Event Deduplication.** Conservative same-event identification; uncertain matches and genuinely different announcements remain distinct.
@@ -30,7 +30,7 @@ Claude Platform remains a proposal generator/backlog adviser, never implementati
 - [Feedback/preference design](docs/superpowers/specs/2026-11-11-email-feedback-preferences-design.md)
 - [Feedback/preference sequential TDD plan](docs/superpowers/plans/2026-11-11-email-feedback-preferences.md)
 
-Only Brave is proposed for the next runtime cycle. Feedback design review may proceed in documentation, but feedback implementation must not enter the Brave diff. Existing protected historical specification remains untracked and byte-identical. Human → Architect → Builder → independent Analyst → Architect → Human remains mandatory; publication and production permissions are separate.
+Brave is the current review cycle. Feedback design review may proceed in documentation, but feedback implementation did not enter the Brave diff. Existing protected historical specification remains untracked and byte-identical. Human → Architect → Builder → independent Analyst → Architect → Human remains mandatory; publication and production permissions are separate.
 
 ## 2026-11-09 — D1 release safeguard verification corrected
 

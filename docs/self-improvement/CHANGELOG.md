@@ -1,5 +1,12 @@
 # Self-improvement changelog
 
+## 2026-11-11 — Bound Brave request time and response bodies
+
+- Added one five-second deadline covering Brave dispatch through bounded body read, strict UTF-8 decode and JSON parse; redirects remain manual/unfollowed and there is no retry or extra dispatch.
+- Replaced unbounded response consumption with 262,144-byte success and 16,384-byte error caps, strict declared/streamed byte enforcement, non-blocking cancellation and fixed content-free failure categories.
+- Preserved successful-header accounting, quota/query/freshness/first-five behavior and every downstream source/analyzer/email invariant. Added focused Node coverage and a loopback-only real Workerd proof; full and explicit recursive suites pass 841/841 with build/typecheck/all Workerd/dry-run/bundle/diff gates.
+- Local implementation only; awaiting independent Analyst review. No publication, merge, deployment, migration, production D1, monitoring, email or provider action occurred.
+
 ## 2026-11-11 — Reconcile v1.0 roadmap and prepare bounded designs
 
 - Superseded stale current-status labels while retaining historical records; recorded RSS subreasons as published, human-confirmed approved/CI-verified, not deployed, with a minimal compatible-reader rollback gate.
