@@ -1,5 +1,37 @@
 # AI Agent Radar — Architecture and roadmap
 
+## Current v1.0 authority — 2026-11-11
+
+This section supersedes conflicting status/priority labels in the dated historical entries below; those entries remain audit history, not current execution authority. Human authorization is ARCHITECTURE AND ROADMAP ONLY. No runtime or test implementation is authorized until human design review and Builder handoff.
+
+Baseline `e97440a99d918e7df905e4b22f5560c9649d6620`: local main and live GitHub main verified equal. RSS Structural Subreasons is independently approved, merged, published and CI-verified per the human release record; source publication is independently verified here. It is NOT DEPLOYED. RSS Diagnostic Persistence and Idempotent Email Delivery passed the supplied November 11 natural-cycle evidence; old awaiting-review/unpublished/unapplied labels describe earlier milestones, not current release state. No fresh production or CI query is claimed here.
+
+### Mandatory v1.0 order
+
+0. **Release gate: RSS Structural Subreasons.** Before activation, designate and validate a rollback artifact whose strict snapshot reader accepts old and extended v1 RSS records and preserves email-ledger behavior. After any extended record exists, do not roll back to an old exact-key reader. Prefer the reviewed release or a narrowly corrected compatible release; if policy requires a distinct rollback artifact, approve a minimal reader-only backport first. No standalone rollback platform, history rewriting, telemetry deletion, or deployment in this task. Natural validation may be inconclusive if no structural failure occurs.
+1. **Brave Request Timeout + Bounded Response — next proposed Builder task.** Narrow transport/body bounds; existing budgets, successful-header accounting, queries, freshness and ranking remain unchanged. Design and sequential TDD plan await human review.
+2. **Email Feedback + Preference Learning MVP — HIGH PRIORITY / REQUIRED FOR V1.0.** Per-story Relevant / Not relevant links, safe explicit POST confirmation, durable idempotent/correctable votes and bounded deterministic preference ranking. Design only; public-route/security, migration, signing-key and payload-retention approval gates remain separate.
+3. **RSS Structural Failure Resolution.** Use new persisted predicate evidence for OpenAI/Cloudflare; do not assume the irrelevant-field hypothesis is either feed's cause. No parser/source change without evidence and bounded review.
+4. **Cross-Source Event Deduplication.** Conservative same-event identification; uncertain matches and genuinely different announcements remain distinct.
+5. **Bounded Failure-Cause Diagnostics.** Accepted Claude Platform proposal; closed, bounded, logs-only diagnostics. No extra provider dispatch, email route or D1 telemetry without separate approval.
+6. **CI and Maintenance.** Combine Workerd CI Runtime Gate with the two accepted Claude proposals: nested test discovery correction and Node.js 24 TypeScript typings alignment. Verify compatible changes together; no separate large refactoring projects.
+7. **Final Stabilization / v1.0.** Offline/full Workerd regression, explicitly approved releases, daily-email integrity, feedback persistence and preference-ranking verification, operations runbook and human acceptance. Target seven consecutive natural daily cycles with no unresolved critical delivery/accounting failures; record exact dates and evidence, never manufacture cycles. External integrations need not all be activated.
+
+### Deferred, not v1.0 prerequisites
+
+Threads activation until official Meta/business approvals (do not rebuild it); deprecated X/0004; full Claude Self-Upgrade Autopilot; major legacy refactoring; broad pipeline-limit restructuring; advanced/LLM preference optimization; telemetry-degraded content continuity unless new production evidence elevates it.
+
+Claude Platform remains a proposal generator/backlog adviser, never implementation, main-change, merge or deployment authority. The three accepted proposals above are recorded from the explicit human brief; no separate proposal artifacts were located, so no invented proposal IDs or broader scope are attached.
+
+### Design handoff
+
+- [Brave bounds design](docs/superpowers/specs/2026-11-11-brave-request-bounds-design.md)
+- [Brave bounds sequential TDD plan](docs/superpowers/plans/2026-11-11-brave-request-bounds.md)
+- [Feedback/preference design](docs/superpowers/specs/2026-11-11-email-feedback-preferences-design.md)
+- [Feedback/preference sequential TDD plan](docs/superpowers/plans/2026-11-11-email-feedback-preferences.md)
+
+Only Brave is proposed for the next runtime cycle. Feedback design review may proceed in documentation, but feedback implementation must not enter the Brave diff. Existing protected historical specification remains untracked and byte-identical. Human → Architect → Builder → independent Analyst → Architect → Human remains mandatory; publication and production permissions are separate.
+
 ## 2026-11-09 — Reproducible D1 release-safeguard verification
 
 **Current verification authority:** the allowlist strategy is unchanged, while its evidence is corrected. A fresh empty database is not a valid predecessor for `0007_row22_exact_recovery.sql`; it must contain the exact reviewed historical row-22 state. A committed integration test now reconstructs that state using real local Wrangler migration execution and history recording, demonstrates `0010` as the sole pending approved migration after `0009`, and verifies that `0004` and synthetic future `0011` remain excluded. The previous Builder run is retained as exploratory evidence only. Passing Builder tests do not authorize or certify a production migration; focused independent review and separate human production authorization remain mandatory.

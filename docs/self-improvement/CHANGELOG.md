@@ -1,5 +1,12 @@
 # Self-improvement changelog
 
+## 2026-11-11 — Reconcile v1.0 roadmap and prepare bounded designs
+
+- Superseded stale current-status labels while retaining historical records; recorded RSS subreasons as published, human-confirmed approved/CI-verified, not deployed, with a minimal compatible-reader rollback gate.
+- Made Email Feedback + Preference Learning a required high-priority v1.0 feature; documented scanner-safe confirmation, bounded capability security, minimal D1 approach, immutable-payload implications and deterministic ranking.
+- Prepared the next Brave request/body-bounds design and sequential RED → GREEN plan without implementing either feature.
+- Incorporated the three accepted Claude proposals and combined CI maintenance; separated deferred scope. Human design review and separate Builder authorization remain required.
+
 ## 2026-11-11 — Add bounded RSS structural diagnostic subreasons
 
 - Added a closed eleven-value structural subreason contract derived only from known RSS parser predicates, with typed collector propagation, strict producer projection, persisted snapshot validation, and independent scheduled-summary allowlisting. Arbitrary exception/feed text cannot enter the diagnostic field.

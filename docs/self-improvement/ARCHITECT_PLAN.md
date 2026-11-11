@@ -1,5 +1,17 @@
 # Architect Plan
 
+## Current design handoff — 2026-11-11
+
+Architect decision: **HUMAN REVIEW**. Implementation lifecycle: **EMPTY** (no newly authorized Builder cycle). The historical P6/X plan below remains superseded; its instructions are not executable authority.
+
+Scope completed here: v1.0 roadmap reconciliation and two documentation-only designs/TDD plans. Baseline `e97440a99d918e7df905e4b22f5560c9649d6620`; authorized local design branch `feature/radar-v1-roadmap-brave-bounds`. Human workflow clarification supersedes the preceding kickoff's immediate implementation permission. No runtime or runtime-test edits.
+
+Next proposed sole runtime task is [Brave bounds](../superpowers/specs/2026-11-11-brave-request-bounds-design.md), following its [sequential TDD plan](../superpowers/plans/2026-11-11-brave-request-bounds.md). Acceptance: 5-second request/body deadline, 256 KiB success/16 KiB error response limits, strict decode/JSON, fixed error classes, no redirects/retries/pagination, existing quota and successful-header accounting preserved, isolated Workerd proof. All are design proposals pending approval, not executed checks.
+
+[Feedback design](../superpowers/specs/2026-11-11-email-feedback-preferences-design.md) and [TDD plan](../superpowers/plans/2026-11-11-email-feedback-preferences.md) are required v1.0 planning, not a concurrent runtime cycle. Review the frozen-token retention conflict explicitly before authorizing feedback implementation.
+
+After human design approval, record the exact authorized Builder branch (the dedicated feature branch is the proposed exception to the generic self-improvement convention), baseline, revision and scope, then transition EMPTY → READY. Builder → one independent Analyst review → Architect disposition → Human. Do not alter Analyst-owned historical review evidence or claim a new PASS. No merge/push/deploy authorization follows from readiness.
+
 > **Status: SUPERSEDED / HISTORICAL**
 >
 > This file preserves the reviewed P6/X architecture as historical context only. It must not be used as current implementation or activation authority. P6/X production activation is deprecated, X is disabled with zero production dependency, and `0004_x_discovery.sql` intentionally remains unapplied. The active discovery-source roadmap is **Brave → RSS → Threads**.

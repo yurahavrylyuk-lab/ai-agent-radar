@@ -1,0 +1,31 @@
+# Email Feedback + Preference Learning — sequential TDD plan
+
+2026-11-11. DESIGN ONLY / HUMAN REVIEW. [Specification](../specs/2026-11-11-email-feedback-preferences-design.md). Six sequential tasks for a later separately authorized Builder cycle, followed by one independent Analyst review. Do not mix with Brave implementation. Resolve the signed-token/frozen-payload retention conflict and approve the HTTP boundary first.
+
+## 1. Capability and confirmation primitives
+
+RED: canonical signing/verification, key rotation, exact audience/purpose, expiry boundaries and issuedAt, malformed/noncanonical input, duplicate/unknown fields, wrong digest/story/delivery/slot/rating, tampered and oversized tokens, wrong-origin confirmation and stale revision. GREEN: minimal Web Crypto HMAC primitives with fixed schemas and error classes. Verify no logs/errors contain token, key, recipient or provider/private content. Frozen key/expiry generation is deterministic from delivery identity, not retry clock. No live endpoint or secret is used.
+
+## 2. Migration and atomic feedback persistence
+
+Reinspect migrations: propose 0011 only if still free. RED against isolated fixture for constraints, maximum four bindings per delivery, accepted-delivery/payload binding, duplicate vote, correction CAS, racing submissions, audit consistency, revision cap, invalid story/delivery, transactions lost before/after commit and process restart. GREEN: feedback tables and narrow D1 adapter. Prove atomic current vote/event writes and atomic delivery reserve/binding seam under real Workerd/D1 semantics, not only mocks. Verify legacy ledger rows without bindings and all existing delivery fences still work. Test 180-day bounded child-first pruning never touches email ledger/history or valid links.
+
+Migration-selection tests must explicitly add the reviewed 0011 name to temporary and future approved source allowlist, prove exact history/no-op repeat, predecessor including the historic row22 prerequisite, unchanged sentinel data, exclusion of 0004 and a synthetic future 0012. No direct SQL execution outside tracked migration history for production; no remote operation now.
+
+## 3. Immutable email preparation and rendering
+
+RED: each final story (normal analyzed, fallback analyzed, raw degraded) gets both valid actions in HTML/text; status-only has none. Escaping, link/title/payload byte bounds and actual delivered identity must match. Unknown raw topics remain empty; no fake discovery insert. GREEN: derive stable capabilities/bindings before formatting/freeze; transactionally reserve the matching ledger and binding set before dispatch. Existing recovery returns exact bytes before any fresh generation. Test key rotation, changed preferences/clock, concurrent preparations, failed reserve, winner/loser payload mismatch, provider acceptance crash and later recovery; assert same Resend body SHA/key and no duplicate send. Historical frozen emails remain untouched and recoverable without links. No extra HTML/raw-token storage outside the explicitly approved frozen-payload exception.
+
+## 4. Scanner-safe HTTP confirmation
+
+RED: repeated GET, HEAD, preview/prefetch and scanner traversal cause zero D1 writes/votes/emails; valid POST writes once. Invalid/expired token, unauthenticated arbitrary story, missing/wrong Origin, wrong method/path, extra fields, bad content type, overlarge/slow body, frame/embed, malicious title and arbitrary redirect destination fail safely. GREEN: only approved routes with HTTPS enforcement, bounded static confirmation page and explicit human form, nonce/revision validation, fixed responses/security headers. GET can read state but never create mutation authority in D1. POST duplicate returns already-recorded; changed vote requires fresh revision, stale page returns conflict. Test unavailable D1 and pending/ambiguous delivery rejection. No endpoint can start monitoring or call a provider. Verify logging fixtures exclude capabilities and browser telemetry; platform query-log privacy remains a separate pre-release operational gate.
+
+## 5. Deterministic preference ranking
+
+RED: zero feedback cold start, one accidental vote, minimum five observations, net difference threshold, balanced conflict, repeated positive/negative, multiple topics/no topics, raw votes, changed vote replacing prior contribution, immutable-date 90-day cutoff, deterministic newest-400 selection and one contribution per discovery identity. GREEN: bounded query and pure profile calculation from current votes. Preserve baseline lane/relevance order and use at most ±0.5 only for same-lane equal-score analyzed ties; stable original index on equality. Test no score mutation, no new normal/P4 eligibility, no trusted-source bypass, history dedupe, four-item/one-email caps, no additional provider call and no suppression from a single negative. Profile failure yields neutral ranking without weakening history/ledger admission. Frozen recovery ignores newly changed preferences.
+
+## 6. Integrated offline evidence and human handoff
+
+Run focused tests then full recursive test inventory, npm test, build, Worker typecheck and isolated feedback Workerd/D1 restart/readback; re-run the existing email, Gemini/RSS, OpenAI and source harnesses relevant to shared Worker/finalizer changes. Verify exact frozen payload across real restart and no duplicate provider creation in the synthetic email receiver. Inspect installed commands before running; no downloads/live providers/production IDs. Wrangler dry-run and bundle/privacy audit, migration-selection proof, diff/whitespace and protected checksum are mandatory. Keep configuration/gov changes within explicit security approval; do not touch Cron, spend or existing migrations.
+
+Record actual meaningful RED failures and GREEN results, exact reviewed commit, schema/route compatibility and rollback evidence. Independent Analyst must review signature and authorization boundaries, scan safety, atomic vote/audit/delivery association, immutable payload, preference bounds and all retained production safeguards. Tests do not authorize a migration or endpoint activation. Human must separately approve publication, production schema/secret/routing/deployment actions and natural human-feedback verification. No unsolicited email, manual monitoring or next-feature kickoff.
