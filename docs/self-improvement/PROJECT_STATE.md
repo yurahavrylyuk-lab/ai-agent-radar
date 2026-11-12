@@ -1,5 +1,13 @@
 # AI Agent Radar project state
 
+## 2026-11-12 — V1 release privacy and compatibility preparation ready for review
+
+Email Feedback + Preference Learning is independently approved, merged, published and CI-verified on main `8e0783bf4a9e1a41efc01c4efe498c8592ff6c8d`; production activation remains separately gated. Local commit `e6a842e` on `feature/v1-release-preparation-privacy-compatibility` adds source-controlled `observability.redact_query_string: true` while retaining persistent sampled logs and disabled traces, plus focused release compatibility evidence. This source setting does not prove effective Cloudflare/export privacy; deployed configuration, every applicable external sink and a sanitized-canary check remain mandatory before activation.
+
+Disabled feedback configuration remains health-only and performs no feedback-specific D1 access. Representative partial configurations fail before feedback side effects; complete synthetic configuration activates only the approved feedback routes and preserves canonical signing, one-email/provider limits and exact frozen recovery. Isolated installed-Wrangler evidence constructs the exact migration ledger through `0010`, preserves discovery and accepted-delivery data, identifies only `0011` as pending, excludes `0004` and a synthetic future migration, applies `0011`, verifies its tables/indexes/triggers and proves repeat apply/list are no-ops.
+
+The current RSS reader accepts historical snapshots without diagnostics, historical v1 structure outcomes without subreason, all approved structural subreasons and both bounded unavailable markers, while rejecting corrupt fields, invalid subreason placement and oversize snapshots. Once extended RSS records exist, an older strict reader is not automatically rollback-safe. Status: **LOCAL IMPLEMENTATION / OFFLINE-TESTED / AWAITING INDEPENDENT ANALYST REVIEW / NOT PUSHED / NOT MERGED / NOT DEPLOYED / FEEDBACK INACTIVE**. Migration `0011` remains unapplied; no production D1, secret, monitoring, email or provider action occurred.
+
 ## 2026-11-12 — Email Feedback + Preference Learning MVP ready for independent review
 
 The human-approved six-task design is implemented locally on `feature/email-feedback-preferences-mvp` from architecture checkpoint `df4c3daf7a85dcd0b0e83015acf6aff8ad19d0a6` and published-main baseline `9518c26d4224cf6c7d2e4ca1b6e4b8ba0d13e15b`. Newly prepared actual story cards receive Relevant and Not relevant actions in HTML and text; status-only messages do not. Thirty-day canonical HMAC capabilities are bound to immutable delivery/story/slot/rating identity, and raw tokens persist only in the already-required frozen payload. Feedback tables store digests.

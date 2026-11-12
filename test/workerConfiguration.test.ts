@@ -166,6 +166,69 @@ test("Worker composition uses D1 stores and exposes a scheduled handler without 
   assert.equal(await response.text(), "AI Agent Radar worker ready");
 });
 
+test("feedback-disabled Worker remains health-only without feedback database access", async () => {
+  const env = environment();
+  env.DB = new Proxy({} as D1Database, {
+    get() { throw new Error("feedback database must not be accessed"); },
+  });
+  for (const request of [
+    new Request("https://worker.example/feedback?token=untrusted"),
+    new Request("https://worker.example/feedback", { method: "HEAD" }),
+    new Request("https://worker.example/feedback/confirm", { method: "POST", body: "untrusted" }),
+  ]) {
+    const response = await worker.fetch(request, env);
+    assert.equal(response.status, 200);
+    assert.equal(await response.text(), "AI Agent Radar worker ready");
+  }
+});
+
+test("every representative partial feedback configuration fails before feedback database access", () => {
+  const untouchedDatabase = new Proxy({} as D1Database, {
+    get() { throw new Error("feedback database must not be accessed"); },
+  });
+  const partials: Array<Partial<RadarWorkerEnv>> = [
+    { FEEDBACK_ORIGIN: "https://feedback.example" },
+    { FEEDBACK_SIGNING_KEY_ID: "active" },
+    { FEEDBACK_SIGNING_KEY: "a".repeat(32) },
+    { FEEDBACK_ORIGIN: "https://feedback.example", FEEDBACK_SIGNING_KEY_ID: "active" },
+    {
+      FEEDBACK_ORIGIN: "https://feedback.example", FEEDBACK_SIGNING_KEY_ID: "active",
+      FEEDBACK_SIGNING_KEY: "a".repeat(32), FEEDBACK_RETIRING_KEY_ID: "retiring",
+    },
+    {
+      FEEDBACK_ORIGIN: "https://feedback.example", FEEDBACK_SIGNING_KEY_ID: "active",
+      FEEDBACK_SIGNING_KEY: "a".repeat(32), FEEDBACK_RETIRING_KEY: "r".repeat(32),
+    },
+  ];
+  for (const partial of partials) {
+    const env = { ...environment(), DB: untouchedDatabase, ...partial };
+    assert.throws(
+      () => worker.fetch(new Request("https://worker.example/feedback?token=untrusted"), env),
+      /Feedback configuration is incomplete/,
+    );
+  }
+});
+
+test("complete synthetic feedback configuration activates only the bounded feedback routes", async () => {
+  const env = {
+    ...environment(),
+    DB: new Proxy({} as D1Database, {
+      get() { throw new Error("invalid capability must be rejected before feedback database access"); },
+    }),
+    FEEDBACK_ORIGIN: "https://feedback.example",
+    FEEDBACK_SIGNING_KEY_ID: "active",
+    FEEDBACK_SIGNING_KEY: "a".repeat(32),
+    FEEDBACK_RETIRING_KEY_ID: "retiring",
+    FEEDBACK_RETIRING_KEY: "r".repeat(32),
+  };
+  const feedback = await worker.fetch(new Request("https://feedback.example/feedback?token=untrusted"), env);
+  assert.equal(feedback.status, 400);
+  assert.match(await feedback.text(), /Feedback unavailable/);
+  const health = await worker.fetch(new Request("https://feedback.example/other"), env);
+  assert.equal(health.status, 200);
+  assert.equal(await health.text(), "AI Agent Radar worker ready");
+});
+
 test("Worker search composition forwards the monitoring freshness option without a provider request", async () => {
   const calls: Array<{ query: string; freshness: string | undefined }> = [];
   const dependencies = createWorkerMonitoringDependencies(environment(), {
@@ -181,17 +244,26 @@ test("Worker search composition forwards the monitoring freshness option without
 test("default scheduled Worker uses batch entry with no X tables and HTTP methods/paths remain health-only", async () => {
   const env = environment();
   const fixture = await createProductionEmailDeliveryDatabase();
+  const preparedSql: string[] = [];
+  const originalPrepare = fixture.d1.prepare.bind(fixture.d1);
+  fixture.d1.prepare = (sql: string) => {
+    preparedSql.push(sql);
+    return originalPrepare(sql);
+  };
   env.DB = fixture.d1 as unknown as D1Database;
   const originalFetch = globalThis.fetch;
   const originalInfo = console.info;
   const providerUrls: string[] = [];
   const summaries: unknown[] = [];
   try {
-    globalThis.fetch = async input => {
+    globalThis.fetch = async (input, init) => {
       providerUrls.push(String(input));
       const hostname = new URL(String(input)).hostname;
       if (hostname === "api.search.brave.com") return new Response(JSON.stringify({ web: { results: [] } }));
-      if (hostname === "api.resend.com") return new Response(JSON.stringify({ id: "status-message" }));
+      if (hostname === "api.resend.com") {
+        assert.doesNotMatch(String(init?.body), /feedback\?token=|Relevant:|Not relevant:/);
+        return new Response(JSON.stringify({ id: "status-message" }));
+      }
       assert.ok(["openai.com", "github.blog", "blog.cloudflare.com", "developer.chrome.com"].includes(hostname));
       return new Response(`<rss version="2.0"><channel><title>Empty</title></channel></rss>`, { headers: { "content-type": "application/rss+xml" } });
     };
@@ -214,6 +286,7 @@ test("default scheduled Worker uses batch entry with no X tables and HTTP method
     });
     assert.ok(rssDiagnostics?.status === "recorded" && rssDiagnostics.outcomes.every(outcome => outcome.elapsedMs >= 0 && outcome.elapsedMs <= 5000));
     assert.equal((fixture.sqlite.prepare("SELECT count(*) AS count FROM email_deliveries WHERE state='accepted'").get() as { count: number }).count, 1);
+    assert.equal(preparedSql.some(sql => /email_feedback_/i.test(sql)), false);
     providerUrls.length = 0;
     const cyclesBeforeHealth = (fixture.sqlite.prepare("SELECT count(*) AS count FROM monitoring_cycles").get() as { count: number }).count;
     for (const method of ["GET", "POST"]) {

@@ -20,11 +20,11 @@ The project is an educational discovery and project-idea radar: its aim is not j
 - Local discovery and notification history preserve operational state across runs.
 - Recently analyzed but unnotified discoveries can be replayed from durable history without another Gemini analysis.
 
-Production runs in Cloudflare Workers with D1-backed persistence. Public HTTP remains health-only; monitoring runs only from the daily Cloudflare Cron Trigger.
+Production runs in Cloudflare Workers with D1-backed persistence. Feedback-disabled deployments remain health-only. A separately configured feedback-enabled deployment exposes only read-only `GET`/`HEAD /feedback` confirmation and mutating `POST /feedback/confirm`; neither route can start monitoring or dispatch a provider. Monitoring runs only from the daily Cloudflare Cron Trigger. Production feedback remains inactive pending separate release approval.
 
 ## Cloudflare Worker and D1 foundation
 
-The repository contains the production Cloudflare Worker with D1-backed persistence. The Worker has a harmless health response only; it does not run monitoring from HTTP requests.
+The repository contains the production Cloudflare Worker with D1-backed persistence. Without complete feedback configuration, the Worker has only the harmless health response. With complete approved feedback configuration, its only additional HTTP surface is `GET`/`HEAD /feedback` and `POST /feedback/confirm`; HTTP never runs monitoring or calls discovery, analysis, or email providers.
 
 Current:
 
@@ -68,6 +68,8 @@ X is disabled and production activation is abandoned/deprecated. Migration `0004
 RSS discovery is implemented and deployed for four approved first-party feeds. It is bounded to five configured feeds, five item positions per feed, one request with no retry or redirect, a 5-second request-through-body deadline, and 1 MiB per feed. Feed failures are isolated and do not stop Brave. The Workerd native-fetch receiver issue is fixed.
 
 The natural 2026-10-20 production cycle proved GitHub Changelog and Chrome for Developers succeeded and supplied valid RSS candidates to the shared Gemini pool. OpenAI and Cloudflare AI reached `body_limit` and remain follow-up reliability work; all four feeds are not claimed healthy.
+
+The current reader accepts both historical snapshots and the bounded RSS structural-subreason extension. After an extended snapshot has been persisted, an older strict Worker that rejects the optional field is not automatically a safe rollback target; release approval must retain a compatible reader.
 
 ### Optional Threads discovery (offline implementation; not activated)
 

@@ -5,6 +5,7 @@ import { formatDailyDigestEmail } from "../src/services/discoveryEmailFormatter.
 import { deliveryIdentity, freezeDelivery } from "../src/services/emailDeliveryLedger.js";
 import { D1EmailDeliveryLedger } from "../src/services/d1EmailDeliveryLedger.js";
 import { handleEmailFeedbackRoute } from "../src/services/emailFeedbackRoutes.js";
+import { createDailyEmailContext, finalizeDailyDigest } from "../src/services/notificationOrchestrator.js";
 import { createEmailDeliveryDatabase } from "./fixtures/emailDeliveryD1.js";
 import type { PreparedDailyDigest } from "../src/types/index.js";
 
@@ -22,6 +23,32 @@ test("actual story cards receive bounded Relevant and Not relevant actions while
   const status=formatDailyDigestEmail({mode:"status_only",reason:"no_eligible_stories",cycleDate:identity.scheduledAt,items:[]},prepared.actions);
   assert.doesNotMatch(status.text,/feedback\?token=/);
   assert.equal(prepared.bindings[0]?.topics.length,0);
+});
+
+test("complete feedback delivery configuration freezes signed actions and recovery reuses the accepted payload",async()=>{
+  const {sqlite,d1}=await createEmailDeliveryDatabase(true);
+  try{
+    const ledger=new D1EmailDeliveryLedger(d1 as unknown as D1Database);
+    let sends=0;
+    let sentBody="";
+    const first=await finalizeDailyDigest(digest,{
+      context:createDailyEmailContext(),identity,ledger,recipient:"owner@example.test",sender:"AI Radar <radar@example.test>",
+      feedback:{origin,keyring},
+      sendFrozen:async body=>{sends+=1;sentBody=body;return{kind:"accepted",id:"feedback-config-fixture"};},
+    });
+    assert.equal(first.emailOutcome,"accepted");
+    assert.match(sentBody,/https:\/\/feedback\.example\/feedback\?token=/);
+    assert.equal(sqlite.prepare("SELECT count(*) count FROM email_feedback_stories").get()?.count,1);
+
+    const recovered=await finalizeDailyDigest(digest,{
+      context:createDailyEmailContext(),identity,ledger,recipient:"owner@example.test",sender:"AI Radar <radar@example.test>",
+      feedback:{origin,keyring:{active:{id:"new",secret:"n".repeat(32)},retiring:keyring.active}},
+      sendFrozen:async()=>{sends+=1;return{kind:"accepted",id:"unexpected"};},
+    });
+    assert.equal(recovered.emailAttempts,0);
+    assert.equal(recovered.emailOutcome,"accepted");
+    assert.equal(sends,1);
+  }finally{sqlite.close();}
 });
 
 test("GET and HEAD are read-only while exact-origin POST records once",async()=>{
