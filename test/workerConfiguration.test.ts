@@ -244,17 +244,26 @@ test("Worker search composition forwards the monitoring freshness option without
 test("default scheduled Worker uses batch entry with no X tables and HTTP methods/paths remain health-only", async () => {
   const env = environment();
   const fixture = await createProductionEmailDeliveryDatabase();
+  const preparedSql: string[] = [];
+  const originalPrepare = fixture.d1.prepare.bind(fixture.d1);
+  fixture.d1.prepare = (sql: string) => {
+    preparedSql.push(sql);
+    return originalPrepare(sql);
+  };
   env.DB = fixture.d1 as unknown as D1Database;
   const originalFetch = globalThis.fetch;
   const originalInfo = console.info;
   const providerUrls: string[] = [];
   const summaries: unknown[] = [];
   try {
-    globalThis.fetch = async input => {
+    globalThis.fetch = async (input, init) => {
       providerUrls.push(String(input));
       const hostname = new URL(String(input)).hostname;
       if (hostname === "api.search.brave.com") return new Response(JSON.stringify({ web: { results: [] } }));
-      if (hostname === "api.resend.com") return new Response(JSON.stringify({ id: "status-message" }));
+      if (hostname === "api.resend.com") {
+        assert.doesNotMatch(String(init?.body), /feedback\?token=|Relevant:|Not relevant:/);
+        return new Response(JSON.stringify({ id: "status-message" }));
+      }
       assert.ok(["openai.com", "github.blog", "blog.cloudflare.com", "developer.chrome.com"].includes(hostname));
       return new Response(`<rss version="2.0"><channel><title>Empty</title></channel></rss>`, { headers: { "content-type": "application/rss+xml" } });
     };
@@ -277,6 +286,7 @@ test("default scheduled Worker uses batch entry with no X tables and HTTP method
     });
     assert.ok(rssDiagnostics?.status === "recorded" && rssDiagnostics.outcomes.every(outcome => outcome.elapsedMs >= 0 && outcome.elapsedMs <= 5000));
     assert.equal((fixture.sqlite.prepare("SELECT count(*) AS count FROM email_deliveries WHERE state='accepted'").get() as { count: number }).count, 1);
+    assert.equal(preparedSql.some(sql => /email_feedback_/i.test(sql)), false);
     providerUrls.length = 0;
     const cyclesBeforeHealth = (fixture.sqlite.prepare("SELECT count(*) AS count FROM monitoring_cycles").get() as { count: number }).count;
     for (const method of ["GET", "POST"]) {
