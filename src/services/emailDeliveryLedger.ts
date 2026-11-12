@@ -1,6 +1,7 @@
 import { batchAliasKey } from "./batchCandidates.js";
 import { normalizeDiscoveryUrl } from "./discoveryHistoryCore.js";
 import type { DailyDigestMode, DailyDigestReason, DiscoveryEmailContent, PreparedDailyDigest } from "../types/index.js";
+import type { FeedbackStoryBinding } from "./d1EmailFeedbackStore.js";
 
 const encoder = new TextEncoder();
 const SUBJECT_BYTES = 1024;
@@ -74,6 +75,7 @@ export type ResendOutcome = { kind: "accepted"; id: string }
 export interface DeliveryLedger {
   read(key: DeliveryKey): Promise<DeliveryRecord | null>;
   reserve(frozen: FrozenDelivery): Promise<MutationResult>;
+  reserveWithBindings?(frozen: FrozenDelivery, bindings: readonly FeedbackStoryBinding[]): Promise<MutationResult>;
   claim(key: DeliveryKey, token: string): Promise<MutationResult>;
   admitDispatch(ref: ClaimRef): Promise<MutationResult>;
   verifyDispatch(ref: ClaimRef): Promise<{ record: DeliveryRecord; databaseNow: string }>;
