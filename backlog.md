@@ -1,5 +1,37 @@
 # AI Agent Radar — Backlog
 
+## Current v1.0 authority — 2026-11-11
+
+This section supersedes conflicting status/priority labels in the dated historical entries below; those entries remain audit history, not current execution authority. The human approved the Brave design and five-task Builder handoff; that bounded implementation is now local and awaiting independent Analyst review. Publication, merge and production remain separately gated.
+
+Baseline `e97440a99d918e7df905e4b22f5560c9649d6620`: local main and live GitHub main verified equal. RSS Structural Subreasons is independently approved, merged, published and CI-verified per the human release record; source publication is independently verified here. It is NOT DEPLOYED. RSS Diagnostic Persistence and Idempotent Email Delivery passed the supplied November 11 natural-cycle evidence; old awaiting-review/unpublished/unapplied labels describe earlier milestones, not current release state. No fresh production or CI query is claimed here.
+
+### Mandatory v1.0 order
+
+0. **Release gate: RSS Structural Subreasons.** Before activation, designate and validate a rollback artifact whose strict snapshot reader accepts old and extended v1 RSS records and preserves email-ledger behavior. After any extended record exists, do not roll back to an old exact-key reader. Prefer the reviewed release or a narrowly corrected compatible release; if policy requires a distinct rollback artifact, approve a minimal reader-only backport first. No standalone rollback platform, history rewriting, telemetry deletion, or deployment in this task. Natural validation may be inconclusive if no structural failure occurs.
+1. **Brave Request Timeout + Bounded Response — IMPLEMENTED / OFFLINE-TESTED / AWAITING INDEPENDENT ANALYST REVIEW.** The local feature branch adds the approved five-second complete-operation deadline, 256 KiB success and 16 KiB error-body caps, strict decode/parse, manual redirect rejection and fixed content-free failures. Existing budgets, successful-header accounting, queries, freshness and ranking remain unchanged. It is not published, merged, deployed or naturally validated.
+2. **Email Feedback + Preference Learning MVP — HIGH PRIORITY / REQUIRED FOR V1.0.** Per-story Relevant / Not relevant links, safe explicit POST confirmation, durable idempotent/correctable votes and bounded deterministic preference ranking. Design only; public-route/security, migration, signing-key and payload-retention approval gates remain separate.
+3. **RSS Structural Failure Resolution.** Use new persisted predicate evidence for OpenAI/Cloudflare; do not assume the irrelevant-field hypothesis is either feed's cause. No parser/source change without evidence and bounded review.
+4. **Cross-Source Event Deduplication.** Conservative same-event identification; uncertain matches and genuinely different announcements remain distinct.
+5. **Bounded Failure-Cause Diagnostics.** Accepted Claude Platform proposal; closed, bounded, logs-only diagnostics. No extra provider dispatch, email route or D1 telemetry without separate approval.
+6. **CI and Maintenance.** Combine Workerd CI Runtime Gate with the two accepted Claude proposals: nested test discovery correction and Node.js 24 TypeScript typings alignment. Verify compatible changes together; no separate large refactoring projects.
+7. **Final Stabilization / v1.0.** Offline/full Workerd regression, explicitly approved releases, daily-email integrity, feedback persistence and preference-ranking verification, operations runbook and human acceptance. Target seven consecutive natural daily cycles with no unresolved critical delivery/accounting failures; record exact dates and evidence, never manufacture cycles. External integrations need not all be activated.
+
+### Deferred, not v1.0 prerequisites
+
+Threads activation until official Meta/business approvals (do not rebuild it); deprecated X/0004; full Claude Self-Upgrade Autopilot; major legacy refactoring; broad pipeline-limit restructuring; advanced/LLM preference optimization; telemetry-degraded content continuity unless new production evidence elevates it.
+
+Claude Platform remains a proposal generator/backlog adviser, never implementation, main-change, merge or deployment authority. The three accepted proposals above are recorded from the explicit human brief; no separate proposal artifacts were located, so no invented proposal IDs or broader scope are attached.
+
+### Design handoff
+
+- [Brave bounds design](docs/superpowers/specs/2026-11-11-brave-request-bounds-design.md)
+- [Brave bounds sequential TDD plan](docs/superpowers/plans/2026-11-11-brave-request-bounds.md)
+- [Feedback/preference design](docs/superpowers/specs/2026-11-11-email-feedback-preferences-design.md)
+- [Feedback/preference sequential TDD plan](docs/superpowers/plans/2026-11-11-email-feedback-preferences.md)
+
+Brave is the current review cycle. Feedback design review may proceed in documentation, but feedback implementation did not enter the Brave diff. Existing protected historical specification remains untracked and byte-identical. Human → Architect → Builder → independent Analyst → Architect → Human remains mandatory; publication and production permissions are separate.
+
 ## 2026-11-09 — D1 release safeguard verification corrected
 
 **D1 RELEASE SAFEGUARD = CORRECTED / OFFLINE-TESTED / AWAITING FOCUSED INDEPENDENT REVIEW.** The Analyst confirmed the allowlist itself but found that applying it to an empty database correctly fails at historical recovery migration `0007`; the earlier Builder application report was exploratory evidence and was not a committed regression test. The committed test now drives installed Wrangler against isolated local D1 persistence, applies `0001`, `0002`, `0003`, `0005`, and `0006`, inserts the exact historical row-22 precondition plus a preservation sentinel, applies `0007` through `0009`, proves only `0010` is pending, applies it once, verifies the ledger/schema/data, and proves a repeat is a no-op. `0004` and synthetic future `0011` are present in the disposable migration directory but remain unselected and unapplied. Focused migration tests pass 5/5 and the full suite passes 802/802. This is Builder evidence, not production-readiness approval; no remote migration or deployment occurred.

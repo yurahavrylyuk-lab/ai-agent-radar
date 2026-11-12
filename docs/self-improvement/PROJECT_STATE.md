@@ -1,5 +1,25 @@
 # AI Agent Radar project state
 
+## 2026-11-11 — Brave request bounds ready for independent review
+
+The human-approved Brave design and five-task TDD plan are implemented locally on `feature/radar-v1-roadmap-brave-bounds` from approved documentation commit `25e6cb7748245dab1320f95229685a9e5672212f` and main baseline `e97440a99d918e7df905e4b22f5560c9649d6620`. The transport now has one five-second deadline from dispatch through body/decode/parse, a 262,144-byte success cap, a 16,384-byte error cap, strict UTF-8/JSON/shape validation, manual unfollowed redirects, fixed content-free errors and best-effort non-blocking stream cancellation.
+
+Quota admission, ten-query order, one request/query, no retries/pagination, successful-header usage accounting, five-position mapping, freshness, candidate selection and all downstream RSS/Gemini/Luna/email behavior remain unchanged. The known residual accounting boundary also remains: pre-header and non-success dispatches have no new reservation ledger, while any observed successful 2xx starts exactly one durable write before body acceptance and candidates remain blocked until it succeeds.
+
+Offline evidence passes: focused Brave/usage/monitoring tests, Batch/Worker regressions, full and explicit-recursive test inventories (841/841 each), build, Worker typecheck, six loopback/local-D1 Workerd harnesses including the new actual five-second Brave proof, Wrangler dry-run, bundle/dependency audit and diff checks. Status is **IMPLEMENTED / OFFLINE-TESTED / AWAITING INDEPENDENT ANALYST REVIEW / NOT PUBLISHED / NOT MERGED / NOT DEPLOYED / NOT NATURALLY VALIDATED**. No provider, monitoring, email, production D1 or migration action occurred.
+
+## 2026-11-11 — V1.0 roadmap reconciled; architecture only (historical handoff)
+
+Current source baseline is `e97440a99d918e7df905e4b22f5560c9649d6620`, verified as local main and live GitHub main. The human supersedes the earlier 61-character transcription with protected SHA-256 `67ebe90fdda67d9312f952cb477d38e5c78fff69396f8e4bbbc6bc6405d09a66`; the actual file matches.
+
+RSS Structural Subreasons: **INDEPENDENTLY APPROVED / MERGED / PUBLISHED / CI VERIFIED (human evidence) / NOT DEPLOYED / NOT NATURALLY VALIDATED**. The prior implementation/review-pending entries below are historical. Supplied November 11 evidence established RSS Diagnostic Persistence and email/accounting operation; production has not been queried in this task. Old production snapshots and pending-migration labels below must not be treated as current remote D1 inspection.
+
+Authoritative v1.0 order: RSS compatible-reader release gate → Brave transport/body bounds → required high-priority Email Feedback + Preference Learning MVP → evidence-led RSS structural correction → cross-source event dedupe → bounded logs-only failure diagnostics → combined Workerd CI/nested-test/Node24-typings maintenance → final stabilization and seven natural daily cycles without unresolved critical delivery/accounting failure. See [plan](../../plan.md) and [backlog](../../backlog.md) for scope, deferred items and design links.
+
+Three accepted Claude proposals are included from the human brief: bounded failure-cause diagnostics, nested test discovery, Node24 typings. Autopilot is advisory only. Threads activation, X, broad refactoring/limit restructuring, autonomous upgrades, advanced preference optimization and telemetry-degraded continuity are outside the critical path.
+
+This was the pre-implementation stage. The Brave Builder task is now complete locally as recorded above. Feedback still requires explicit public-route/security, D1 migration selection/application, secret and signed-link frozen-payload retention decisions. Existing health-only HTTP and all production safeguards remain authoritative until a separately approved release.
+
 ## 2026-11-11 — RSS structural subreasons ready for independent review
 
 The human-approved five-task RSS Structural Subreasons design is implemented locally on `feature/rss-structural-subreasons` from baseline `d9573439542421b65d1a6d807c97f724c3b7252e`. The existing persisted `reason: "structure"` outcome may now carry one optional exact allowlisted parser-predicate code; historical v1 snapshots without the field remain valid, while unknown, malformed, non-structure, expanded, or private-text values fail closed or are omitted at the optional producer boundary.
