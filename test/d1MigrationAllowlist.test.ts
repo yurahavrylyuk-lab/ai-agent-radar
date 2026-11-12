@@ -19,6 +19,7 @@ const approvedMigrations = [
   "0008_monitoring_cycle_observability.sql",
   "0009_openai_fallback_usage.sql",
   "0010_email_delivery_ledger.sql",
+  "0011_email_feedback.sql",
 ] as const;
 
 test("production D1 migration discovery is an explicit reviewed allowlist", () => {

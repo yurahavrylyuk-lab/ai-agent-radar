@@ -20,7 +20,7 @@
       "database_name": "ai-agent-radar",
       "database_id": "9fb545e2-2f43-4922-8b21-2d79a8de9556",
       "migrations_dir": "migrations",
-      "migrations_pattern": "migrations/{0001_initial,0002_controlled_execution_lock,0003_gemini_usage_model,0005_gemini_ambiguity_accounting,0006_gemini_timeout_admission,0007_row22_exact_recovery,0008_monitoring_cycle_observability,0009_openai_fallback_usage,0010_email_delivery_ledger}.sql"
+      "migrations_pattern": "migrations/{0001_initial,0002_controlled_execution_lock,0003_gemini_usage_model,0005_gemini_ambiguity_accounting,0006_gemini_timeout_admission,0007_row22_exact_recovery,0008_monitoring_cycle_observability,0009_openai_fallback_usage,0010_email_delivery_ledger,0011_email_feedback}.sql"
     }
   ],
   "vars": {

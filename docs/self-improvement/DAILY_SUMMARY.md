@@ -1,5 +1,16 @@
 # Daily Self-Improvement Summary
 
+## 2026-11-12 — Email Feedback + Preference Learning MVP Builder completion
+
+- Targeted Analyst correction: the shared Base64URL decoder now rejects alternate encodings whose unused terminal bits decode to the same signature bytes. Focused RED reproduced both capability and confirmation acceptance (4/6 passed, 2 expected failures); GREEN passed 8/8, the feedback/delivery/recovery set passed 143/143, and the full recursive suite passed 862/862. Browser, feedback D1, email recovery and all relevant Workerd harnesses, build, typecheck, Wrangler dry-run, generated-file, bundle/privacy and whitespace checks passed. No signing, delivery, route, D1, preference or provider semantics changed.
+- Implemented the approved six-task MVP on `feature/email-feedback-preferences-mvp` from checkpoint `df4c3daf7a85dcd0b0e83015acf6aff8ad19d0a6` and main baseline `9518c26d4224cf6c7d2e4ca1b6e4b8ba0d13e15b`.
+- Added canonical 30-day HMAC capabilities, ten-minute revision-bound confirmation nonces, active-plus-retiring verification, fixed audience/purpose, bounded fixed-category failures, and no raw-token storage outside immutable frozen email content.
+- Added local-only migration `0011_email_feedback.sql`, atomic frozen-delivery/binding reservation, accepted-delivery vote CAS with trigger-coupled audit, ten-revision cap, latest-400/current-vote preference reads and bounded child-first 180-day cleanup.
+- Added per-card HTML/text actions, scanner-safe read-only GET/HEAD and exact-origin POST routes, streamed 4 KiB/five-second form handling, safe headers, real-browser Origin/Referer proof, and real Workerd/D1 restart/readback evidence.
+- Added deterministic neutral-by-default preferences: minimum five observations, absolute net three, ±0.5 topic adjustment averaged across topics, applied only inside same-lane/equal-score analyzed positions after notification-history checks. No eligibility, score, provider dispatch, email count, replay or frozen-recovery behavior changed.
+- Final offline evidence: recursive `npm test` passed 858/858; build and Worker typecheck passed; the real-browser Origin/Referer regression passed; the feedback Workerd/D1 harness and all six pre-existing Workerd regression harnesses passed sequentially; Wrangler dry-run passed at 434.08 KiB / 92.58 KiB gzip; generated types, whitespace, bundle dependency/privacy audit, migration allowlist and protected-file checksum checks passed.
+- Production gates remain open: exact origin, signing secrets, Cloudflare query-log/export privacy, migration/application, rollback compatibility, independent review, publication and deployment. No production or live-provider action occurred.
+
 ## 2026-11-11 — Brave request bounds Builder completion
 
 - Human authorization covered the exact design `docs/superpowers/specs/2026-11-11-brave-request-bounds-design.md` and five-task plan `docs/superpowers/plans/2026-11-11-brave-request-bounds.md` on branch `feature/radar-v1-roadmap-brave-bounds`, starting at `25e6cb7748245dab1320f95229685a9e5672212f` from main `e97440a99d918e7df905e4b22f5560c9649d6620`.

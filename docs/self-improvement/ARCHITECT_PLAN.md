@@ -1,5 +1,9 @@
 # Architect Plan
 
+## 2026-11-12 — Email feedback security decisions
+
+Architect disposition: **ARCHITECTURE FINALIZED FOR HANDOFF; no feedback Builder execution authorization**. [Focused decision record](2026-11-12-email-feedback-security-decisions.md) confirms compatibility with verified published main `9518c26d4224cf6c7d2e4ca1b6e4b8ba0d13e15b`, records the now human-confirmed frozen-token exception and records exact privacy, migration, origin and rollback gates. Brave is approved/published/CI-verified per the human update, not deployed; earlier handoff labels below are historical. One narrow spec/TDD correction uses strict-origin for ordinary form compatibility. Existing six-task feedback plan is preserved; exact origin, Builder execution authorization and all production gates remain pending. No production or runtime change.
+
 ## Current design handoff — 2026-11-11
 
 Architect decision: **HUMAN REVIEW**. Implementation lifecycle: **EMPTY** (no newly authorized Builder cycle). The historical P6/X plan below remains superseded; its instructions are not executable authority.

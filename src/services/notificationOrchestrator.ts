@@ -8,6 +8,9 @@ import { NotificationHistoryError, type NotificationHistory } from "./notificati
 import { sendWithResend } from "../tools/email/resend.js";
 import { ResendPreDispatchError } from "../tools/email/resend.js";
 import { freezeDelivery, restoreDeliveryBody, type DeliveryIdentity, type DeliveryLedger, type DeliveryRecord, type ResendOutcome } from "./emailDeliveryLedger.js";
+import { prepareEmailFeedback, type EmailFeedbackConfiguration } from "./emailFeedbackPreparation.js";
+import { classifyDiscoveryTopics } from "./discoveryPriority.js";
+import { feedbackPreferenceAdjustment, type FeedbackPreferenceProfile } from "./feedbackPreferences.js";
 import type { BatchCandidate, BatchDeliveryCandidate, DailyDigestInput, DailyDigestItem, DailyEmailContext, DailyEmailOutcome, DeliveryCandidate, DeliveryLedgerObservation, DiscoveryEmailContent, DiscoveryProcessingResult, EmailSendResult, NotificationRecord, NotificationResult, PreparedDailyDigest, StoredDiscovery } from "../types/index.js";
 
 type EligibilityCheck = (result: DiscoveryProcessingResult) => boolean;
@@ -43,6 +46,8 @@ export interface DailyDeliveryDependencies {
   sendFrozen: (body: string, key: DeliveryIdentity["key"]) => Promise<ResendOutcome>;
   beforeEmailAttempt?: () => Promise<void>;
   onAccepted?: () => void;
+  feedback?: EmailFeedbackConfiguration;
+  loadPreferenceProfile?: () => Promise<FeedbackPreferenceProfile>;
 }
 
 function messageOf(error: unknown): string {
@@ -57,7 +62,7 @@ function replayDeliveryEligible(candidate: BatchDeliveryCandidate): boolean {
 type PreparedGroup = { item?: DailyDigestItem; index: number; aliases: Set<string> };
 
 /** Selects one bounded daily payload without formatting, sending, or persistence. */
-export async function prepareDailyDigest(input: DailyDigestInput, history: NotificationHistory): Promise<PreparedDailyDigest> {
+export async function prepareDailyDigest(input: DailyDigestInput, history: NotificationHistory, preferences?:FeedbackPreferenceProfile): Promise<PreparedDailyDigest> {
   const status = (reason: DailyDigestInput["reason"]): PreparedDailyDigest => ({
     mode: "status_only", reason, cycleDate: input.cycleDate, items: [],
   });
@@ -117,7 +122,19 @@ export async function prepareDailyDigest(input: DailyDigestInput, history: Notif
   try {
     const first = await excludeNotified(makeGroups(ordered));
     const second = await excludeNotified(first);
-    const items = second.sort((left, right) => left.index - right.index).slice(0, 4).map(group => {
+    let ranked=second.sort((left, right) => left.index - right.index);
+    if(preferences){
+      const replacements=new Map<number,PreparedGroup>();const buckets=new Map<string,Array<{group:PreparedGroup;position:number}>>();
+      ranked.forEach((group,position)=>{const item=group.item;if(item?.kind!=="analyzed")return;const candidate=item.candidate;
+        const key=`${candidate.origin}:${candidate.discovery.analysis.relevanceScore}`;const bucket=buckets.get(key)??[];bucket.push({group,position});buckets.set(key,bucket);});
+      for(const bucket of buckets.values()){const sorted=[...bucket].sort((a,b)=>{
+        const left=a.group.item!,right=b.group.item!;if(left.kind!=="analyzed"||right.kind!=="analyzed")return a.position-b.position;
+        return feedbackPreferenceAdjustment(preferences,classifyDiscoveryTopics(right.candidate.discovery.analysis))
+          -feedbackPreferenceAdjustment(preferences,classifyDiscoveryTopics(left.candidate.discovery.analysis))||a.position-b.position;});
+        bucket.forEach((value,index)=>replacements.set(value.position,sorted[index]!.group));}
+      ranked=ranked.map((group,index)=>replacements.get(index)??group);
+    }
+    const items = ranked.slice(0, 4).map(group => {
       const item = group.item!;
       const aliases = [...group.aliases];
       return item.kind === "raw"
@@ -256,15 +273,24 @@ export async function finalizeDailyDigest(
   if (recovered) return recovered;
   let content: DiscoveryEmailContent;
   let effectiveDigest: PreparedDailyDigest = { ...digest, cycleDate: dependencies.identity.scheduledAt };
-  try { content = formatDailyDigestEmail(effectiveDigest); }
+  let feedback: Awaited<ReturnType<typeof prepareEmailFeedback>>|undefined;
+  try {
+    feedback=dependencies.feedback?await prepareEmailFeedback(effectiveDigest,dependencies.identity,dependencies.feedback):undefined;
+    content = formatDailyDigestEmail(effectiveDigest,feedback?.actions);
+  }
   catch {
     effectiveDigest = { mode: "status_only", reason: "preparation_unavailable", cycleDate: dependencies.identity.scheduledAt, items: [] };
+    feedback=undefined;
     content = formatDailyDigestEmail(effectiveDigest);
   }
   let frozen;
   try { frozen = await freezeDelivery(effectiveDigest, dependencies.identity, { ...content, from: dependencies.sender }, dependencies.recipient); }
   catch { return blockedOutcome("not_attempted", ledgerObservation(null, dependencies.identity.key, "blocked", "configuration_payload_mismatch")); }
-  const reserved = await dependencies.ledger.reserve(frozen);
+  const reserved = feedback && feedback.bindings.length>0
+    ? dependencies.ledger.reserveWithBindings
+      ? await dependencies.ledger.reserveWithBindings(frozen,feedback.bindings.map(binding=>({...binding,payloadSha256:frozen.payloadSha256})))
+      : {kind:"blocked" as const,reason:"ledger_unavailable" as const}
+    : await dependencies.ledger.reserve(frozen);
   if (reserved.kind === "blocked") return blockedOutcome("unknown", ledgerObservation(null, dependencies.identity.key, "blocked", reserved.reason));
   return dispatchStored(reserved.record, dependencies, "first");
 }

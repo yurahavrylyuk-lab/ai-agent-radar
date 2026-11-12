@@ -1,5 +1,12 @@
 # Self-improvement changelog
 
+## 2026-11-12 — Implement bounded email feedback and deterministic preferences
+
+- Added canonical signed per-story feedback capabilities and explicit scanner-safe confirmation routes without adding monitoring or provider HTTP behavior.
+- Added unapplied migration `0011_email_feedback.sql` for immutable delivery bindings, current votes and bounded audit history; delivery/binding reservation and vote/audit transitions are atomic and fail closed.
+- Added frozen per-card HTML/text controls plus conservative current-vote preference ranking limited to same-lane equal-score ties; raw stories remain topic-neutral and status-only messages have no controls.
+- Local implementation only, awaiting independent Analyst review. Production origin, signing keys, query-log privacy, migration, rollback, publication and deployment remain separately gated.
+
 ## 2026-11-11 — Bound Brave request time and response bodies
 
 - Added one five-second deadline covering Brave dispatch through bounded body read, strict UTF-8 decode and JSON parse; redirects remain manual/unfollowed and there is no retry or extra dispatch.

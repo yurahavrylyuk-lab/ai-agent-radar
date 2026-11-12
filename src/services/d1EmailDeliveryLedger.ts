@@ -11,6 +11,7 @@ import {
   type MutationResult,
   type ResendOutcome,
 } from "./emailDeliveryLedger.js";
+import { bindingFromRow, type FeedbackStoryBinding } from "./d1EmailFeedbackStore.js";
 
 interface DeliveryRow {
   delivery_key: DeliveryKey; logical_date: string; state: DeliveryRecord["state"];
@@ -105,6 +106,35 @@ export class D1EmailDeliveryLedger implements DeliveryLedger {
     existing = await this.read(frozen.identity.key);
     if (!existing) throw new DeliveryStateUnavailableError();
     return this.classifyReservation(existing, frozen);
+  }
+
+  async reserveWithBindings(frozen: FrozenDelivery, bindings: readonly FeedbackStoryBinding[]): Promise<MutationResult> {
+    if (bindings.length<1 || bindings.length>4 || bindings.some((b,i)=>b.deliveryKey!==frozen.identity.key || b.payloadSha256!==frozen.payloadSha256 || b.slot!==i+1)) {
+      throw new DeliveryStateUnavailableError();
+    }
+    const content=JSON.stringify({scheduledAt:frozen.identity.scheduledAt,content:frozen.content});
+    try {
+      await this.database.batch([
+        this.database.prepare(`INSERT INTO email_deliveries(delivery_key,logical_date,state,payload_version,content_json,payload_sha256,mode,reason,aliases_json,created_at,updated_at,dispatch_evidence_json,last_reason)
+          VALUES(?1,?2,'prepared',1,?3,?4,?5,?6,?7,strftime('%Y-%m-%dT%H:%M:%fZ','now'),strftime('%Y-%m-%dT%H:%M:%fZ','now'),'[]','prepared')`)
+          .bind(frozen.identity.key,frozen.identity.logicalDate,content,frozen.payloadSha256,frozen.mode,frozen.reason,JSON.stringify(frozen.aliases)),
+        ...bindings.map(b=>this.database.prepare(`INSERT INTO email_feedback_stories(delivery_key,slot,payload_sha256,story_sha256,discovery_key,display_title,kind,topic_version,topics_json,issued_at,expires_at,key_id,relevant_digest,not_relevant_digest)
+          VALUES(?1,?2,?3,?4,?5,?6,?7,1,?8,?9,?10,?11,?12,?13)`).bind(b.deliveryKey,b.slot,b.payloadSha256,b.storySha256,b.discoveryKey,b.displayTitle,b.kind,JSON.stringify(b.topics),b.issuedAt,b.expiresAt,b.keyId,b.relevantDigest,b.notRelevantDigest)),
+      ]);
+    } catch { /* authoritative complete-set read decides */ }
+    const existing=await this.read(frozen.identity.key);
+    if (!existing) throw new DeliveryStateUnavailableError();
+    if (existing.payloadSha256!==frozen.payloadSha256) return {kind:"superseded",record:existing};
+    try {
+      const rows=await this.primary().prepare(`SELECT delivery_key,slot,payload_sha256,story_sha256,discovery_key,display_title,kind,topics_json,issued_at,expires_at,key_id,relevant_digest,not_relevant_digest
+        FROM email_feedback_stories WHERE delivery_key=?1 ORDER BY slot`).bind(frozen.identity.key).all<any>();
+      const actual=rows.results.map(bindingFromRow);
+      const canonical=(b:FeedbackStoryBinding)=>JSON.stringify({deliveryKey:b.deliveryKey,slot:b.slot,payloadSha256:b.payloadSha256,
+        storySha256:b.storySha256,discoveryKey:b.discoveryKey,displayTitle:b.displayTitle,kind:b.kind,topics:[...b.topics],issuedAt:b.issuedAt,
+        expiresAt:b.expiresAt,keyId:b.keyId,relevantDigest:b.relevantDigest,notRelevantDigest:b.notRelevantDigest});
+      if (actual.length!==bindings.length || actual.some((value,index)=>canonical(value)!==canonical(bindings[index]!))) throw new DeliveryStateUnavailableError();
+    } catch (error) { if (error instanceof DeliveryStateUnavailableError) throw error; throw new DeliveryStateUnavailableError(); }
+    return {kind:"committed",record:existing};
   }
 
   private async updateClaim(key: DeliveryKey, token: string): Promise<void> {

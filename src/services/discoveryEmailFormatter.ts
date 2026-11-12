@@ -6,6 +6,7 @@ export type DigestEmailMode = "normal" | "fallback";
 export interface DigestEmailOptions {
   mode?: DigestEmailMode;
 }
+export interface FeedbackActionLinks { slot: 1|2|3|4; title: string; relevantUrl: string; notRelevantUrl: string }
 
 const SUBJECT_PREFIX = "AI Agent Radar: ";
 const MAX_SUBJECT_NAME_LENGTH = 100;
@@ -245,8 +246,8 @@ export function formatDigestEmail(
 }
 
 /** Batch layout uses stored source fields and requires no further analysis. */
-export function formatBatchDigestEmail(stories: StoredDiscovery[]): DiscoveryEmailContent {
-  return formatDigest(stories, {}, true);
+export function formatBatchDigestEmail(stories: StoredDiscovery[], feedback: readonly FeedbackActionLinks[] = []): DiscoveryEmailContent {
+  return formatDigest(stories, {}, true, feedback);
 }
 
 const dailyReasonText: Record<PreparedDailyDigest["reason"], string> = {
@@ -311,7 +312,10 @@ function dailyShellHtml(badge: string, heading: string, explanation: string, con
 </html>`;
 }
 
-function rawDailyCardHtml(title: string, snippet: string, source: DailySource, slot: number): string {
+function feedbackHtml(action?:FeedbackActionLinks):string { return action?`<p style="margin:16px 0 0;color:${SECONDARY_TEXT};font-family:Arial,sans-serif"><a href="${escapeHtml(safeHref(action.relevantUrl))}">Relevant</a> &middot; <a href="${escapeHtml(safeHref(action.notRelevantUrl))}">Not relevant</a></p>`:""; }
+function feedbackText(action?:FeedbackActionLinks):string[] { return action?[`Relevant: ${action.relevantUrl}`,`Not relevant: ${action.notRelevantUrl}`]:[]; }
+
+function rawDailyCardHtml(title: string, snippet: string, source: DailySource, slot: number, feedback?:FeedbackActionLinks): string {
   return `<tr>
               <td style="padding: 20px 30px; border-top: 1px solid #26344d;">
                 <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width: 100%; border: 1px solid #2a3954; border-radius: 10px; background-color: ${PANEL_BACKGROUND};">
@@ -320,14 +324,14 @@ function rawDailyCardHtml(title: string, snippet: string, source: DailySource, s
                     <h2 style="margin: 0 0 8px; color: ${PRIMARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 19px; line-height: 25px;">${escapeHtml(title)}</h2>
                     <p style="margin: 0 0 ${snippet ? "10" : "16"}px; color: ${SECONDARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 13px; line-height: 19px;">${escapeHtml(source.hostname)}</p>
                     ${snippet ? `<p style="margin: 0 0 16px; color: ${PRIMARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 14px; line-height: 21px;">${escapeHtml(snippet)}</p>` : ""}
-                    ${dailySourceLink(source)}
+                    ${dailySourceLink(source)}${feedbackHtml(feedback)}
                   </td></tr>
                 </table>
               </td>
             </tr>`;
 }
 
-function analyzedDailyCardHtml(story: StoredDiscovery, slot: number): string {
+function analyzedDailyCardHtml(story: StoredDiscovery, slot: number, feedback?:FeedbackActionLinks): string {
   const source = dailySource(story.analysis.sourceUrl);
   return `<tr>
               <td style="padding: 20px 30px; border-top: 1px solid #26344d;">
@@ -338,7 +342,7 @@ function analyzedDailyCardHtml(story: StoredDiscovery, slot: number): string {
                     <p style="margin: 0 0 8px; color: ${ACCENT}; font-family: Arial, Helvetica, sans-serif; font-size: 14px; line-height: 20px;">Relevance: ${story.analysis.relevanceScore}/10</p>
                     ${story.analysis.relevanceScore < 7 ? `<p style="margin: 0 0 8px; color: ${ACCENT}; font-family: Arial, Helvetica, sans-serif; font-size: 14px; font-weight: 700; line-height: 20px;">${LOW_RELEVANCE_LABEL}</p>` : ""}
                     <p style="margin: 0 0 16px; color: ${SECONDARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 14px; line-height: 21px;">${escapeHtml(story.analysis.summary)}</p>
-                    ${dailySourceLink(source)}
+                    ${dailySourceLink(source)}${feedbackHtml(feedback)}
                   </td></tr>
                 </table>
               </td>
@@ -346,11 +350,11 @@ function analyzedDailyCardHtml(story: StoredDiscovery, slot: number): string {
 }
 
 /** Formats one prepared normal, degraded, or status-only daily payload. */
-export function formatDailyDigestEmail(digest: PreparedDailyDigest): DiscoveryEmailContent {
+export function formatDailyDigestEmail(digest: PreparedDailyDigest, feedback: readonly FeedbackActionLinks[] = []): DiscoveryEmailContent {
   if (digest.mode === "normal") {
     const stories = digest.items.filter((item) => item.kind === "analyzed").map(item => item.candidate.discovery);
     if (stories.length === 0) throw new Error("Normal daily digest requires analyzed stories.");
-    return formatBatchDigestEmail(stories);
+    return formatBatchDigestEmail(stories,feedback);
   }
   const date = digest.cycleDate.slice(0, 10);
   if (digest.mode === "status_only") {
@@ -379,9 +383,9 @@ export function formatDailyDigestEmail(digest: PreparedDailyDigest): DiscoveryEm
         ...(story.analysis.relevanceScore < 7 ? [LOW_RELEVANCE_LABEL] : []),
         story.analysis.summary,
         `Source: ${source.hostname}`,
-        ...(source.href ? [source.href] : []),
+        ...(source.href ? [source.href] : []),...feedbackText(feedback[index]),
       ].join("\n");
-      return { text, html: analyzedDailyCardHtml(story, index + 1) };
+      return { text, html: analyzedDailyCardHtml(story, index + 1,feedback[index]) };
     }
     const candidate = item.candidate.source;
     const source = dailySource(candidate.url);
@@ -391,9 +395,9 @@ export function formatDailyDigestEmail(digest: PreparedDailyDigest): DiscoveryEm
       candidate.title,
       `Source: ${source.hostname}`,
       ...(source.href ? [source.href] : []),
-      ...(snippet ? [snippet] : []),
+      ...(snippet ? [snippet] : []),...feedbackText(feedback[index]),
     ].join("\n");
-    return { text, html: rawDailyCardHtml(candidate.title, snippet, source, index + 1) };
+    return { text, html: rawDailyCardHtml(candidate.title, snippet, source, index + 1,feedback[index]) };
   });
   return {
     subject: heading,
@@ -402,7 +406,7 @@ export function formatDailyDigestEmail(digest: PreparedDailyDigest): DiscoveryEm
   };
 }
 
-function formatDigest(stories: StoredDiscovery[], options: DigestEmailOptions, batch = false): DiscoveryEmailContent {
+function formatDigest(stories: StoredDiscovery[], options: DigestEmailOptions, batch = false, feedback:readonly FeedbackActionLinks[]=[]): DiscoveryEmailContent {
   if (stories.length === 0) throw new Error("Digest requires at least one story.");
 
   const lead = stories[0];
@@ -423,9 +427,10 @@ function formatDigest(stories: StoredDiscovery[], options: DigestEmailOptions, b
       `KEY POINTS\n${textList(lead.analysis.projectOpportunities)}`,
       ...(batch ? [`TECHNOLOGIES\n${lead.analysis.technologies.join(", ") || "None"}`] : []),
       `SOURCE\n${lead.analysis.sourceTitle}\n${lead.analysis.sourceUrl}${xAttributionText(lead)}`,
+      ...feedbackText(feedback[0]),
     ].join("\n\n"),
     ...concise.map((story, i) =>
-      [`STORY ${i + 2}\n${story.analysis.name}`, ...(batch ? [`Relevance: ${story.analysis.relevanceScore}/10`] : []), ...(batch && story.analysis.relevanceScore < 7 ? [LOW_RELEVANCE_LABEL] : []), story.analysis.summary, ...(batch ? [`WHY IT MATTERS\n${story.analysis.whyItMatters}`] : []), `SOURCE\n${story.analysis.sourceTitle}\n${story.analysis.sourceUrl}${xAttributionText(story)}`].join("\n\n"),
+      [`STORY ${i + 2}\n${story.analysis.name}`, ...(batch ? [`Relevance: ${story.analysis.relevanceScore}/10`] : []), ...(batch && story.analysis.relevanceScore < 7 ? [LOW_RELEVANCE_LABEL] : []), story.analysis.summary, ...(batch ? [`WHY IT MATTERS\n${story.analysis.whyItMatters}`] : []), `SOURCE\n${story.analysis.sourceTitle}\n${story.analysis.sourceUrl}${xAttributionText(story)}`,...feedbackText(feedback[i+1])].join("\n\n"),
     ),
     "AI Agent Radar\nAutomated AI discovery monitor",
   ];
@@ -444,8 +449,8 @@ function formatDigest(stories: StoredDiscovery[], options: DigestEmailOptions, b
                 ${isFallback ? `<p style="margin: 14px 0 0; color: ${ACCENT}; font-family: Arial, Helvetica, sans-serif; font-size: 15px; font-weight: 700; line-height: 20px;">It could be relevant</p>` : ""}
               </td>
             </tr>
-            ${leadBlockHtml(lead, batch)}
-            ${concise.map((story, i) => conciseBlockHtml(story, i + 2, batch)).join("\n            ")}
+            ${leadBlockHtml(lead, batch).replace("</td>\n            </tr>",`${feedbackHtml(feedback[0])}</td>\n            </tr>`)}
+            ${concise.map((story, i) => conciseBlockHtml(story, i + 2, batch).replace("</td>\n            </tr>",`${feedbackHtml(feedback[i+1])}</td>\n            </tr>`)).join("\n            ")}
             <tr>
               <td style="padding: 18px 30px; border-top: 1px solid #26344d; background-color: #0d1422;">
                 <p style="margin: 0; color: ${SECONDARY_TEXT}; font-family: Arial, Helvetica, sans-serif; font-size: 13px; line-height: 19px;">AI Agent Radar<br>Automated AI discovery monitor</p>

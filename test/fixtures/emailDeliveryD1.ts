@@ -67,10 +67,11 @@ class SqliteD1Session extends SqliteD1 {
   constructor(database: Database.Database, faults: D1Fault[]) { super(database); this.faults.push(...faults); }
 }
 
-export async function createEmailDeliveryDatabase(): Promise<{ sqlite: Database.Database; d1: SqliteD1 }> {
+export async function createEmailDeliveryDatabase(feedback = false): Promise<{ sqlite: Database.Database; d1: SqliteD1 }> {
   const sqlite = new Database(":memory:");
   sqlite.exec(await readFile(new URL("../../migrations/0001_initial.sql", import.meta.url), "utf8"));
   sqlite.exec(await readFile(new URL("../../migrations/0010_email_delivery_ledger.sql", import.meta.url), "utf8"));
+  if (feedback) sqlite.exec(await readFile(new URL("../../migrations/0011_email_feedback.sql", import.meta.url), "utf8"));
   return { sqlite, d1: new SqliteD1(sqlite) };
 }
 

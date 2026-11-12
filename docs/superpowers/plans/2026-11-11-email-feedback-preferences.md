@@ -1,6 +1,6 @@
 # Email Feedback + Preference Learning — sequential TDD plan
 
-2026-11-11. DESIGN ONLY / HUMAN REVIEW. [Specification](../specs/2026-11-11-email-feedback-preferences-design.md). Six sequential tasks for a later separately authorized Builder cycle, followed by one independent Analyst review. Do not mix with Brave implementation. Resolve the signed-token/frozen-payload retention conflict and approve the HTTP boundary first.
+2026-11-11. DESIGN ONLY / HUMAN REVIEW. [Specification](../specs/2026-11-11-email-feedback-preferences-design.md). Six sequential tasks for a later separately authorized Builder cycle, followed by one independent Analyst review. Do not mix with Brave implementation. The human architecture checkpoint confirms the frozen-payload-only token exception and proposed HTTP design. Builder execution still requires a separate handoff authorization; exact origin and production gates remain pending.
 
 ## 1. Capability and confirmation primitives
 
@@ -17,6 +17,8 @@ Migration-selection tests must explicitly add the reviewed 0011 name to temporar
 RED: each final story (normal analyzed, fallback analyzed, raw degraded) gets both valid actions in HTML/text; status-only has none. Escaping, link/title/payload byte bounds and actual delivered identity must match. Unknown raw topics remain empty; no fake discovery insert. GREEN: derive stable capabilities/bindings before formatting/freeze; transactionally reserve the matching ledger and binding set before dispatch. Existing recovery returns exact bytes before any fresh generation. Test key rotation, changed preferences/clock, concurrent preparations, failed reserve, winner/loser payload mismatch, provider acceptance crash and later recovery; assert same Resend body SHA/key and no duplicate send. Historical frozen emails remain untouched and recoverable without links. No extra HTML/raw-token storage outside the explicitly approved frozen-payload exception.
 
 ## 4. Scanner-safe HTTP confirmation
+
+2026-11-12 narrow amendment: require a real browser form test with synthetic capability, proving strict-origin sends the expected HTTPS Origin and an origin-only Referer without query/token. Preserve rejection of missing/null Origin. See [decision record](../../self-improvement/2026-11-12-email-feedback-security-decisions.md); other six-task scope is unchanged.
 
 RED: repeated GET, HEAD, preview/prefetch and scanner traversal cause zero D1 writes/votes/emails; valid POST writes once. Invalid/expired token, unauthenticated arbitrary story, missing/wrong Origin, wrong method/path, extra fields, bad content type, overlarge/slow body, frame/embed, malicious title and arbitrary redirect destination fail safely. GREEN: only approved routes with HTTPS enforcement, bounded static confirmation page and explicit human form, nonce/revision validation, fixed responses/security headers. GET can read state but never create mutation authority in D1. POST duplicate returns already-recorded; changed vote requires fresh revision, stale page returns conflict. Test unavailable D1 and pending/ambiguous delivery rejection. No endpoint can start monitoring or call a provider. Verify logging fixtures exclude capabilities and browser telemetry; platform query-log privacy remains a separate pre-release operational gate.
 

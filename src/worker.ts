@@ -23,6 +23,9 @@ import { rssStructuralSubreasons } from "./types/index.js";
 import { collectThreads } from "./services/threadsDiscovery.js";
 import { THREADS_QUERIES } from "./config/threadsSources.js";
 import type { BatchCycleMetrics, MonitoringCycleResult, RssCycleMetrics, ThreadsCycleMetrics } from "./types/index.js";
+import { handleEmailFeedbackRoute } from "./services/emailFeedbackRoutes.js";
+import { D1EmailFeedbackStore } from "./services/d1EmailFeedbackStore.js";
+import { calculateFeedbackPreferenceProfile } from "./services/feedbackPreferences.js";
 
 export const MAX_SCHEDULED_OUTCOMES_LOGGED = 10;
 export const MAX_SCHEDULED_SEARCH_FAILURES_LOGGED = 10;
@@ -60,6 +63,20 @@ export interface RadarWorkerEnv {
   THREADS_PUBLIC_SEARCH_APPROVED?: string;
   THREADS_TOKEN_EXPIRES_AT?: string;
   THREADS_ACCESS_TOKEN?: string;
+  FEEDBACK_ORIGIN?: string;
+  FEEDBACK_SIGNING_KEY_ID?: string;
+  FEEDBACK_SIGNING_KEY?: string;
+  FEEDBACK_RETIRING_KEY_ID?: string;
+  FEEDBACK_RETIRING_KEY?: string;
+}
+
+function feedbackConfiguration(env:RadarWorkerEnv) {
+  const configured=[env.FEEDBACK_ORIGIN,env.FEEDBACK_SIGNING_KEY_ID,env.FEEDBACK_SIGNING_KEY,env.FEEDBACK_RETIRING_KEY_ID,env.FEEDBACK_RETIRING_KEY].some(Boolean);
+  if(!configured)return undefined;
+  if(!env.FEEDBACK_ORIGIN || !env.FEEDBACK_SIGNING_KEY_ID || !env.FEEDBACK_SIGNING_KEY
+    || Boolean(env.FEEDBACK_RETIRING_KEY_ID)!==Boolean(env.FEEDBACK_RETIRING_KEY)) throw new Error("Feedback configuration is incomplete.");
+  const retiring=env.FEEDBACK_RETIRING_KEY_ID&&env.FEEDBACK_RETIRING_KEY?{id:env.FEEDBACK_RETIRING_KEY_ID,secret:env.FEEDBACK_RETIRING_KEY}:undefined;
+  return {origin:env.FEEDBACK_ORIGIN,keyring:{active:{id:env.FEEDBACK_SIGNING_KEY_ID,secret:env.FEEDBACK_SIGNING_KEY},...(retiring?{retiring}:{})}};
 }
 
 export interface ScheduledCycleSummary {
@@ -543,6 +560,8 @@ export async function runScheduledMonitoring(
     const startedAt = dependencies.startedAt ?? new Date();
     const identity = deliveryIdentity(scheduledAt);
     const ledger = new D1EmailDeliveryLedger(env.DB);
+    const feedback = feedbackConfiguration(env);
+    if(feedback) try { await new D1EmailFeedbackStore(env.DB).pruneExpired(startedAt.toISOString()); } catch { /* bounded feedback cleanup never changes delivery authority */ }
     let emailCheckpoint: () => Promise<void> = async () => {};
     const dailyDelivery: DailyDeliveryDependencies = {
       context, identity, ledger,
@@ -550,6 +569,8 @@ export async function runScheduledMonitoring(
       sender: RESEND_ONBOARDING_SENDER,
       sendFrozen: (body, key) => sendFrozenWithResend(body, key, { environment: env as unknown as Record<string, string | undefined> }),
       beforeEmailAttempt: () => emailCheckpoint(),
+      ...(feedback?{feedback}:{}),
+      ...(feedback?{loadPreferenceProfile:async()=>calculateFeedbackPreferenceProfile(await new D1EmailFeedbackStore(env.DB).loadPreferenceObservations(scheduledAt.toISOString()))}:{}),
     };
     const cycleId = dependencies.cycleId ?? crypto.randomUUID();
     let cycleCreated = false;
@@ -624,8 +645,12 @@ export function handleScheduledMonitoring(
 }
 
 export default {
-  fetch(_request: Request, env: RadarWorkerEnv): Response {
+  fetch(request: Request, env: RadarWorkerEnv): Response|Promise<Response> {
     createWorkerPersistence(env);
+    const feedback=feedbackConfiguration(env);
+    if(feedback) {
+      return handleEmailFeedbackRoute(request,env.DB,feedback).then(handled=>handled??new Response("AI Agent Radar worker ready",{headers:{"content-type":"text/plain; charset=UTF-8"}}));
+    }
     return new Response("AI Agent Radar worker ready", {
       headers: { "content-type": "text/plain; charset=UTF-8" },
     });
