@@ -9,6 +9,21 @@ import {
 const origin = "https://feedback.example";
 const issuedAt = "2026-11-12T08:00:00.000Z";
 const active: FeedbackKeyring = { active: { id: "active", secret: "a".repeat(32) } };
+const base64urlAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
+function decodeBase64urlForTest(value: string): Buffer {
+  return Buffer.from(value, "base64url");
+}
+
+function alterUnusedTerminalBits(value: string): string {
+  const index = base64urlAlphabet.indexOf(value.at(-1)!);
+  assert.notEqual(index, -1);
+  const unusedBits = value.length % 4 === 2 ? 4 : value.length % 4 === 3 ? 2 : 0;
+  assert.ok(unusedBits > 0, "fixture must have unused terminal Base64URL bits");
+  const alternate = (index & ~((1 << unusedBits) - 1)) | 1;
+  assert.notEqual(index, alternate);
+  return `${value.slice(0, -1)}${base64urlAlphabet[alternate]}`;
+}
 
 async function capability(keyring = active) {
   return createFeedbackCapability({ deliveryKey: "daily-digest/2026-11-12", slot: 1,
@@ -52,4 +67,73 @@ test("confirmation nonce is purpose-separated, revision-bound, short-lived, and 
     storySha256: await sha256Hex("other"), rating: "relevant", issuedAt }, active, origin);
   await assert.rejects(verifyFeedbackConfirmation(nonce, other.token, "relevant", 0, active, origin, new Date(issuedAt)), /Feedback request stale\./);
   await assert.rejects(verifyFeedbackConfirmation(nonce, value.token, "relevant", 0, active, origin, new Date("2026-11-12T08:10:00.001Z")), /Feedback request expired\./);
+});
+
+test("capability rejects an alternate signature encoding with identical bytes", async () => {
+  const value = await capability();
+  const [payload, signature] = value.token.split(".") as [string, string];
+  const alternate = alterUnusedTerminalBits(signature);
+  assert.deepEqual(decodeBase64urlForTest(alternate), decodeBase64urlForTest(signature));
+  await assert.doesNotReject(verifyFeedbackCapability(value.token, active, origin, new Date(issuedAt)));
+  await assert.rejects(
+    verifyFeedbackCapability(`${payload}.${alternate}`, active, origin, new Date(issuedAt)),
+    /Feedback request invalid\./,
+  );
+});
+
+test("confirmation rejects an alternate signature encoding with identical bytes", async () => {
+  const value = await capability();
+  const nonce = await createFeedbackConfirmation(value.token, "relevant", 0, value.claims.expiresAt, active, origin, new Date(issuedAt));
+  const [payload, signature] = nonce.split(".") as [string, string];
+  const alternate = alterUnusedTerminalBits(signature);
+  assert.deepEqual(decodeBase64urlForTest(alternate), decodeBase64urlForTest(signature));
+  await assert.doesNotReject(verifyFeedbackConfirmation(nonce, value.token, "relevant", 0, active, origin, new Date(issuedAt)));
+  await assert.rejects(
+    verifyFeedbackConfirmation(`${payload}.${alternate}`, value.token, "relevant", 0, active, origin, new Date(issuedAt)),
+    /Feedback request invalid\./,
+  );
+});
+
+test("capability and confirmation reject malformed, truncated, oversized, wrong-key, and wrong-purpose encodings", async () => {
+  const value = await capability();
+  const [payload, signature] = value.token.split(".") as [string, string];
+  const invalidSignature = Buffer.alloc(32).toString("base64url");
+  for (const candidate of [
+    `${payload}.${signature}=`,
+    `${payload}.${signature.slice(0, -1)}`,
+    `${payload}.${invalidSignature}`,
+    `${payload}.${"A".repeat(1025)}`,
+    `${payload}*.${signature}`,
+  ]) {
+    await assert.rejects(verifyFeedbackCapability(candidate, active, origin, new Date(issuedAt)), /Feedback request invalid\./);
+  }
+
+  const nonce = await createFeedbackConfirmation(value.token, "relevant", 0, value.claims.expiresAt, active, origin, new Date(issuedAt));
+  await assert.rejects(
+    verifyFeedbackConfirmation(value.token, value.token, "relevant", 0, active, origin, new Date(issuedAt)),
+    /Feedback request invalid\./,
+  );
+  await assert.rejects(
+    verifyFeedbackCapability(nonce, active, origin, new Date(issuedAt)),
+    /Feedback request invalid\./,
+  );
+  await assert.rejects(
+    verifyFeedbackConfirmation(nonce, value.token, "relevant", 0, { active: { id: "other", secret: "z".repeat(32) } }, origin, new Date(issuedAt)),
+    /Feedback request invalid\./,
+  );
+});
+
+test("canonical confirmation signed by the retiring key remains valid", async () => {
+  const old: FeedbackKeyring = { active: { id: "old", secret: "o".repeat(32) } };
+  const value = await capability(old);
+  const nonce = await createFeedbackConfirmation(value.token, "relevant", 0, value.claims.expiresAt, old, origin, new Date(issuedAt));
+  await assert.doesNotReject(verifyFeedbackConfirmation(
+    nonce,
+    value.token,
+    "relevant",
+    0,
+    { active: active.active, retiring: old.active },
+    origin,
+    new Date(issuedAt),
+  ));
 });

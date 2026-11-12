@@ -2,6 +2,7 @@
 
 ## 2026-11-12 — Email Feedback + Preference Learning MVP Builder completion
 
+- Targeted Analyst correction: the shared Base64URL decoder now rejects alternate encodings whose unused terminal bits decode to the same signature bytes. Focused RED reproduced both capability and confirmation acceptance (4/6 passed, 2 expected failures); GREEN passed 8/8, the feedback/delivery/recovery set passed 143/143, and the full recursive suite passed 862/862. Browser, feedback D1, email recovery and all relevant Workerd harnesses, build, typecheck, Wrangler dry-run, generated-file, bundle/privacy and whitespace checks passed. No signing, delivery, route, D1, preference or provider semantics changed.
 - Implemented the approved six-task MVP on `feature/email-feedback-preferences-mvp` from checkpoint `df4c3daf7a85dcd0b0e83015acf6aff8ad19d0a6` and main baseline `9518c26d4224cf6c7d2e4ca1b6e4b8ba0d13e15b`.
 - Added canonical 30-day HMAC capabilities, ten-minute revision-bound confirmation nonces, active-plus-retiring verification, fixed audience/purpose, bounded fixed-category failures, and no raw-token storage outside immutable frozen email content.
 - Added local-only migration `0011_email_feedback.sql`, atomic frozen-delivery/binding reservation, accepted-delivery vote CAS with trigger-coupled audit, ten-revision cap, latest-400/current-vote preference reads and bounded child-first 180-day cleanup.

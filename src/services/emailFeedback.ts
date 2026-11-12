@@ -69,7 +69,9 @@ function decodeBase64url(value: string): Uint8Array {
   const padded = value.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((value.length + 3) % 4);
   try {
     const binary = atob(padded);
-    return Uint8Array.from(binary, character => character.charCodeAt(0));
+    const decoded = Uint8Array.from(binary, character => character.charCodeAt(0));
+    if (base64url(decoded) !== value) throw new FeedbackValidationError("invalid");
+    return decoded;
   } catch { throw new FeedbackValidationError("invalid"); }
 }
 
