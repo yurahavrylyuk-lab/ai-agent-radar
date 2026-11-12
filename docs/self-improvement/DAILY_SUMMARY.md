@@ -1,5 +1,15 @@
 # Daily Self-Improvement Summary
 
+## 2026-11-12 — V1 release privacy and compatibility preparation
+
+- Implemented the human-approved local release-preparation scope on `feature/v1-release-preparation-privacy-compatibility` from exact published baseline `8e0783bf4a9e1a41efc01c4efe498c8592ff6c8d`; implementation/test commit is `e6a842e`.
+- RED proved the missing `observability.redact_query_string` setting. GREEN sets it to `true`, retains enabled/persistent logs at sampling 1 and disabled traces, and confirms the installed Wrangler schema plus dry-run accept the configuration. Source configuration is not evidence of effective deployed or external-sink privacy.
+- Added disabled, six representative partial and complete synthetic feedback configuration coverage. Disabled HTTP remains health-only without feedback D1 access; partial configuration rejects before feedback side effects; complete configuration activates only approved routes. Canonical capabilities, signed delivery preparation, accepted frozen recovery, budgets and provider/email ceilings remain unchanged.
+- Strengthened the real installed-Wrangler migration fixture to the exact predecessor through `0010`: an accepted delivery and discovery sentinel survive; only `0011` is pending; `0004` and a synthetic future migration are excluded; `0011` objects/history are exact; repeat apply and list are no-ops.
+- Strengthened RSS compatibility coverage for pre-diagnostics snapshots, historical structure failures without subreason, approved extensions, unavailable markers and the exact 8 KiB snapshot reader bound. Current readers are backward-compatible; old strict readers are not automatically safe after an extended record is written. Corrected README/AGENTS HTTP wording without activating feedback.
+- Evidence: focused release set passed 72/72 after one test-expectation correction; full recursive suite passed 867/867; build and clean Worker typecheck passed; seven Workerd harnesses and the real-browser Origin/Referer regression passed sequentially; Wrangler dry-run passed at 434.19 KiB / 92.60 KiB gzip; generated-file, bundle/dependency/privacy, whitespace and protected-file checks passed.
+- Status: **READY FOR INDEPENDENT ANALYST REVIEW / LOCAL ONLY**. No push, merge, deployment, production D1 access/migration, secret provisioning, monitoring, email or provider call occurred.
+
 ## 2026-11-12 — Email Feedback + Preference Learning MVP Builder completion
 
 - Targeted Analyst correction: the shared Base64URL decoder now rejects alternate encodings whose unused terminal bits decode to the same signature bytes. Focused RED reproduced both capability and confirmation acceptance (4/6 passed, 2 expected failures); GREEN passed 8/8, the feedback/delivery/recovery set passed 143/143, and the full recursive suite passed 862/862. Browser, feedback D1, email recovery and all relevant Workerd harnesses, build, typecheck, Wrangler dry-run, generated-file, bundle/privacy and whitespace checks passed. No signing, delivery, route, D1, preference or provider semantics changed.

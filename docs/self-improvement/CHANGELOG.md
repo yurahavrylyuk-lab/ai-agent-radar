@@ -1,5 +1,12 @@
 # Self-improvement changelog
 
+## 2026-11-12 — Prepare feedback privacy and release compatibility
+
+- Added source-controlled Wrangler query-string redaction while preserving persistent scheduled logs, sampling, traces, Cron, D1, migration allowlist, bindings and quotas. Effective deployed/export privacy and sanitized-canary evidence remain open release gates.
+- Added focused disabled/partial/complete feedback configuration evidence, exact local `0010` predecessor to `0011` migration proof, and strengthened historical/extended RSS snapshot compatibility and byte-bound coverage.
+- Corrected the documented HTTP boundary: disabled deployments remain health-only; separately configured feedback deployments expose only approved confirmation routes, which cannot invoke monitoring or providers. Documented that old strict RSS readers are not automatically safe rollback targets after extended records.
+- Local-only release preparation in `e6a842e`; awaiting independent review. Migration `0011` remains unapplied and feedback inactive. No publication, deployment, production D1, secret, email, monitoring or provider action occurred.
+
 ## 2026-11-12 — Implement bounded email feedback and deterministic preferences
 
 - Added canonical signed per-story feedback capabilities and explicit scanner-safe confirmation routes without adding monitoring or provider HTTP behavior.
