@@ -1,5 +1,13 @@
 # AI Agent Radar project state
 
+## 2026-11-12 — Email Feedback + Preference Learning MVP ready for independent review
+
+The human-approved six-task design is implemented locally on `feature/email-feedback-preferences-mvp` from architecture checkpoint `df4c3daf7a85dcd0b0e83015acf6aff8ad19d0a6` and published-main baseline `9518c26d4224cf6c7d2e4ca1b6e4b8ba0d13e15b`. Newly prepared actual story cards receive Relevant and Not relevant actions in HTML and text; status-only messages do not. Thirty-day canonical HMAC capabilities are bound to immutable delivery/story/slot/rating identity, and raw tokens persist only in the already-required frozen payload. Feedback tables store digests.
+
+Migration `0011_email_feedback.sql` adds immutable delivered-story bindings, current vote and bounded audit tables. New payload plus up to four bindings reserve atomically; voting requires an accepted delivery and exact payload/story/digest match. GET/HEAD are read-only; POST requires HTTPS, fixed configured origin, exact Origin, signed short-lived revision nonce and a bounded streamed form. Current votes feed a neutral-by-default 90-day/latest-400 profile with minimum five observations, net difference three and adjustment bounded to ±0.5; only equal-score, same-lane analyzed positions can move. No eligibility, score, provider, quota, replay, one-email or frozen-recovery rule changes.
+
+Status: **LOCAL IMPLEMENTATION / AWAITING INDEPENDENT ANALYST REVIEW / NOT PUBLISHED / NOT MERGED / NOT DEPLOYED / NOT ACTIVATED**. `0011` is not applied. Exact production HTTPS origin, active/retiring signing-key provisioning, Cloudflare query-log/export privacy verification, compatible rollback proof, independent review, publication and release approval remain blocking production gates. No production D1, secret, monitoring, email or provider action occurred.
+
 ## 2026-11-11 — Brave request bounds ready for independent review
 
 The human-approved Brave design and five-task TDD plan are implemented locally on `feature/radar-v1-roadmap-brave-bounds` from approved documentation commit `25e6cb7748245dab1320f95229685a9e5672212f` and main baseline `e97440a99d918e7df905e4b22f5560c9649d6620`. The transport now has one five-second deadline from dispatch through body/decode/parse, a 262,144-byte success cap, a 16,384-byte error cap, strict UTF-8/JSON/shape validation, manual unfollowed redirects, fixed content-free errors and best-effort non-blocking stream cancellation.
