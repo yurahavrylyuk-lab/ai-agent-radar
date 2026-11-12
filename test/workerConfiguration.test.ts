@@ -166,6 +166,69 @@ test("Worker composition uses D1 stores and exposes a scheduled handler without 
   assert.equal(await response.text(), "AI Agent Radar worker ready");
 });
 
+test("feedback-disabled Worker remains health-only without feedback database access", async () => {
+  const env = environment();
+  env.DB = new Proxy({} as D1Database, {
+    get() { throw new Error("feedback database must not be accessed"); },
+  });
+  for (const request of [
+    new Request("https://worker.example/feedback?token=untrusted"),
+    new Request("https://worker.example/feedback", { method: "HEAD" }),
+    new Request("https://worker.example/feedback/confirm", { method: "POST", body: "untrusted" }),
+  ]) {
+    const response = await worker.fetch(request, env);
+    assert.equal(response.status, 200);
+    assert.equal(await response.text(), "AI Agent Radar worker ready");
+  }
+});
+
+test("every representative partial feedback configuration fails before feedback database access", () => {
+  const untouchedDatabase = new Proxy({} as D1Database, {
+    get() { throw new Error("feedback database must not be accessed"); },
+  });
+  const partials: Array<Partial<RadarWorkerEnv>> = [
+    { FEEDBACK_ORIGIN: "https://feedback.example" },
+    { FEEDBACK_SIGNING_KEY_ID: "active" },
+    { FEEDBACK_SIGNING_KEY: "a".repeat(32) },
+    { FEEDBACK_ORIGIN: "https://feedback.example", FEEDBACK_SIGNING_KEY_ID: "active" },
+    {
+      FEEDBACK_ORIGIN: "https://feedback.example", FEEDBACK_SIGNING_KEY_ID: "active",
+      FEEDBACK_SIGNING_KEY: "a".repeat(32), FEEDBACK_RETIRING_KEY_ID: "retiring",
+    },
+    {
+      FEEDBACK_ORIGIN: "https://feedback.example", FEEDBACK_SIGNING_KEY_ID: "active",
+      FEEDBACK_SIGNING_KEY: "a".repeat(32), FEEDBACK_RETIRING_KEY: "r".repeat(32),
+    },
+  ];
+  for (const partial of partials) {
+    const env = { ...environment(), DB: untouchedDatabase, ...partial };
+    assert.throws(
+      () => worker.fetch(new Request("https://worker.example/feedback?token=untrusted"), env),
+      /Feedback configuration is incomplete/,
+    );
+  }
+});
+
+test("complete synthetic feedback configuration activates only the bounded feedback routes", async () => {
+  const env = {
+    ...environment(),
+    DB: new Proxy({} as D1Database, {
+      get() { throw new Error("invalid capability must be rejected before feedback database access"); },
+    }),
+    FEEDBACK_ORIGIN: "https://feedback.example",
+    FEEDBACK_SIGNING_KEY_ID: "active",
+    FEEDBACK_SIGNING_KEY: "a".repeat(32),
+    FEEDBACK_RETIRING_KEY_ID: "retiring",
+    FEEDBACK_RETIRING_KEY: "r".repeat(32),
+  };
+  const feedback = await worker.fetch(new Request("https://feedback.example/feedback?token=untrusted"), env);
+  assert.equal(feedback.status, 400);
+  assert.match(await feedback.text(), /Feedback unavailable/);
+  const health = await worker.fetch(new Request("https://feedback.example/other"), env);
+  assert.equal(health.status, 200);
+  assert.equal(await health.text(), "AI Agent Radar worker ready");
+});
+
 test("Worker search composition forwards the monitoring freshness option without a provider request", async () => {
   const calls: Array<{ query: string; freshness: string | undefined }> = [];
   const dependencies = createWorkerMonitoringDependencies(environment(), {

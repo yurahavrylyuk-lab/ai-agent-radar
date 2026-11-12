@@ -173,6 +173,16 @@ test("RSS diagnostics round-trip every structural subreason and keep historical 
     health: "unavailable" as const, configuredFeeds: 1, attemptedFeeds: 1, succeededFeeds: 0, failedFeeds: 1,
     outcomes: [{ feedId: "openai_news" as const, reason: "structure" as const, elapsedMs: 1 }] };
   assert.deepEqual(validateRssDiagnostics(historical), historical);
+  assert.deepEqual(parseCycleSnapshot(JSON.stringify(snapshot)), snapshot, "pre-diagnostics snapshots remain readable without rewriting");
+  for (const reason of ["invalid_metrics", "snapshot_budget"] as const) {
+    const unavailable = { version: 1 as const, status: "unavailable" as const, reason };
+    assert.deepEqual(parseCycleSnapshot(serializeCycleSnapshot({ ...snapshot, rssDiagnostics: unavailable })).rssDiagnostics, unavailable);
+  }
+  assert.throws(
+    () => parseCycleSnapshot(`${JSON.stringify(snapshot)}${" ".repeat(8193)}`),
+    /byte limit/i,
+    "persisted snapshots beyond the exact 8 KiB reader bound fail before parsing",
+  );
 });
 
 test("persisted RSS subreasons are exact, structure-only, and fail closed on corruption", () => {

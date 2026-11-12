@@ -56,7 +56,7 @@ type WranglerQueryResult = {
   error?: string;
 };
 
-test("real local Wrangler applies only the production-shaped approved migration sequence", { timeout: 60_000 }, () => {
+test("real local Wrangler proves the exact 0010 predecessor and applies only 0011", { timeout: 60_000 }, () => {
   const temporaryRoot = mkdtempSync(join(tmpdir(), "ai-radar-d1-release-safeguard-"));
   const migrationsDirectory = join(temporaryRoot, "migrations");
   const persistenceDirectory = join(temporaryRoot, "state");
@@ -137,11 +137,19 @@ test("real local Wrangler applies only the production-shaped approved migration 
       INSERT INTO discoveries(normalized_url,first_seen_at,last_seen_at,analysis_json)
       VALUES('https://fixture.invalid/preserved','2026-10-12T07:00:00.000Z','2026-10-12T07:30:00.000Z','{"fixture":"preserve-me"}');`);
 
-    writeConfig(approvedMigrations.slice(0, 8));
+    writeConfig(approvedMigrations.slice(0, 9));
     runWrangler(migrationArguments("apply"));
+    query(`INSERT INTO email_deliveries(
+        delivery_key,logical_date,state,payload_sha256,created_at,updated_at,dispatch_evidence_json,
+        provider_message_id,accepted_at,reconciled_at,last_reason
+      ) VALUES(
+        'daily-digest/2026-11-11','2026-11-11','accepted','${"a".repeat(64)}',
+        '2026-11-11T08:00:00.000Z','2026-11-11T08:00:01.000Z','[]',
+        'preserved-provider-id','2026-11-11T08:00:01.000Z','2026-11-11T08:00:02.000Z','history_reconciled'
+      );`);
 
     const predecessorLedger = query("SELECT id,name FROM d1_migrations ORDER BY id");
-    assert.deepEqual(predecessorLedger, approvedMigrations.slice(0, 8).map((name, index) => ({ id: index + 1, name })));
+    assert.deepEqual(predecessorLedger, approvedMigrations.slice(0, 9).map((name, index) => ({ id: index + 1, name })));
     assert.deepEqual(query(`SELECT id,timestamp,provider,operation,request_count,input_tokens,output_tokens,total_tokens,
       model,accounting_status,ambiguity_reason,settled_at,retired_at,accounting_through FROM gemini_usage WHERE id=22`), [{
       id: 22,
@@ -160,19 +168,20 @@ test("real local Wrangler applies only the production-shaped approved migration 
       accounting_through: "2026-10-12T08:00:10.947Z",
     }]);
     const predecessorTables = query("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").map(row => row.name);
-    for (const name of ["discoveries", "gemini_usage", "monitoring_cycles", "monitoring_gemini_attempts", "openai_fallback_usage"]) {
+    for (const name of ["discoveries", "gemini_usage", "monitoring_cycles", "monitoring_gemini_attempts", "openai_fallback_usage", "email_deliveries"]) {
       assert.ok(predecessorTables.includes(name), `expected predecessor table ${name}`);
     }
-    assert.equal(predecessorTables.includes("email_deliveries"), false);
+    assert.equal(predecessorTables.some(name => typeof name === "string" && name.startsWith("email_feedback_")), false);
     assert.equal(predecessorTables.some(name => typeof name === "string" && name.startsWith("x_")), false);
 
     writeConfig(approvedMigrations);
     const pending = runWrangler(migrationArguments("list")).stdout;
-    assert.match(pending, /0010_email_delivery_ledger\.sql/);
+    assert.match(pending, /0011_email_feedback\.sql/);
+    assert.doesNotMatch(pending, /0010_email_delivery_ledger\.sql/);
     assert.doesNotMatch(pending, /0004_x_discovery\.sql/);
     assert.doesNotMatch(pending, /0011_unapproved_future\.sql/);
     const application = runWrangler(migrationArguments("apply")).stdout;
-    assert.match(application, /0010_email_delivery_ledger\.sql/);
+    assert.match(application, /0011_email_feedback\.sql/);
 
     const finalLedger = query("SELECT id,name FROM d1_migrations ORDER BY id");
     assert.deepEqual(finalLedger, approvedMigrations.map((name, index) => ({ id: index + 1, name })));
@@ -185,17 +194,44 @@ test("real local Wrangler applies only the production-shaped approved migration 
       { type: "trigger", name: "email_deliveries_protect_delete" },
       { type: "trigger", name: "email_deliveries_validate_transition" },
     ]);
+    const feedbackObjects = query(`SELECT type,name FROM sqlite_master
+      WHERE name LIKE 'email_feedback_%' ORDER BY type,name`);
+    assert.deepEqual(feedbackObjects, [
+      { type: "index", name: "email_feedback_stories_expiry_idx" },
+      { type: "index", name: "email_feedback_votes_updated_idx" },
+      { type: "table", name: "email_feedback_events" },
+      { type: "table", name: "email_feedback_stories" },
+      { type: "table", name: "email_feedback_votes" },
+      { type: "trigger", name: "email_feedback_events_immutable_delete" },
+      { type: "trigger", name: "email_feedback_events_immutable_update" },
+      { type: "trigger", name: "email_feedback_stories_immutable" },
+      { type: "trigger", name: "email_feedback_vote_insert_audit" },
+      { type: "trigger", name: "email_feedback_vote_update_audit" },
+      { type: "trigger", name: "email_feedback_vote_update_validate" },
+    ]);
     assert.deepEqual(query("SELECT normalized_url,first_seen_at,last_seen_at,analysis_json FROM discoveries WHERE normalized_url='https://fixture.invalid/preserved'"), [{
       normalized_url: "https://fixture.invalid/preserved",
       first_seen_at: "2026-10-12T07:00:00.000Z",
       last_seen_at: "2026-10-12T07:30:00.000Z",
       analysis_json: "{\"fixture\":\"preserve-me\"}",
     }]);
+    assert.deepEqual(query(`SELECT delivery_key,logical_date,state,payload_sha256,provider_message_id,
+      accepted_at,reconciled_at,last_reason FROM email_deliveries WHERE delivery_key='daily-digest/2026-11-11'`), [{
+      delivery_key: "daily-digest/2026-11-11",
+      logical_date: "2026-11-11",
+      state: "accepted",
+      payload_sha256: "a".repeat(64),
+      provider_message_id: "preserved-provider-id",
+      accepted_at: "2026-11-11T08:00:01.000Z",
+      reconciled_at: "2026-11-11T08:00:02.000Z",
+      last_reason: "history_reconciled",
+    }]);
     const excludedObjects = query(`SELECT name FROM sqlite_master WHERE type='table' AND
       (name IN ('x_poll_state','x_inbox','x_request_usage') OR name='unapproved_future_migration_should_not_run')`);
     assert.deepEqual(excludedObjects, []);
     const repeat = runWrangler(migrationArguments("apply")).stdout;
     assert.match(repeat, /No migrations to apply/i);
+    assert.match(runWrangler(migrationArguments("list")).stdout, /No migrations to apply/i);
     assert.deepEqual(query("SELECT id,name FROM d1_migrations ORDER BY id"), finalLedger);
   } finally {
     rmSync(temporaryRoot, { recursive: true, force: true });
