@@ -1,25 +1,29 @@
 # AI Agent Radar — Backlog
 
-## Current v1.0 authority — 2026-11-12
+## Current roadmap — 2026-11-26
 
-This section supersedes conflicting status/priority labels in the dated historical entries below; those entries remain audit history, not current execution authority. The human approved the finalized Email Feedback architecture and six-task Builder handoff; that bounded implementation is now local and awaiting independent Analyst review. Publication, merge and production remain separately gated.
+GitHub `main` was verified at `6d6b4121e3075d8985d0dc2dd48983893e4b83b4`. Dates and status labels in the historical entries describe their original checkpoints. [Project state](docs/self-improvement/PROJECT_STATE.md#current-repository-and-release-state--2026-11-26) records the published milestones, the separate local GitHub Actions development line, and production evidence.
 
-Baseline `e97440a99d918e7df905e4b22f5560c9649d6620`: local main and live GitHub main verified equal. RSS Structural Subreasons is independently approved, merged, published and CI-verified per the human release record; source publication is independently verified here. It is NOT DEPLOYED. RSS Diagnostic Persistence and Idempotent Email Delivery passed the supplied November 11 natural-cycle evidence; old awaiting-review/unpublished/unapplied labels describe earlier milestones, not current release state. No fresh production or CI query is claimed here.
+The existing Cloudflare legacy scheduler remains the reported production digest path. The GitHub Actions Batch runner and D1 Gateway feedback integration remains a separate local development line. The exact current Cloudflare deployment was outside this check.
 
 ### Mandatory v1.0 order
 
 0. **Release gate: RSS Structural Subreasons.** Before activation, designate and validate a rollback artifact whose strict snapshot reader accepts old and extended v1 RSS records and preserves email-ledger behavior. After any extended record exists, do not roll back to an old exact-key reader. Prefer the reviewed release or a narrowly corrected compatible release; if policy requires a distinct rollback artifact, approve a minimal reader-only backport first. No standalone rollback platform, history rewriting, telemetry deletion, or deployment in this task. Natural validation may be inconclusive if no structural failure occurs.
-1. **Brave Request Timeout + Bounded Response — IMPLEMENTED / OFFLINE-TESTED / AWAITING INDEPENDENT ANALYST REVIEW.** The local feature branch adds the approved five-second complete-operation deadline, 256 KiB success and 16 KiB error-body caps, strict decode/parse, manual redirect rejection and fixed content-free failures. Existing budgets, successful-header accounting, queries, freshness and ranking remain unchanged. It is not published, merged, deployed or naturally validated.
-2. **Email Feedback + Preference Learning MVP — IMPLEMENTED LOCALLY / OFFLINE-TESTED / AWAITING INDEPENDENT ANALYST REVIEW.** The approved per-story Relevant / Not relevant capabilities, explicit confirmation POST, immutable delivery bindings, idempotent/correctable votes, bounded audit/retention, and conservative equal-score preference tie-break are implemented on `feature/email-feedback-preferences-mvp`. Migration `0011_email_feedback.sql` and its explicit allowlist entry are source-only and unapplied. Exact production origin, signing secrets, Cloudflare query-log privacy, rollback compatibility, publication, migration, and deployment remain separate human gates.
+1. **Brave Request Timeout + Bounded Response — MERGED / PUBLISHED.** GitHub main contains the five-second request/body deadline, 256 KiB success and 16 KiB error-body caps, strict parsing and manual redirect rejection at merge `9518c26d4224cf6c7d2e4ca1b6e4b8ba0d13e15b`. The historical handoff records approval and CI verification. Deployment and natural validation of this milestone were unverified here.
+2. **Email Feedback + Preference Learning MVP — MERGED / PUBLISHED / ACTIVATION PENDING.** GitHub main contains signed per-story links, read-only GET/HEAD, explicit confirmation POST, idempotent voting and conservative preference ranking at merge `8e0783bf4a9e1a41efc01c4efe498c8592ff6c8d`. The prior project-state record attests to independent approval and CI verification. Feedback privacy and release compatibility preparation is merged and published at `6d6b4121e3075d8985d0dc2dd48983893e4b83b4`. Source redaction and local compatibility evidence leave production activation pending.
 3. **RSS Structural Failure Resolution.** Use new persisted predicate evidence for OpenAI/Cloudflare; do not assume the irrelevant-field hypothesis is either feed's cause. No parser/source change without evidence and bounded review.
 4. **Cross-Source Event Deduplication.** Conservative same-event identification; uncertain matches and genuinely different announcements remain distinct.
 5. **Bounded Failure-Cause Diagnostics.** Accepted Claude Platform proposal; closed, bounded, logs-only diagnostics. No extra provider dispatch, email route or D1 telemetry without separate approval.
 6. **CI and Maintenance.** Combine Workerd CI Runtime Gate with the two accepted Claude proposals: nested test discovery correction and Node.js 24 TypeScript typings alignment. Verify compatible changes together; no separate large refactoring projects.
 7. **Final Stabilization / v1.0.** Offline/full Workerd regression, explicitly approved releases, daily-email integrity, feedback persistence and preference-ranking verification, operations runbook and human acceptance. Target seven consecutive natural daily cycles with no unresolved critical delivery/accounting failures; record exact dates and evidence, never manufacture cycles. External integrations need not all be activated.
 
+### Feedback and GitHub Actions release gates
+
+The local integration on `codex/v1-1-feedback` is recorded separately in [Project state](docs/self-improvement/PROJECT_STATE.md#newer-local-development-line). Hosted Gateway Free-tier CPU and the large frozen-payload storage boundary remain open. Feedback activation requires verified production application of migration `0011`, the HTTPS feedback origin, signing secrets, and effective log-redaction verification. Any scheduler cutover requires exclusive ownership of the daily run.
+
 ### Deferred, not v1.0 prerequisites
 
-Threads activation until official Meta/business approvals (do not rebuild it); deprecated X/0004; full Claude Self-Upgrade Autopilot; major legacy refactoring; broad pipeline-limit restructuring; advanced/LLM preference optimization; telemetry-degraded content continuity unless new production evidence elevates it.
+Worker version telemetry remains an optional future proposal. Other deferred items include Threads activation until official Meta/business approvals (do not rebuild it); deprecated X/0004; full Claude Self-Upgrade Autopilot; major legacy refactoring; broad pipeline-limit restructuring; advanced/LLM preference optimization; telemetry-degraded content continuity unless new production evidence elevates it.
 
 Claude Platform remains a proposal generator/backlog adviser, never implementation, main-change, merge or deployment authority. The three accepted proposals above are recorded from the explicit human brief; no separate proposal artifacts were located, so no invented proposal IDs or broader scope are attached.
 
@@ -30,7 +34,7 @@ Claude Platform remains a proposal generator/backlog adviser, never implementati
 - [Feedback/preference design](docs/superpowers/specs/2026-11-11-email-feedback-preferences-design.md)
 - [Feedback/preference sequential TDD plan](docs/superpowers/plans/2026-11-11-email-feedback-preferences.md)
 
-Email Feedback is the current independent-review cycle. Existing protected historical specification remains untracked and byte-identical. Human → Architect → Builder → independent Analyst → Architect → Human remains mandatory; publication and production permissions are separate.
+Human → Architect → Builder → independent Analyst → Architect → Human remains mandatory; publication and production permissions are separate.
 
 ## 2026-11-09 — D1 release safeguard verification corrected
 
