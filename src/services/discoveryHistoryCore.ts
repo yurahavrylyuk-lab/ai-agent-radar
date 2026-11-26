@@ -21,11 +21,25 @@ export interface DiscoveryRecordOutcome {
 
 export interface DiscoveryHistory {
   getDiscovery(url: string): Promise<StoredDiscovery | undefined>;
+  /** Optional bounded bulk path; callers must fall back to getDiscovery when absent. */
+  getDiscoveries?(urls: readonly string[]): Promise<Map<string, StoredDiscovery>>;
   listRecentDiscoveries(query: RecentDiscoveryQuery): Promise<RecentDiscoveryResult>;
   recordDiscovery(analysis: AgentAnalysis, seenAt?: Date, sourceProvenance?: XSourceProvenance, batchSelectionProvenance?: BatchSelectionProvenance): Promise<StoredDiscovery>;
   /** Optional for legacy histories; batch persistence requires confirmed insertion evidence. */
   recordDiscoveryWithOutcome?(analysis: AgentAnalysis, seenAt?: Date, sourceProvenance?: XSourceProvenance, batchSelectionProvenance?: BatchSelectionProvenance): Promise<DiscoveryRecordOutcome>;
   touchDiscovery(url: string, seenAt?: Date): Promise<StoredDiscovery | undefined>;
+  /** Optional bounded monotonic bulk touch; callers must fall back when absent. */
+  touchDiscoveries?(urls: readonly string[], seenAt?: Date): Promise<void>;
+}
+
+export const HISTORY_BULK_ALIAS_LIMIT = 100;
+
+export function normalizeBoundedHistoryAliases(urls: readonly string[]): string[] {
+  const normalized = [...new Set(urls.map(normalizeDiscoveryUrl))];
+  if (normalized.length > HISTORY_BULK_ALIAS_LIMIT) {
+    throw new DiscoveryHistoryError(`Bulk history operations accept at most ${HISTORY_BULK_ALIAS_LIMIT} unique aliases.`);
+  }
+  return normalized;
 }
 
 function nonEmptyString(value: unknown): value is string { return typeof value === "string" && value.trim().length > 0; }

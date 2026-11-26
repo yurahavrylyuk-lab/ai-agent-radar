@@ -7,7 +7,7 @@ const encoder = new TextEncoder();
 const SUBJECT_BYTES = 1024;
 const TEXT_BYTES = 64 * 1024;
 const HTML_BYTES = 192 * 1024;
-const CONTENT_BYTES = 272 * 1024;
+const STORED_CONTENT_BYTES = 272 * 1024;
 const REQUEST_BYTES = 280 * 1024;
 const ALIAS_BYTES = 2048;
 const ALIASES_BYTES = 128 * 1024;
@@ -145,6 +145,10 @@ function digestAliases(digest: PreparedDailyDigest): string[] {
   return result;
 }
 
+export function serializeFrozenDeliveryContent(identity: DeliveryIdentity, content: FrozenDelivery["content"]): string {
+  return JSON.stringify({ scheduledAt: identity.scheduledAt, content });
+}
+
 export async function freezeDelivery(
   digest: PreparedDailyDigest,
   identity: DeliveryIdentity,
@@ -161,7 +165,7 @@ export async function freezeDelivery(
   assertBound(content.subject, SUBJECT_BYTES, "Delivery subject");
   assertBound(content.text, TEXT_BYTES, "Delivery text");
   assertBound(content.html, HTML_BYTES, "Delivery HTML");
-  assertBound(JSON.stringify(content), CONTENT_BYTES, "Delivery content");
+  assertBound(serializeFrozenDeliveryContent(identity, content), STORED_CONTENT_BYTES, "Stored delivery content");
   const body = canonicalBody(content, recipient);
   assertBound(body, REQUEST_BYTES, "Delivery request");
   const aliases = digest.mode === "status_only" ? [] : digestAliases(digest);

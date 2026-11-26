@@ -4,6 +4,7 @@ import * as orchestrator from "../src/services/notificationOrchestrator.js";
 import { notifyDeliveryDigest, notifyDiscovery, notifyDigest } from "../src/services/notificationOrchestrator.js";
 import type { DeliveryCandidate, DiscoveryEmailContent, DiscoveryProcessingResult, NotificationRecord } from "../src/types/index.js";
 import type { NotificationHistory } from "../src/services/notificationHistory.js";
+import { NotificationHistoryError } from "../src/services/notificationHistoryCore.js";
 
 function result(status: DiscoveryProcessingResult["status"], relevanceScore: number, sourceUrl = "https://example.com/discovery"): DiscoveryProcessingResult {
   return {
@@ -337,6 +338,40 @@ test("RF5 final alias evidence removes lead, promotes next fresh story and fills
     "https://example.com/promoted", "https://example.com/third", "https://example.com/fourth", "https://example.com/replay",
   ]);
   assert.equal(outcome.notifications.get(lead.discovery.analysis.sourceUrl)?.status, "already_sent");
+});
+
+test("daily digest performs two fresh bulk notification checks and observes a notification between them", async () => {
+  const candidate = batchCandidate(8, "bulk-check");
+  let passes = 0;
+  const digest = await orchestrator.prepareDailyDigest({
+    cycleDate: "2026-10-20T08:00:00.000Z", fresh: [candidate], replay: [], rawCandidates: [],
+    observedAliases: new Map(), allowRawFallback: true, reason: "selected",
+  }, {
+    hasNotificationBeenSent: async () => { throw new Error("point notification lookup used"); },
+    getNotificationRecord: async () => { throw new Error("point notification lookup used"); },
+    recordNotificationSent: async () => { throw new Error("unused"); },
+    async getNotificationRecords(urls: readonly string[], channel: string) {
+      passes += 1;
+      assert.deepEqual(urls, ["https://example.com/bulk-check"]);
+      assert.equal(channel, "email");
+      return passes === 1 ? new Map() : new Map([[urls[0]!, record(urls[0])]]);
+    },
+  });
+  assert.equal(passes, 2);
+  assert.equal(digest.mode, "status_only");
+  assert.equal(digest.reason, "no_eligible_stories");
+});
+
+test("batch bulk notification failure remains a fail-closed NotificationHistoryError", async () => {
+  let sends = 0;
+  await assert.rejects(orchestrator.notifyBatchDeliveryDigest([batchCandidate(8, "bulk-failure")], {
+    history: {
+      ...openHistory(),
+      async getNotificationRecords() { throw new Error("bulk unavailable"); },
+    },
+    sendEmail: async () => { sends += 1; return { id: "unexpected" }; },
+  }), NotificationHistoryError);
+  assert.equal(sends, 0);
 });
 
 for (const failOnRead of [1, 2]) {

@@ -13,7 +13,7 @@ export interface FailoverDependencies {
   cycleId:string;
   cycleStartedAtMonotonic:number;
   monotonicNow:()=>number;
-  store:D1OpenAIFallbackUsageStore;
+  store:Pick<D1OpenAIFallbackUsageStore, "reserve" | "markIntent" | "markObserved" | "settleExact" | "markUnknown" | "cancelBeforeDispatch">;
   limits:OpenAIFallbackLimits|null;
   apiKey?:string;
   consumed:FailoverConsumed;

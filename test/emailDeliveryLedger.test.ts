@@ -85,6 +85,26 @@ test("freeze rejects bounded content and alias overflows without truncation", as
   }, recipient), /alias/i);
 });
 
+test("freeze enforces the D1 byte limit including the stored JSON wrapper", async () => {
+  const identity = deliveryIdentity(new Date("2026-11-04T08:00:00.000Z"));
+  const limit = 278_528;
+  const content = {
+    from: "sender@example.test", subject: "Daily", text: '"'.repeat(45_000), html: "é",
+  };
+  const storedBytes = (value: typeof content) => Buffer.byteLength(JSON.stringify({
+    scheduledAt: identity.scheduledAt, content: value,
+  }));
+  content.html += "h".repeat(limit - storedBytes(content));
+  assert.equal(storedBytes(content), limit);
+  const frozen = await freezeDelivery(digest, identity, content, recipient);
+  assert.deepEqual(frozen.content, content);
+
+  const overflow = { ...content, html: content.html + "h" };
+  assert.equal(storedBytes(overflow), limit + 1);
+  assert.ok(Buffer.byteLength(JSON.stringify(overflow)) < limit);
+  await assert.rejects(() => freezeDelivery(digest, identity, overflow, recipient), /stored delivery content/i);
+});
+
 test("delivery record validation enforces frozen and terminal invariants", async () => {
   const identity = deliveryIdentity(new Date("2026-11-04T00:00:00.000Z"));
   const frozen = await freezeDelivery(digest, identity, {

@@ -6,6 +6,7 @@ import {
   isValidBatchSelectionProvenance,
   isValidXSourceProvenance,
   normalizeDiscoveryUrl,
+  normalizeBoundedHistoryAliases,
   validateRecentDiscoveryQuery,
   type DiscoveryHistory,
   type DiscoveryRecordOutcome,
@@ -103,6 +104,27 @@ export class D1DiscoveryHistory implements DiscoveryHistory {
     }
   }
 
+  async getDiscoveries(urls: readonly string[]): Promise<Map<string, StoredDiscovery>> {
+    const normalized = normalizeBoundedHistoryAliases(urls);
+    if (normalized.length === 0) return new Map();
+    try {
+      const result = await this.database.prepare(
+        "SELECT d.normalized_url, d.first_seen_at, d.last_seen_at, d.analysis_json "
+        + "FROM discoveries d JOIN json_each(?1) requested ON requested.value = d.normalized_url "
+        + "ORDER BY requested.key ASC",
+      ).bind(JSON.stringify(normalized)).all<DiscoveryRow>();
+      const records = new Map<string, StoredDiscovery>();
+      for (const row of result.results ?? []) {
+        const discovery = discoveryFromRow(row);
+        records.set(discovery.normalizedUrl, copy(discovery));
+      }
+      return records;
+    } catch (error) {
+      if (error instanceof DiscoveryHistoryError) throw error;
+      throw new DiscoveryHistoryError("D1 discovery history could not be read safely.");
+    }
+  }
+
   async listRecentDiscoveries(query: RecentDiscoveryQuery): Promise<RecentDiscoveryResult> {
     validateRecentDiscoveryQuery(query);
     try {
@@ -160,9 +182,27 @@ export class D1DiscoveryHistory implements DiscoveryHistory {
     const normalizedUrl = normalizeDiscoveryUrl(url);
     try {
       await this.database.prepare(
-        "UPDATE discoveries SET last_seen_at = ?1 WHERE normalized_url = ?2",
-      ).bind(seenAt.toISOString(), normalizedUrl).run();
+        "UPDATE discoveries SET last_seen_at = ?1 WHERE normalized_url = ?2 AND last_seen_at < ?3",
+      ).bind(seenAt.toISOString(), normalizedUrl, seenAt.toISOString()).run();
       return this.getDiscovery(normalizedUrl);
+    } catch (error) {
+      if (error instanceof DiscoveryHistoryError) throw error;
+      throw new DiscoveryHistoryError("D1 discovery history could not be written safely.");
+    }
+  }
+
+
+  async touchDiscoveries(urls: readonly string[], seenAt = new Date()): Promise<void> {
+    if (Number.isNaN(seenAt.getTime())) throw new DiscoveryHistoryError("Discovery timestamp is invalid.");
+    const normalized = normalizeBoundedHistoryAliases(urls);
+    if (normalized.length === 0) return;
+    try {
+      const result = await this.database.prepare(
+        "WITH requested(value) AS (SELECT value FROM json_each(?1)) "
+        + "UPDATE discoveries SET last_seen_at = ?2 "
+        + "WHERE normalized_url IN (SELECT value FROM requested) AND last_seen_at < ?3",
+      ).bind(JSON.stringify(normalized), seenAt.toISOString(), seenAt.toISOString()).run();
+      if (result.success !== true) throw new DiscoveryHistoryError("D1 discovery bulk touch outcome could not be verified safely.");
     } catch (error) {
       if (error instanceof DiscoveryHistoryError) throw error;
       throw new DiscoveryHistoryError("D1 discovery history could not be written safely.");

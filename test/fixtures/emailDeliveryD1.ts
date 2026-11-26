@@ -2,6 +2,7 @@ import Database from "better-sqlite3";
 import { readFile } from "node:fs/promises";
 
 export type D1Fault = { pattern: RegExp; phase: "before" | "after" | "read"; remaining?: number };
+export interface D1InvocationCounts { first: number; all: number; run: number; batch: number; batchStatements: number[]; batchSql: string[][] }
 
 class Statement {
   constructor(private readonly owner: SqliteD1, private readonly sql: string, private readonly values: unknown[] = []) {}
@@ -15,16 +16,19 @@ class Statement {
     return { query, values };
   }
   async first<T>(): Promise<T | null> {
+    this.owner.calls.first++;
     this.owner.fail(this.sql, "read");
     const compiled = this.compiled();
     return (this.owner.database.prepare(compiled.query).get(...compiled.values) as T | undefined) ?? null;
   }
   async all<T>(): Promise<D1Result<T>> {
+    this.owner.calls.all++;
     this.owner.fail(this.sql, "read");
     const compiled = this.compiled();
     return { success: true, results: this.owner.database.prepare(compiled.query).all(...compiled.values) as T[], meta: {} as D1Meta };
   }
   async run(): Promise<D1Result> {
+    this.owner.calls.run++;
     this.owner.fail(this.sql, "before");
     const compiled = this.compiled();
     const result = this.owner.database.prepare(compiled.query).run(...compiled.values);
@@ -32,18 +36,27 @@ class Statement {
     return { success: true, results: [], meta: { changes: result.changes, last_row_id: Number(result.lastInsertRowid) } as D1Meta };
   }
   runSync(): D1Result {
+    this.owner.fail(this.sql, "before");
     const compiled = this.compiled();
     const result = this.owner.database.prepare(compiled.query).run(...compiled.values);
+    this.owner.fail(this.sql, "after");
     return { success: true, results: [], meta: { changes: result.changes } as D1Meta };
   }
+  sourceSql(): string { return this.sql; }
 }
 
 export class SqliteD1 {
   readonly faults: D1Fault[] = [];
-  constructor(readonly database: Database.Database) {}
+  readonly calls: D1InvocationCounts;
+  constructor(readonly database: Database.Database, calls?: D1InvocationCounts) {
+    this.calls = calls ?? { first: 0, all: 0, run: 0, batch: 0, batchStatements: [], batchSql: [] };
+  }
   prepare(sql: string): Statement { return new Statement(this, sql); }
-  withSession(_constraint: string): SqliteD1 { return new SqliteD1Session(this.database, this.faults); }
+  withSession(_constraint: string): SqliteD1 { return new SqliteD1Session(this.database, this.faults, this.calls); }
   async batch(statements: Statement[]): Promise<D1Result[]> {
+    this.calls.batch++;
+    this.calls.batchStatements.push(statements.length);
+    this.calls.batchSql.push(statements.map(statement => statement.sourceSql()));
     this.database.exec("BEGIN");
     try {
       const results = statements.map(statement => statement.runSync());
@@ -55,6 +68,10 @@ export class SqliteD1 {
     }
   }
   inject(fault: D1Fault): void { this.faults.push({ ...fault, remaining: fault.remaining ?? 1 }); }
+  resetCalls(): void {
+    this.calls.first = 0; this.calls.all = 0; this.calls.run = 0; this.calls.batch = 0;
+    this.calls.batchStatements.length = 0; this.calls.batchSql.length = 0;
+  }
   fail(sql: string, phase: D1Fault["phase"]): void {
     const fault = this.faults.find(item => item.phase === phase && (item.remaining ?? 0) > 0 && item.pattern.test(sql));
     if (!fault) return;
@@ -64,7 +81,7 @@ export class SqliteD1 {
 }
 
 class SqliteD1Session extends SqliteD1 {
-  constructor(database: Database.Database, faults: D1Fault[]) { super(database); this.faults.push(...faults); }
+  constructor(database: Database.Database, faults: D1Fault[], calls: D1InvocationCounts) { super(database, calls); this.faults.push(...faults); }
 }
 
 export async function createEmailDeliveryDatabase(feedback = false): Promise<{ sqlite: Database.Database; d1: SqliteD1 }> {

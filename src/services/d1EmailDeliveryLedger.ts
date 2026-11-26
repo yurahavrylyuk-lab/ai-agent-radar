@@ -1,5 +1,6 @@
 import {
   DeliveryStateUnavailableError,
+  serializeFrozenDeliveryContent,
   validateDeliveryRecord,
   type ClaimRef,
   type DeliveryKey,
@@ -85,7 +86,7 @@ export class D1EmailDeliveryLedger implements DeliveryLedger {
   }
 
   private async insertReservation(frozen: FrozenDelivery): Promise<void> {
-    const content = JSON.stringify({ scheduledAt: frozen.identity.scheduledAt, content: frozen.content });
+    const content = serializeFrozenDeliveryContent(frozen.identity, frozen.content);
     await this.database.prepare(`INSERT INTO email_deliveries(
       delivery_key,logical_date,state,payload_version,content_json,payload_sha256,mode,reason,aliases_json,
       created_at,updated_at,dispatch_evidence_json,last_reason
@@ -112,7 +113,7 @@ export class D1EmailDeliveryLedger implements DeliveryLedger {
     if (bindings.length<1 || bindings.length>4 || bindings.some((b,i)=>b.deliveryKey!==frozen.identity.key || b.payloadSha256!==frozen.payloadSha256 || b.slot!==i+1)) {
       throw new DeliveryStateUnavailableError();
     }
-    const content=JSON.stringify({scheduledAt:frozen.identity.scheduledAt,content:frozen.content});
+    const content = serializeFrozenDeliveryContent(frozen.identity, frozen.content);
     try {
       await this.database.batch([
         this.database.prepare(`INSERT INTO email_deliveries(delivery_key,logical_date,state,payload_version,content_json,payload_sha256,mode,reason,aliases_json,created_at,updated_at,dispatch_evidence_json,last_reason)

@@ -41,7 +41,7 @@ export async function handleEmailFeedbackRoute(request:Request,database:D1Databa
       const token=url.searchParams.get("token")!; const {claims,binding}=await exactBinding(store,token,config,now);
       const vote=await store.readVote(claims.deliveryKey,claims.slot); const revision=vote?.revision??0;
       const nonce=await createFeedbackConfirmation(token,claims.rating,revision,claims.expiresAt,config.keyring,config.origin,now);
-      const body=`<p>${escape(binding.displayTitle)}</p><p>Choice: ${claims.rating==="relevant"?"Relevant":"Not relevant"}</p><form method="post" action="${config.origin}/feedback/confirm"><input type="hidden" name="token" value="${escape(token)}"><input type="hidden" name="nonce" value="${escape(nonce)}"><input type="hidden" name="rating" value="${claims.rating}"><input type="hidden" name="revision" value="${revision}"><button type="submit">Confirm feedback</button></form>`;
+      const body=`<p>${escape(binding.displayTitle)}</p><p>Choice: ${claims.rating==="relevant"?"Relevant":"Not Relevant"}</p><form method="post" action="${config.origin}/feedback/confirm"><input type="hidden" name="token" value="${escape(token)}"><input type="hidden" name="nonce" value="${escape(nonce)}"><input type="hidden" name="rating" value="${claims.rating}"><input type="hidden" name="revision" value="${revision}"><button type="submit">Confirm feedback</button></form>`;
       return response(page("Confirm feedback",body),200,request.method);
     }
     if(url.pathname==="/feedback/confirm" && request.method==="POST") {

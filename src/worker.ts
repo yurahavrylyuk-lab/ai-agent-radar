@@ -6,6 +6,12 @@ import { D1MonitoringTelemetry } from "./services/d1MonitoringTelemetry.js";
 import { D1OpenAIFallbackUsageStore } from "./services/d1OpenAIFallbackUsageStore.js";
 import { D1EmailDeliveryLedger } from "./services/d1EmailDeliveryLedger.js";
 import { deliveryIdentity } from "./services/emailDeliveryLedger.js";
+import type { DeliveryLedger } from "./services/emailDeliveryLedger.js";
+import type { DiscoveryHistory } from "./services/discoveryHistoryCore.js";
+import type { NotificationHistory } from "./services/notificationHistoryCore.js";
+import type { BraveUsageStore } from "./services/usageTracker.js";
+import type { GeminiUsageStore } from "./services/geminiUsageTracker.js";
+import type { FailoverDependencies } from "./services/batchAnalyzerFailover.js";
 import { attachRssDiagnostics, isTotalDiscoveryOutage, validateAnalyzerFailoverObservation, validateDeliveryLedgerObservation, validateThreadsCycleMetrics, type AnalyzerFailoverObservation, type CycleLatencyV1, type CycleSnapshotV1, type GeminiAttemptTiming, type MonitoringTelemetry } from "./services/monitoringTelemetry.js";
 import { inspectGeminiAvailability } from "./services/geminiUsageGuard.js";
 import { analyzeBatch, BatchAnalysisError } from "./services/analysisAgent.js";
@@ -25,7 +31,7 @@ import { THREADS_QUERIES } from "./config/threadsSources.js";
 import type { BatchCycleMetrics, MonitoringCycleResult, RssCycleMetrics, ThreadsCycleMetrics } from "./types/index.js";
 import { handleEmailFeedbackRoute } from "./services/emailFeedbackRoutes.js";
 import { D1EmailFeedbackStore } from "./services/d1EmailFeedbackStore.js";
-import { calculateFeedbackPreferenceProfile } from "./services/feedbackPreferences.js";
+import { calculateFeedbackPreferenceProfile, type FeedbackPreferenceProfile } from "./services/feedbackPreferences.js";
 
 export const MAX_SCHEDULED_OUTCOMES_LOGGED = 10;
 export const MAX_SCHEDULED_SEARCH_FAILURES_LOGGED = 10;
@@ -70,7 +76,7 @@ export interface RadarWorkerEnv {
   FEEDBACK_RETIRING_KEY?: string;
 }
 
-function feedbackConfiguration(env:RadarWorkerEnv) {
+function feedbackConfiguration(env:BatchRuntimeEnvironment) {
   const configured=[env.FEEDBACK_ORIGIN,env.FEEDBACK_SIGNING_KEY_ID,env.FEEDBACK_SIGNING_KEY,env.FEEDBACK_RETIRING_KEY_ID,env.FEEDBACK_RETIRING_KEY].some(Boolean);
   if(!configured)return undefined;
   if(!env.FEEDBACK_ORIGIN || !env.FEEDBACK_SIGNING_KEY_ID || !env.FEEDBACK_SIGNING_KEY
@@ -150,6 +156,7 @@ export interface ScheduledMonitoringDependencies {
   scheduledAt?: Date;
   startedAt?: Date;
   cycleId?: string;
+  persistence?: WorkerBatchPersistence;
 }
 
 export function createRssDiagnosticsOmissionReporter(
@@ -165,7 +172,7 @@ export function createRssDiagnosticsOmissionReporter(
   };
 }
 
-function redactScheduledError(error: string, env: RadarWorkerEnv, maximumLength = MAX_SCHEDULED_ERROR_LENGTH): string {
+function redactScheduledError(error: string, env: BatchRuntimeEnvironment, maximumLength = MAX_SCHEDULED_ERROR_LENGTH): string {
   const sensitiveValues = [
     env.BRAVE_SEARCH_API_KEY,
     env.GEMINI_API_KEY,
@@ -200,7 +207,7 @@ function allowedString<T extends string>(value: unknown, allowed: readonly T[]):
 }
 
 /** Copies only bounded application evidence; never serialize the candidate map or model/source text. */
-function summarizeBatch(batch: BatchCycleMetrics, env: RadarWorkerEnv): BatchCycleMetrics {
+function summarizeBatch(batch: BatchCycleMetrics, env: BatchRuntimeEnvironment): BatchCycleMetrics {
   const selected: BatchCycleMetrics["selected"] = [];
   let remainingProvenance = 75;
   const approvedFeedIds = new Set(RSS_FEEDS.map(feed => feed.id));
@@ -342,7 +349,7 @@ function summarizeThreads(threads: ThreadsCycleMetrics): ThreadsCycleMetrics | u
 /** Builds the bounded, secret-free payload emitted after a successful scheduled cycle. */
 export function createScheduledCycleSummary(
   result: MonitoringCycleResult,
-  env: RadarWorkerEnv,
+  env: BatchRuntimeEnvironment,
 ): ScheduledCycleSummary {
   const searchFailures = result.searchFailures
     .slice(0, MAX_SCHEDULED_SEARCH_FAILURES_LOGGED)
@@ -459,15 +466,35 @@ export interface WorkerMonitoringDependencyOverrides {
   readonly dailyDelivery?: DailyDeliveryDependencies;
 }
 
+export interface WorkerBatchPersistence {
+  discoveryHistory: DiscoveryHistory;
+  notificationHistory: NotificationHistory;
+  braveUsageStore: BraveUsageStore;
+  geminiUsageStore: GeminiUsageStore & Pick<D1GeminiUsageStore, "settleObservedAttempt">;
+  openaiFallbackUsageStore: FailoverDependencies["store"];
+  emailDeliveryLedger: DeliveryLedger;
+  feedbackStore?: {
+    getPreferenceProfile: (at: string) => Promise<FeedbackPreferenceProfile>;
+    pruneExpired: () => Promise<number>;
+  };
+}
+
+export type BatchRuntimeEnvironment = Omit<RadarWorkerEnv, "DB"> & { DB?: D1Database };
+
+function requireWorkerDatabase(env: BatchRuntimeEnvironment): RadarWorkerEnv {
+  if (!env.DB) throw new Error("Batch persistence is unavailable.");
+  return env as RadarWorkerEnv;
+}
+
 export const workerdRssFetch: typeof fetch = (input, init) => globalThis.fetch(input, init);
 export const workerdThreadsFetch: typeof fetch = (input, init) => globalThis.fetch(input, init);
 
 export function createWorkerMonitoringDependencies(
-  env: RadarWorkerEnv,
+  env: BatchRuntimeEnvironment,
   overrides: WorkerMonitoringDependencyOverrides = {},
+  persistence: WorkerBatchPersistence = createWorkerPersistence(requireWorkerDatabase(env)),
 ): BatchMonitoringDependencies {
   const configuration = createMonitoringRuntimeConfiguration(env as unknown as Record<string, string | undefined>);
-  const persistence = createWorkerPersistence(env);
   const geminiCycleContext = createGeminiBatchCycleContext();
   const failoverConsumed = { consumed: false };
   let analyzerFailover: AnalyzerFailoverObservation | undefined;
@@ -546,22 +573,32 @@ export function createWorkerMonitoringDependencies(
 
 /** Executes one bounded monitoring cycle only when Cloudflare delivers a scheduled event. */
 export async function runScheduledMonitoring(
-  env: RadarWorkerEnv,
+  env: BatchRuntimeEnvironment,
   dependencies: ScheduledMonitoringDependencies = {},
 ): Promise<MonitoringCycleResult> {
   const runCycle = dependencies.runCycle ?? (async () => {
     const cycleStartedAtMonotonic = performance.now();
     const context = createDailyEmailContext();
-    const telemetry = dependencies.telemetry ?? new D1MonitoringTelemetry(env.DB);
+    const telemetry = dependencies.telemetry ?? new D1MonitoringTelemetry(requireWorkerDatabase(env).DB);
     const scheduledAt = dependencies.scheduledAt;
     if (!(scheduledAt instanceof Date) || Number.isNaN(scheduledAt.getTime())) {
       throw new Error("A valid scheduled time is required for scheduled monitoring.");
     }
     const startedAt = dependencies.startedAt ?? new Date();
     const identity = deliveryIdentity(scheduledAt);
-    const ledger = new D1EmailDeliveryLedger(env.DB);
+    const ledger = dependencies.persistence?.emailDeliveryLedger ?? new D1EmailDeliveryLedger(requireWorkerDatabase(env).DB);
     const feedback = feedbackConfiguration(env);
-    if(feedback) try { await new D1EmailFeedbackStore(env.DB).pruneExpired(startedAt.toISOString()); } catch { /* bounded feedback cleanup never changes delivery authority */ }
+    const feedbackStore = feedback && env.DB ? new D1EmailFeedbackStore(env.DB) : undefined;
+    const gatewayFeedback = feedback && !env.DB ? dependencies.persistence?.feedbackStore : undefined;
+    if (feedbackStore || gatewayFeedback) {
+      try {
+        if (feedbackStore) await feedbackStore.pruneExpired(startedAt.toISOString());
+        else await gatewayFeedback?.pruneExpired();
+      } catch { /* bounded feedback cleanup never changes delivery authority */ }
+    }
+    const loadPreferenceProfile = feedbackStore
+      ? async () => calculateFeedbackPreferenceProfile(await feedbackStore.loadPreferenceObservations(scheduledAt.toISOString()))
+      : gatewayFeedback && (() => gatewayFeedback.getPreferenceProfile(scheduledAt.toISOString()));
     let emailCheckpoint: () => Promise<void> = async () => {};
     const dailyDelivery: DailyDeliveryDependencies = {
       context, identity, ledger,
@@ -570,7 +607,7 @@ export async function runScheduledMonitoring(
       sendFrozen: (body, key) => sendFrozenWithResend(body, key, { environment: env as unknown as Record<string, string | undefined> }),
       beforeEmailAttempt: () => emailCheckpoint(),
       ...(feedback?{feedback}:{}),
-      ...(feedback?{loadPreferenceProfile:async()=>calculateFeedbackPreferenceProfile(await new D1EmailFeedbackStore(env.DB).loadPreferenceObservations(scheduledAt.toISOString()))}:{}),
+      ...(loadPreferenceProfile ? {loadPreferenceProfile} : {}),
     };
     const cycleId = dependencies.cycleId ?? crypto.randomUUID();
     let cycleCreated = false;
@@ -612,7 +649,7 @@ export async function runScheduledMonitoring(
         onAttemptTiming,
         cycleStartedAtMonotonic,
         dailyDelivery,
-      });
+      }, dependencies.persistence);
       cycleDependencies.onRssDiagnosticsOmission = warnRssOmission;
       cycleDependencies.onTelemetryCheckpoint = async (phase, snapshot) => {
         latestSnapshot = snapshot;

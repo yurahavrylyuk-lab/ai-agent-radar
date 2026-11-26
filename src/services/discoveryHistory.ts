@@ -117,6 +117,7 @@ export class JsonDiscoveryHistory implements DiscoveryHistory {
     const data = await this.read();
     const index = data.discoveries.findIndex((item) => item.normalizedUrl === normalizedUrl);
     if (index === -1) return undefined;
+    if (data.discoveries[index]!.lastSeenAt >= seenAt.toISOString()) return copy(data.discoveries[index]!);
 
     const updated: StoredDiscovery = { ...data.discoveries[index], lastSeenAt: seenAt.toISOString() };
     const discoveries = [...data.discoveries];

@@ -1,6 +1,6 @@
 import { formatDiscoveryEmail, formatDigestEmail, formatBatchDigestEmail, formatDailyDigestEmail, type DigestEmailOptions } from "./discoveryEmailFormatter.js";
 import { batchAliasKey, isBatchNewsUrl } from "./batchCandidates.js";
-import { normalizeDiscoveryUrl } from "./discoveryHistoryCore.js";
+import { HISTORY_BULK_ALIAS_LIMIT, normalizeDiscoveryUrl } from "./discoveryHistoryCore.js";
 import { compareDiscoveryPriority } from "./discoveryPriority.js";
 import { isNotificationEligible } from "./notificationEligibility.js";
 import { isTrustedFallbackSource } from "./sourceTrust.js";
@@ -61,6 +61,32 @@ function replayDeliveryEligible(candidate: BatchDeliveryCandidate): boolean {
 
 type PreparedGroup = { item?: DailyDigestItem; index: number; aliases: Set<string> };
 
+async function notificationRecords(history: NotificationHistory, aliases: readonly string[]): Promise<Map<string, NotificationRecord>> {
+  try {
+    const normalized = [...new Set(aliases.map(normalizeDiscoveryUrl))];
+    const records = new Map<string, NotificationRecord>();
+    for (let index = 0; index < normalized.length; index += HISTORY_BULK_ALIAS_LIMIT) {
+      const part = normalized.slice(index, index + HISTORY_BULK_ALIAS_LIMIT);
+      if (history.getNotificationRecords) {
+        for (const [url, record] of await history.getNotificationRecords(part, "email")) records.set(url, record);
+      } else {
+        for (const url of part) {
+          const sent = await history.hasNotificationBeenSent(url, "email");
+          if (sent) {
+            const record = await history.getNotificationRecord(url, "email");
+            if (!record) throw new NotificationHistoryError("Known notification could not be retrieved safely.");
+            records.set(url, record);
+          }
+        }
+      }
+    }
+    return records;
+  } catch (error) {
+    if (error instanceof NotificationHistoryError) throw error;
+    throw new NotificationHistoryError(`Notification history could not be read safely: ${messageOf(error)}`);
+  }
+}
+
 /** Selects one bounded daily payload without formatting, sending, or persistence. */
 export async function prepareDailyDigest(input: DailyDigestInput, history: NotificationHistory, preferences?:FeedbackPreferenceProfile): Promise<PreparedDailyDigest> {
   const status = (reason: DailyDigestInput["reason"]): PreparedDailyDigest => ({
@@ -88,16 +114,10 @@ export async function prepareDailyDigest(input: DailyDigestInput, history: Notif
     return [...groups.values()];
   };
   const excludeNotified = async (groups: readonly PreparedGroup[]): Promise<PreparedGroup[]> => {
+    const records = await notificationRecords(history, groups.flatMap(group => [...group.aliases]));
     const result: PreparedGroup[] = [];
     for (const group of groups) {
-      let notified = false;
-      for (const alias of group.aliases) {
-        if (await history.hasNotificationBeenSent(alias, "email")) {
-          const record = await history.getNotificationRecord(alias, "email");
-          if (!record) throw new NotificationHistoryError("Known notification could not be retrieved safely.");
-          notified = true;
-        }
-      }
+      const notified = [...group.aliases].some(alias => records.has(alias));
       if (!notified && group.item) result.push(group);
     }
     return result;
@@ -482,16 +502,13 @@ export async function notifyBatchDeliveryDigest(
   }
 
   const excludeNotified = async (pool: EligibleGroup[]): Promise<EligibleGroup[]> => {
+    const records = await notificationRecords(history, pool.flatMap(group => [...group.aliases]));
     const unsent: EligibleGroup[] = [];
     for (const group of pool) {
       let notification: NotificationRecord | undefined;
       try {
         for (const alias of group.aliases) {
-          if (await history.hasNotificationBeenSent(alias, "email")) {
-            const record = await history.getNotificationRecord(alias, "email");
-            if (!record) throw new NotificationHistoryError("Known notification could not be retrieved safely.");
-            notification ??= record;
-          }
+          notification ??= records.get(alias);
         }
       } catch (error) {
         if (error instanceof NotificationHistoryError) throw error;

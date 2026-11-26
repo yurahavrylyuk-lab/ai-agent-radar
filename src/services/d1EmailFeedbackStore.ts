@@ -84,16 +84,21 @@ export class D1EmailFeedbackStore {
     return {kind:"blocked"};
   }
   async pruneExpired(now: string): Promise<number> {
-    const rows=await this.primary().prepare(`SELECT delivery_key FROM email_feedback_stories WHERE expires_at<?1
-      GROUP BY delivery_key ORDER BY delivery_key LIMIT 20`).bind(new Date(new Date(now).getTime()-150*86_400_000).toISOString()).all<{delivery_key:DeliveryKey}>();
-    for (const row of rows.results) {
-      await this.database.batch([
-        this.database.prepare("DELETE FROM email_feedback_events WHERE delivery_key=?1").bind(row.delivery_key),
-        this.database.prepare("DELETE FROM email_feedback_votes WHERE delivery_key=?1").bind(row.delivery_key),
-        this.database.prepare("DELETE FROM email_feedback_stories WHERE delivery_key=?1").bind(row.delivery_key),
-      ]);
-    }
-    return rows.results.length;
+    const cutoff=new Date(new Date(now).getTime()-150*86_400_000).toISOString();
+    const rows=await this.primary().prepare(`SELECT delivery_key FROM email_feedback_stories
+      GROUP BY delivery_key HAVING MAX(expires_at)<?1 ORDER BY delivery_key LIMIT 20`).bind(cutoff).all<{delivery_key:DeliveryKey}>();
+    if(rows.results.length===0)return 0;
+    const eligible=`EXISTS(SELECT 1 FROM email_feedback_stories present WHERE present.delivery_key=?1)
+      AND NOT EXISTS(SELECT 1 FROM email_feedback_stories live WHERE live.delivery_key=?1 AND live.expires_at>=?2)`;
+    const events=rows.results.map(row=>this.database.prepare(`DELETE FROM email_feedback_events WHERE delivery_key=?1 AND ${eligible}`).bind(row.delivery_key,cutoff));
+    const votes=rows.results.map(row=>this.database.prepare(`DELETE FROM email_feedback_votes WHERE delivery_key=?1 AND ${eligible}`).bind(row.delivery_key,cutoff));
+    const bindings=rows.results.map(row=>this.database.prepare(`DELETE FROM email_feedback_stories WHERE delivery_key=?1
+      AND NOT EXISTS(SELECT 1 FROM email_feedback_stories live WHERE live.delivery_key=?1 AND live.expires_at>=?2)`).bind(row.delivery_key,cutoff));
+    const results=await this.database.batch([...events,...votes,...bindings]);
+    const bindingResults=results.slice(events.length+votes.length);
+    if(bindingResults.length!==bindings.length || bindingResults.some(result=>!Number.isInteger(result.meta?.changes) || (result.meta?.changes??-1)<0))
+      throw new Error("Feedback cleanup outcome unavailable.");
+    return bindingResults.filter(result=>(result.meta?.changes??0)>0).length;
   }
   async loadPreferenceObservations(now:string):Promise<FeedbackPreferenceObservation[]> {
     const cutoff=new Date(new Date(now).getTime()-90*86_400_000).toISOString().slice(0,10);
@@ -102,9 +107,10 @@ export class D1EmailFeedbackStore {
         SELECT s.discovery_key,s.topics_json,v.rating,e.logical_date,s.delivery_key,s.slot,
           row_number() OVER(PARTITION BY s.discovery_key ORDER BY e.logical_date DESC,s.delivery_key DESC,s.slot DESC) ordinal
         FROM email_feedback_stories s JOIN email_feedback_votes v USING(delivery_key,slot)
-        JOIN email_deliveries e USING(delivery_key) WHERE e.state='accepted' AND e.logical_date>=?1)
+        JOIN email_deliveries e USING(delivery_key)
+        WHERE e.state='accepted' AND e.logical_date BETWEEN ?1 AND ?2 AND v.updated_at<=?3)
         SELECT discovery_key,topics_json,rating,logical_date,delivery_key,slot FROM ranked WHERE ordinal=1
-        ORDER BY logical_date DESC,delivery_key DESC,slot DESC LIMIT 400`).bind(cutoff).all<any>();
+        ORDER BY logical_date DESC,delivery_key DESC,slot DESC LIMIT 400`).bind(cutoff,now.slice(0,10),now).all<any>();
       return result.results.map(row=>({discoveryKey:row.discovery_key,topics:JSON.parse(row.topics_json),rating:row.rating,
         logicalDate:row.logical_date,deliveryKey:row.delivery_key,slot:row.slot}));
     } catch { throw new Error("Feedback preferences unavailable."); }

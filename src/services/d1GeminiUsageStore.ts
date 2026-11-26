@@ -75,16 +75,20 @@ function matchesReservationIdentity(record: GeminiUsageRecord | null, reservatio
 
 /** D1 implementation of the Gemini request and token-usage persistence boundary. */
 export class D1GeminiUsageStore implements GeminiUsageStore {
-  constructor(private readonly database: D1Database) {}
+  constructor(private readonly database: D1Database, private readonly readLimit?: number) {}
 
   async getUsageData(): Promise<GeminiUsageData> {
+    const query = `SELECT ${SELECT_COLUMNS} FROM gemini_usage ORDER BY id ASC`;
+    const statement = this.readLimit === undefined ? this.database.prepare(query)
+      : this.database.prepare(query + " LIMIT ?1").bind(this.readLimit + 1);
     const [state, records] = await Promise.all([
       this.database.prepare("SELECT usage_unknown FROM gemini_usage_state WHERE id = 1").first<GeminiUsageStateRow>(),
-      this.database.prepare(`SELECT ${SELECT_COLUMNS} FROM gemini_usage ORDER BY id ASC`).all<GeminiUsageRow>(),
+      statement.all<GeminiUsageRow>(),
     ]);
     if (!state || (state.usage_unknown !== 0 && state.usage_unknown !== 1)) {
       throw new Error("D1 Gemini usage state has an invalid format.");
     }
+    if (this.readLimit !== undefined && records.results.length > this.readLimit) throw new Error("Gemini usage exceeds the gateway read limit.");
     const parsed = (records.results ?? []).map(recordFromRow);
     const unresolved = parsed.filter(isProtectedGeminiUnresolvedRecord);
     if (unresolved.length > 1) throw new Error("D1 Gemini usage contains conflicting unresolved reservations.");

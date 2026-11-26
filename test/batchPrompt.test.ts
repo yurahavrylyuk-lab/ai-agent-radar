@@ -3,6 +3,7 @@ import test from "node:test";
 
 import { BATCH_ANALYSIS_INSTRUCTIONS, prepareBatchPrompt, truncateUtf8, utf8Length } from "../src/services/batchPrompt.js";
 import { selectGeminiCandidates } from "../src/services/batchCandidateSelection.js";
+import { neutralFeedbackProfile } from "../src/services/feedbackPreferences.js";
 import type { BatchCandidate, BatchTruncationStage, PreparedBatch, SearchResult } from "../src/types/index.js";
 
 const encoder = new TextEncoder();
@@ -50,6 +51,30 @@ test("batch instructions ask for the best bounded stories regardless of score", 
   assert.match(BATCH_ANALYSIS_INSTRUCTIONS, /integer relevanceScore from 1 to 10/i);
   assert.match(BATCH_ANALYSIS_INSTRUCTIONS, /do not omit.*solely.*below 7/i);
   assert.doesNotMatch(BATCH_ANALYSIS_INSTRUCTIONS, /relevanceScore >= 7/);
+});
+
+test("feedback uses only bounded topic hints and leaves neutral or full prompts unchanged", () => {
+  const candidates = [candidate(1)];
+  const neutral = neutralFeedbackProfile();
+  const profile = { ...neutral, ai_ml: 0.5, programming: -0.5, it_infrastructure: 1, extra: "untrusted" };
+  const base = prepareBatchPrompt(candidates);
+  assert.deepEqual(prepareBatchPrompt(candidates, undefined, neutral), base);
+  const personalized = prepareBatchPrompt(candidates, undefined, profile);
+  assertBounded(personalized, candidates);
+  const { feedbackPreferences, ...data } = JSON.parse(personalized.prompt.split("\n\n").at(-1)!);
+  assert.deepEqual(feedbackPreferences, { prefer: ["AI and machine learning"], deprioritize: ["Programming"] });
+  assert.deepEqual(data, payload(base));
+  assert.doesNotMatch(JSON.stringify(feedbackPreferences), /untrusted|IT infrastructure/);
+
+  const maximal = Array.from({ length: 24 }, (_, index) => candidate(index + 1, {
+    title: "x".repeat(160), snippet: "y".repeat(160),
+  }));
+  const nearLimit = "i".repeat(maximumPromptBytes - prepareBatchPrompt(maximal, "").promptBytes);
+  const plain = prepareBatchPrompt(maximal, nearLimit);
+  assert.equal(plain.promptBytes, maximumPromptBytes);
+  assert.deepEqual(prepareBatchPrompt(maximal, nearLimit, profile), plain);
+  const fullInstructions = "I".repeat(3072);
+  assert.deepEqual(prepareBatchPrompt(candidates, fullInstructions, profile), prepareBatchPrompt(candidates, fullInstructions));
 });
 
 test("prompt has only compact candidate fields while original evidence remains application-owned", () => {

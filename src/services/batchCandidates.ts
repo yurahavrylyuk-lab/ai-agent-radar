@@ -1,10 +1,34 @@
 import { RSS_FEEDS } from "../config/rssSources.js";
 import { THREADS_QUERIES } from "../config/threadsSources.js";
-import type { BatchCandidate, BatchObservation, CandidatePool, DiscoveryProvenance, SearchResult } from "../types/index.js";
-import { normalizeDiscoveryUrl, type DiscoveryHistory } from "./discoveryHistoryCore.js";
+import type { BatchCandidate, BatchObservation, CandidatePool, DiscoveryProvenance, NotificationRecord, SearchResult, StoredDiscovery } from "../types/index.js";
+import { HISTORY_BULK_ALIAS_LIMIT, normalizeDiscoveryUrl, type DiscoveryHistory } from "./discoveryHistoryCore.js";
 import type { NotificationHistory } from "./notificationHistoryCore.js";
 
 const encoder = new TextEncoder();
+
+function chunks<T>(values: readonly T[]): T[][] {
+  const result: T[][] = [];
+  for (let index = 0; index < values.length; index += HISTORY_BULK_ALIAS_LIMIT) result.push(values.slice(index, index + HISTORY_BULK_ALIAS_LIMIT));
+  return result;
+}
+
+async function loadDiscoveries(history: DiscoveryHistory, aliases: readonly string[]): Promise<Map<string, StoredDiscovery>> {
+  const records = new Map<string, StoredDiscovery>();
+  for (const part of chunks(aliases)) {
+    if (history.getDiscoveries) for (const [url, value] of await history.getDiscoveries(part)) records.set(url, value);
+    else for (const url of part) { const value = await history.getDiscovery(url); if (value) records.set(url, value); }
+  }
+  return records;
+}
+
+async function loadNotifications(history: NotificationHistory, aliases: readonly string[]): Promise<Map<string, NotificationRecord>> {
+  const records = new Map<string, NotificationRecord>();
+  for (const part of chunks(aliases)) {
+    if (history.getNotificationRecords) for (const [url, value] of await history.getNotificationRecords(part, "email")) records.set(url, value);
+    else for (const url of part) { const value = await history.getNotificationRecord(url, "email"); if (value) records.set(url, value); }
+  }
+  return records;
+}
 
 /** Cycle-local fragment grouping; never a replacement for durable URL keys. */
 export function batchAliasKey(url: string): string {
@@ -117,18 +141,21 @@ export async function prepareBatchCandidates(
   const braveBacked: Array<Omit<BatchCandidate, "candidateId">> = [];
   const rssOnly: Array<Omit<BatchCandidate, "candidateId">> = [];
   const threadsOnly: Array<Omit<BatchCandidate, "candidateId">> = [];
+  const aliases = [...new Set([...groups.values()].flatMap(group => group.aliases))];
+  const discoveries = await loadDiscoveries(dependencies.history, aliases);
+  const notifications = await loadNotifications(dependencies.notificationHistory, aliases);
+  const aliasesToTouch: string[] = [];
   for (const group of groups.values()) {
     observedAliases.set(group.aliasKey, [...group.aliases]);
     let known = false;
     const existingAliases: string[] = [];
     for (const alias of group.aliases) {
-      // Read both evidence sources for every alias, even after an earlier match.
-      const discovery = await dependencies.history.getDiscovery(alias);
-      const notification = await dependencies.notificationHistory.getNotificationRecord(alias, "email");
+      const discovery = discoveries.get(alias);
+      const notification = notifications.get(alias);
       if (discovery) existingAliases.push(alias);
       if (discovery || notification) known = true;
     }
-    for (const alias of existingAliases) await dependencies.history.touchDiscovery(alias, dependencies.seenAt);
+    aliasesToTouch.push(...existingAliases);
     if (known) {
       counts.known += 1;
       continue;
@@ -136,6 +163,10 @@ export async function prepareBatchCandidates(
     if (group.provenance.some(entry => entry.kind === "brave")) braveBacked.push(group);
     else if (group.provenance.some(entry => entry.kind === "rss")) rssOnly.push(group);
     else threadsOnly.push(group);
+  }
+  for (const part of chunks([...new Set(aliasesToTouch)])) {
+    if (dependencies.history.touchDiscoveries) await dependencies.history.touchDiscoveries(part, dependencies.seenAt);
+    else for (const alias of part) await dependencies.history.touchDiscovery(alias, dependencies.seenAt);
   }
   const interleaved: Array<Omit<BatchCandidate, "candidateId">> = [];
   while (braveBacked.length > 0 || rssOnly.length > 0 || threadsOnly.length > 0) {
