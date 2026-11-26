@@ -1,5 +1,30 @@
 # AI Agent Radar project state
 
+## Current repository and release state — 2026-11-26
+
+Local and GitHub `main` were verified at `6d6b4121e3075d8985d0dc2dd48983893e4b83b4`. The dated entries below preserve original evidence and status at each checkpoint. This section supersedes their earlier current-state labels.
+
+### Published milestones
+
+- **Brave Request Timeout + Bounded Response — merged and published.** Merge `9518c26d4224cf6c7d2e4ca1b6e4b8ba0d13e15b` includes the bounded transport, tests and v1 roadmap. The earlier Architect handoff records human-reported approval and CI verification.
+- **Email Feedback + Preference Learning MVP — merged and published, activation pending.** Merge `8e0783bf4a9e1a41efc01c4efe498c8592ff6c8d` includes signed per-article controls, the confirmation/voting implementation and migration `0011_email_feedback.sql`. The earlier project-state record attests to independent approval and CI verification.
+- **Feedback privacy and release compatibility preparation — merged and published.** Merge `6d6b4121e3075d8985d0dc2dd48983893e4b83b4` includes query-string redaction in source and local migration, disabled-mode and rollback-reader compatibility evidence. Merge ancestry was verified. A separate Analyst verdict and fresh CI results for this milestone were outside this verification.
+
+### Newer local development line
+
+The human report identifies `codex/v1-1-feedback` at `8fe4b79ff55dc38642be90867682648f83d7ec52`. That commit integrates feedback with the GitHub Actions Batch runner and authenticated D1 Gateway. The local branch and commit were verified and the commit is outside published `main` ancestry. Reported validation is **83/83 focused**, **1036/1036 offline**, and a complete synthetic feedback and daily digest cycle. These are implementation results from the human report, without a fresh test run or independent review here. Publication, merge and deployment of this local line have not been reported.
+
+### Production and remaining release gates
+
+The existing Cloudflare legacy scheduler remains the reported production digest path. The GitHub Actions Batch runner and D1 Gateway are a separate development line. The exact current Cloudflare Worker version, deployment and production migration ledger were outside this check. Feedback activation remains pending.
+
+- Prove hosted Gateway compatibility with Workers Free CPU limits and resolve the large frozen-payload storage boundary.
+- Verify the production migration ledger and obtain separate approval to apply `0011`.
+- Configure the approved HTTPS feedback origin and signing secrets, then verify effective log redaction at all applicable sinks before issuing links.
+- Confirm exclusive scheduler ownership for any cutover and preserve the legacy digest until that cutover is approved.
+
+Claude Platform remains advisory. Worker version telemetry remains an optional future proposal pending separate approval. See the [backlog](../../backlog.md) and [plan](../../plan.md) for the active roadmap.
+
 ## 2026-11-12 — V1 release privacy and compatibility preparation ready for review
 
 Email Feedback + Preference Learning is independently approved, merged, published and CI-verified on main `8e0783bf4a9e1a41efc01c4efe498c8592ff6c8d`; production activation remains separately gated. Local commit `e6a842e` on `feature/v1-release-preparation-privacy-compatibility` adds source-controlled `observability.redact_query_string: true` while retaining persistent sampled logs and disabled traces, plus focused release compatibility evidence. This source setting does not prove effective Cloudflare/export privacy; deployed configuration, every applicable external sink and a sanitized-canary check remain mandatory before activation.

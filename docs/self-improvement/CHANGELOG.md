@@ -1,5 +1,11 @@
 # Self-improvement changelog
 
+## 2026-11-26 — Reconcile published roadmap milestones
+
+- Recorded Brave request bounds, Email Feedback MVP, and feedback privacy/release compatibility as merged and published on the verified GitHub `main` line. The entries below retain their original implementation-stage evidence.
+- Recorded the reported local GitHub Actions and D1 Gateway feedback integration separately from the legacy Cloudflare digest. The [current project state](PROJECT_STATE.md#current-repository-and-release-state--2026-11-26) tracks feedback activation, Gateway CPU and payload limits, and scheduler cutover gates.
+- Kept Claude Platform advisory and Worker version telemetry optional. Documentation only.
+
 ## 2026-11-12 — Prepare feedback privacy and release compatibility
 
 - Added source-controlled Wrangler query-string redaction while preserving persistent scheduled logs, sampling, traces, Cron, D1, migration allowlist, bindings and quotas. Effective deployed/export privacy and sanitized-canary evidence remain open release gates.

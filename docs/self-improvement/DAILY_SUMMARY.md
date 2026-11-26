@@ -1,5 +1,11 @@
 # Daily Self-Improvement Summary
 
+## 2026-11-26 — Builder: Proposal 1 documentation reconciliation
+
+- Verified local and GitHub `main` at `6d6b4121e3075d8985d0dc2dd48983893e4b83b4` and inspected the Brave bounds, Email Feedback MVP, and feedback privacy/release preparation merge contents. Updated the current roadmap labels to reflect verified merge and publication, with approval, CI, deployment and activation evidence recorded separately.
+- Recorded the newer local `codex/v1-1-feedback` line and attributed its 83/83 focused, 1036/1036 offline and end-to-end synthetic evidence to the human report. The legacy Cloudflare scheduler remains the reported production digest path. Production deployment, the D1 ledger and fresh CI were outside this check.
+- Preserved dated Builder handoffs and release evidence below. The [current project state](PROJECT_STATE.md#current-repository-and-release-state--2026-11-26) lists remaining production gates. Claude Platform keeps its advisory role and Worker version telemetry remains deferred.
+
 ## 2026-11-12 — V1 release privacy and compatibility preparation
 
 - Implemented the human-approved local release-preparation scope on `feature/v1-release-preparation-privacy-compatibility` from exact published baseline `8e0783bf4a9e1a41efc01c4efe498c8592ff6c8d`; implementation/test commit is `e6a842e`.
