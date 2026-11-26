@@ -1,0 +1,90 @@
+# Inactive template. GitHub reads workflows only from .github/workflows.
+name: AI Radar daily Batch
+on:
+  schedule:
+    # Carry the intended UTC weekday in the event's Cron expression.
+    - cron: "7 8 * * 0"
+    - cron: "7 8 * * 1"
+    - cron: "7 8 * * 2"
+    - cron: "7 8 * * 3"
+    - cron: "7 8 * * 4"
+    - cron: "7 8 * * 5"
+    - cron: "7 8 * * 6"
+    - cron: "17 9 * * 0"
+    - cron: "17 9 * * 1"
+    - cron: "17 9 * * 2"
+    - cron: "17 9 * * 3"
+    - cron: "17 9 * * 4"
+    - cron: "17 9 * * 5"
+    - cron: "17 9 * * 6"
+  workflow_dispatch:
+    inputs:
+      logical_date:
+        description: "UTC date (YYYY-MM-DD) for delivery-only recovery"
+        type: string
+        required: true
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: ai-radar-daily-batch
+  cancel-in-progress: false
+jobs:
+  batch:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: ai-radar-batch
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "24"
+      - name: Read scheduled run creation time
+        if: github.event_name == 'schedule'
+        id: schedule
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! created_at=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq '.created_at' 2>/dev/null) ||
+             [[ ! "$created_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+            echo '::error::schedule_date_unverified: GitHub run creation time unavailable'
+            exit 1
+          fi
+          echo "created_at=$created_at" >> "$GITHUB_OUTPUT"
+      - run: npm ci
+      - run: npm run build
+      - name: Run or recover one daily digest
+        run: node dist/githubBatchMain.js
+        env:
+          BATCH_CRON: ${{ github.event.schedule }}
+          BATCH_RUN_CREATED_AT: ${{ steps.schedule.outputs.created_at }}
+          BATCH_LOGICAL_DATE: ${{ inputs.logical_date }}
+          BATCH_RUNNER_ENABLED: ${{ vars.BATCH_RUNNER_ENABLED }}
+          BATCH_GATEWAY_URL: ${{ vars.BATCH_GATEWAY_URL }}
+          BATCH_GATEWAY_KEY: ${{ secrets.BATCH_GATEWAY_KEY }}
+          BRAVE_SEARCH_API_KEY: ${{ secrets.BRAVE_SEARCH_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          NOTIFICATION_EMAIL: ${{ secrets.NOTIFICATION_EMAIL }}
+          FEEDBACK_ORIGIN: ${{ vars.FEEDBACK_ORIGIN }}
+          FEEDBACK_SIGNING_KEY_ID: ${{ vars.FEEDBACK_SIGNING_KEY_ID }}
+          FEEDBACK_SIGNING_KEY: ${{ secrets.FEEDBACK_SIGNING_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          BRAVE_DAILY_SEARCH_LIMIT: ${{ vars.BRAVE_DAILY_SEARCH_LIMIT }}
+          BRAVE_WEEKLY_SEARCH_LIMIT: ${{ vars.BRAVE_WEEKLY_SEARCH_LIMIT }}
+          BRAVE_MONTHLY_SEARCH_LIMIT: ${{ vars.BRAVE_MONTHLY_SEARCH_LIMIT }}
+          GEMINI_DAILY_REQUEST_LIMIT: ${{ vars.GEMINI_DAILY_REQUEST_LIMIT }}
+          GEMINI_WEEKLY_REQUEST_LIMIT: ${{ vars.GEMINI_WEEKLY_REQUEST_LIMIT }}
+          GEMINI_MONTHLY_REQUEST_LIMIT: ${{ vars.GEMINI_MONTHLY_REQUEST_LIMIT }}
+          GEMINI_DAILY_TOKEN_LIMIT: ${{ vars.GEMINI_DAILY_TOKEN_LIMIT }}
+          GEMINI_WEEKLY_TOKEN_LIMIT: ${{ vars.GEMINI_WEEKLY_TOKEN_LIMIT }}
+          GEMINI_MONTHLY_TOKEN_LIMIT: ${{ vars.GEMINI_MONTHLY_TOKEN_LIMIT }}
+          OPENAI_DAILY_REQUEST_LIMIT: ${{ vars.OPENAI_DAILY_REQUEST_LIMIT }}
+          OPENAI_WEEKLY_REQUEST_LIMIT: ${{ vars.OPENAI_WEEKLY_REQUEST_LIMIT }}
+          OPENAI_MONTHLY_REQUEST_LIMIT: ${{ vars.OPENAI_MONTHLY_REQUEST_LIMIT }}
+          OPENAI_DAILY_TOKEN_LIMIT: ${{ vars.OPENAI_DAILY_TOKEN_LIMIT }}
+          OPENAI_WEEKLY_TOKEN_LIMIT: ${{ vars.OPENAI_WEEKLY_TOKEN_LIMIT }}
+          OPENAI_MONTHLY_TOKEN_LIMIT: ${{ vars.OPENAI_MONTHLY_TOKEN_LIMIT }}

@@ -4,7 +4,7 @@ import test from "node:test";
 import { D1EmailFeedbackStore, type FeedbackStoryBinding } from "../src/services/d1EmailFeedbackStore.js";
 import { D1EmailDeliveryLedger } from "../src/services/d1EmailDeliveryLedger.js";
 import { deliveryIdentity, freezeDelivery } from "../src/services/emailDeliveryLedger.js";
-import { createEmailDeliveryDatabase } from "./fixtures/emailDeliveryD1.js";
+import { createEmailDeliveryDatabase, type SqliteD1 } from "./fixtures/emailDeliveryD1.js";
 import type { PreparedDailyDigest } from "../src/types/index.js";
 
 const key = "daily-digest/2026-11-12" as const;
@@ -23,6 +23,31 @@ async function setup() {
     { from: "AI Radar <radar@example.test>", subject: "Daily", text: "Story", html: "<p>Story</p>" }, "owner@example.test");
   const story = { ...binding, payloadSha256: frozen.payloadSha256 };
   return { ...fixture, ledger, frozen, story, store: new D1EmailFeedbackStore(fixture.d1 as unknown as D1Database) };
+}
+
+function seedDelivery(sqlite: Awaited<ReturnType<typeof createEmailDeliveryDatabase>>["sqlite"], date: string): string {
+  const deliveryKey=`daily-digest/${date}`;
+  sqlite.prepare(`INSERT INTO email_deliveries(delivery_key,logical_date,state,payload_sha256,created_at,updated_at,
+    provider_message_id,accepted_at,reconciled_at,last_reason) VALUES(?,?,'accepted',?,?,?,?,?,?,'history_reconciled')`)
+    .run(deliveryKey,date,"1".repeat(64),`${date}T08:00:00.000Z`,`${date}T08:00:00.000Z`,
+      `message-${date}`,`${date}T08:01:00.000Z`,`${date}T08:02:00.000Z`);
+  return deliveryKey;
+}
+
+function seedBinding(sqlite: Awaited<ReturnType<typeof createEmailDeliveryDatabase>>["sqlite"], deliveryKey: string,
+  slot: number, expiresAt: string, withVote=true): void {
+  sqlite.prepare(`INSERT INTO email_feedback_stories(delivery_key,slot,payload_sha256,story_sha256,discovery_key,
+    display_title,kind,topic_version,topics_json,issued_at,expires_at,key_id,relevant_digest,not_relevant_digest)
+    VALUES(?,?,?, ?,?,'Cleanup fixture','analyzed',1,'["ai_ml"]',?,?, 'active',?,?)`)
+    .run(deliveryKey,slot,"1".repeat(64),String(slot).repeat(64),`${slot}`.repeat(64),
+      "2025-01-01T08:00:00.000Z",expiresAt,"c".repeat(64),"d".repeat(64));
+  if (withVote) sqlite.prepare(`INSERT INTO email_feedback_votes(delivery_key,slot,rating,revision,capability_digest,created_at,updated_at)
+    VALUES(?,?,'relevant',1,?,'2025-01-02T08:00:00.000Z','2025-01-02T08:00:00.000Z')`)
+    .run(deliveryKey,slot,"c".repeat(64));
+}
+
+function counts(sqlite: Awaited<ReturnType<typeof createEmailDeliveryDatabase>>["sqlite"], table: string): number {
+  return Number((sqlite.prepare(`SELECT count(*) count FROM ${table}`).get() as {count:number}).count);
 }
 
 test("ledger and exact feedback binding set reserve atomically", async () => {
@@ -99,4 +124,78 @@ test("bounded retention removes feedback children only and preserves ledger", as
     assert.equal(sqlite.prepare("SELECT count(*) count FROM email_feedback_events").get()?.count, 0);
     assert.equal(sqlite.prepare("SELECT count(*) count FROM email_deliveries").get()?.count, 1);
   } finally { sqlite.close(); }
+});
+
+test("feedback cleanup performs one selection and no deletion batch when nothing is eligible", async () => {
+  const {sqlite,d1}=await createEmailDeliveryDatabase(true);
+  try {
+    const deliveryKey=seedDelivery(sqlite,"2026-11-12");seedBinding(sqlite,deliveryKey,1,"2026-12-12T08:00:00.000Z");
+    d1.resetCalls();
+    assert.equal(await new D1EmailFeedbackStore(d1 as unknown as D1Database).pruneExpired("2026-11-12T00:00:00.000Z"),0);
+    assert.deepEqual({all:d1.calls.all,batch:d1.calls.batch,batchStatements:d1.calls.batchStatements},{all:1,batch:0,batchStatements:[]});
+  } finally {sqlite.close();}
+});
+
+test("feedback cleanup deletes one eligible group in one atomic child-first batch and preserves durable history", async () => {
+  const {sqlite,d1}=await createEmailDeliveryDatabase(true);
+  try {
+    const deliveryKey=seedDelivery(sqlite,"2025-01-01");seedBinding(sqlite,deliveryKey,1,"2025-02-01T08:00:00.000Z");
+    sqlite.prepare("INSERT INTO notifications(normalized_url,channel,sent_at,provider_message_id) VALUES(?,?,?,?)")
+      .run("https://example.test/story","email","2025-01-01T09:00:00.000Z","notification-1");
+    d1.resetCalls();
+    assert.equal(await new D1EmailFeedbackStore(d1 as unknown as D1Database).pruneExpired("2026-11-12T00:00:00.000Z"),1);
+    assert.deepEqual({all:d1.calls.all,batch:d1.calls.batch,batchStatements:d1.calls.batchStatements},{all:1,batch:1,batchStatements:[3]});
+    assert.match(d1.calls.batchSql[0]![0]!,/DELETE FROM email_feedback_events/);
+    assert.match(d1.calls.batchSql[0]![1]!,/DELETE FROM email_feedback_votes/);
+    assert.match(d1.calls.batchSql[0]![2]!,/DELETE FROM email_feedback_stories/);
+    assert.equal(counts(sqlite,"email_feedback_stories"),0);assert.equal(counts(sqlite,"email_feedback_votes"),0);assert.equal(counts(sqlite,"email_feedback_events"),0);
+    assert.equal(counts(sqlite,"email_deliveries"),1);assert.equal(counts(sqlite,"notifications"),1);
+  } finally {sqlite.close();}
+});
+
+test("feedback cleanup bounds twenty groups into one deletion batch and leaves overflow for an idempotent future pass", async () => {
+  const {sqlite,d1}=await createEmailDeliveryDatabase(true);
+  try {
+    for(let day=1;day<=21;day++){const date=`2025-01-${String(day).padStart(2,"0")}`;const deliveryKey=seedDelivery(sqlite,date);seedBinding(sqlite,deliveryKey,1,"2025-02-01T08:00:00.000Z");}
+    const store=new D1EmailFeedbackStore(d1 as unknown as D1Database);d1.resetCalls();
+    assert.equal(await store.pruneExpired("2026-11-12T00:00:00.000Z"),20);
+    assert.deepEqual({all:d1.calls.all,batch:d1.calls.batch,batchStatements:d1.calls.batchStatements},{all:1,batch:1,batchStatements:[60]});
+    assert.equal(counts(sqlite,"email_feedback_stories"),1);
+    d1.resetCalls();assert.equal(await store.pruneExpired("2026-11-12T00:00:00.000Z"),1);
+    assert.deepEqual({all:d1.calls.all,batch:d1.calls.batch,batchStatements:d1.calls.batchStatements},{all:1,batch:1,batchStatements:[3]});
+    d1.resetCalls();assert.equal(await store.pruneExpired("2026-11-12T00:00:00.000Z"),0);
+    assert.deepEqual({all:d1.calls.all,batch:d1.calls.batch},{all:1,batch:0});
+  } finally {sqlite.close();}
+});
+
+test("feedback cleanup preserves an entire mixed-expiration delivery group and the exact cutoff boundary", async () => {
+  const {sqlite,d1}=await createEmailDeliveryDatabase(true);
+  try {
+    const mixed=seedDelivery(sqlite,"2025-01-01");seedBinding(sqlite,mixed,1,"2025-02-01T08:00:00.000Z");seedBinding(sqlite,mixed,2,"2026-12-01T08:00:00.000Z");
+    const boundary=seedDelivery(sqlite,"2025-01-02");seedBinding(sqlite,boundary,1,"2026-06-15T00:00:00.000Z");
+    d1.resetCalls();assert.equal(await new D1EmailFeedbackStore(d1 as unknown as D1Database).pruneExpired("2026-11-12T00:00:00.000Z"),0);
+    assert.equal(counts(sqlite,"email_feedback_stories"),3);assert.equal(d1.calls.batch,0);
+  } finally {sqlite.close();}
+});
+
+test("feedback cleanup rechecks group eligibility inside the deletion batch", async () => {
+  const {sqlite,d1}=await createEmailDeliveryDatabase(true);
+  try {
+    const deliveryKey=seedDelivery(sqlite,"2025-01-01");seedBinding(sqlite,deliveryKey,1,"2025-02-01T08:00:00.000Z");
+    const originalBatch=d1.batch.bind(d1);let inserted=false;
+    d1.batch=async (statements: Parameters<SqliteD1["batch"]>[0])=>{if(!inserted){inserted=true;seedBinding(sqlite,deliveryKey,2,"2026-12-01T08:00:00.000Z",false);}return originalBatch(statements);};
+    d1.resetCalls();
+    assert.equal(await new D1EmailFeedbackStore(d1 as unknown as D1Database).pruneExpired("2026-11-12T00:00:00.000Z"),0);
+    assert.equal(counts(sqlite,"email_feedback_stories"),2);assert.equal(counts(sqlite,"email_feedback_votes"),1);assert.equal(counts(sqlite,"email_feedback_events"),1);
+  } finally {sqlite.close();}
+});
+
+test("feedback cleanup rolls back every group when a statement fails mid-batch", async () => {
+  const {sqlite,d1}=await createEmailDeliveryDatabase(true);
+  try {
+    for(const date of["2025-01-01","2025-01-02"]){const deliveryKey=seedDelivery(sqlite,date);seedBinding(sqlite,deliveryKey,1,"2025-02-01T08:00:00.000Z");}
+    d1.inject({pattern:/DELETE FROM email_feedback_votes/,phase:"before"});d1.resetCalls();
+    await assert.rejects(new D1EmailFeedbackStore(d1 as unknown as D1Database).pruneExpired("2026-11-12T00:00:00.000Z"),/simulated D1 before failure/);
+    assert.equal(d1.calls.batch,1);assert.equal(counts(sqlite,"email_feedback_stories"),2);assert.equal(counts(sqlite,"email_feedback_votes"),2);assert.equal(counts(sqlite,"email_feedback_events"),2);
+  } finally {sqlite.close();}
 });

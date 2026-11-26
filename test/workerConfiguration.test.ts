@@ -261,7 +261,7 @@ test("default scheduled Worker uses batch entry with no X tables and HTTP method
       const hostname = new URL(String(input)).hostname;
       if (hostname === "api.search.brave.com") return new Response(JSON.stringify({ web: { results: [] } }));
       if (hostname === "api.resend.com") {
-        assert.doesNotMatch(String(init?.body), /feedback\?token=|Relevant:|Not relevant:/);
+        assert.doesNotMatch(String(init?.body), /feedback\?token=|Relevant:|Not Relevant:/);
         return new Response(JSON.stringify({ id: "status-message" }));
       }
       assert.ok(["openai.com", "github.blog", "blog.cloudflare.com", "developer.chrome.com"].includes(hostname));

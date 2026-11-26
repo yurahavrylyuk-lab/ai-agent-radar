@@ -158,8 +158,8 @@ test("every alias gets discovery and email evidence despite an earlier known ali
     assert.equal(pool.candidates.length, 0);
     assert.equal(pool.counts.known, 1);
     assert.deepEqual(events.filter((event) => !event.startsWith("touch:")), [
-      "discovery:https://example.test/news#a", "email:https://example.test/news#a",
-      "discovery:https://example.test/news#b", "email:https://example.test/news#b",
+      "discovery:https://example.test/news#a", "discovery:https://example.test/news#b",
+      "email:https://example.test/news#a", "email:https://example.test/news#b",
     ]);
     assert.deepEqual(events.filter((event) => event.startsWith("touch:")), ["touch:https://example.test/news#a"]);
     const existing = await history.getDiscovery("https://example.test/news#a");
@@ -245,4 +245,46 @@ test("three_source_aliases_merge_once_and_check_every_history_key", async () => 
     assert.equal(pool.candidates.some(item => item.normalizedUrl.includes("threads.net")), true);
     assert.equal(pool.candidates.some(item => item.normalizedUrl.includes("threads.com")), true);
   });
+});
+
+test("D1-capable candidate preparation bulk-loads bounded aliases and touches known rows once", async () => {
+  const knownUrl = "https://example.test/known#a";
+  const unknownUrl = "https://example.test/new#b";
+  const stored = {
+    normalizedUrl: knownUrl, firstSeenAt: firstSeenAt.toISOString(), lastSeenAt: firstSeenAt.toISOString(),
+    analysis: analysis(knownUrl),
+  };
+  const calls = { discoveryBulk: 0, notificationBulk: 0, touchBulk: 0 };
+  const history = {
+    getDiscovery: async () => { throw new Error("point discovery lookup used"); },
+    listRecentDiscoveries: async () => ({ discoveries: [], truncated: false }),
+    recordDiscovery: async () => { throw new Error("unused"); },
+    touchDiscovery: async () => { throw new Error("point touch used"); },
+    async getDiscoveries(urls: readonly string[]) {
+      calls.discoveryBulk += 1;
+      assert.deepEqual(urls, [knownUrl, unknownUrl]);
+      return new Map([[knownUrl, stored]]);
+    },
+    async touchDiscoveries(urls: readonly string[], time: Date) {
+      calls.touchBulk += 1;
+      assert.deepEqual(urls, [knownUrl]);
+      assert.equal(time.toISOString(), seenAt.toISOString());
+    },
+  } as DiscoveryHistory;
+  const notificationHistory = {
+    getNotificationRecord: async () => { throw new Error("point notification lookup used"); },
+    hasNotificationBeenSent: async () => { throw new Error("point notification lookup used"); },
+    recordNotificationSent: async () => { throw new Error("unused"); },
+    async getNotificationRecords(urls: readonly string[], channel: string) {
+      calls.notificationBulk += 1;
+      assert.deepEqual(urls, [knownUrl, unknownUrl]);
+      assert.equal(channel, "email");
+      return new Map();
+    },
+  } as NotificationHistory;
+  const pool = await prepareBatchCandidates([
+    observation(knownUrl, 1, 1), observation(unknownUrl, 1, 2),
+  ], { history, notificationHistory, seenAt });
+  assert.deepEqual(pool.candidates.map(candidate => candidate.normalizedUrl), [unknownUrl]);
+  assert.deepEqual(calls, { discoveryBulk: 1, notificationBulk: 1, touchBulk: 1 });
 });

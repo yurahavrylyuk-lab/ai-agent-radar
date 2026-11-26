@@ -116,6 +116,19 @@ test("touching a known discovery updates only lastSeenAt", async () => {
   });
 });
 
+test("JSON repeated and older touches preserve the maximum lastSeenAt", async () => {
+  await withHistory(async (history) => {
+    const stored = await history.recordDiscovery(analysis(), new Date("2026-10-20T08:00:00.000Z"));
+    await history.touchDiscovery(stored.normalizedUrl, new Date("2026-10-20T10:00:00.000Z"));
+    await history.touchDiscovery(stored.normalizedUrl, new Date("2026-10-20T09:00:00.000Z"));
+    assert.equal((await history.getDiscovery(stored.normalizedUrl))?.lastSeenAt, "2026-10-20T10:00:00.000Z");
+    await history.touchDiscovery(stored.normalizedUrl, new Date("2026-10-20T10:00:00.000Z"));
+    const final = await history.getDiscovery(stored.normalizedUrl);
+    assert.equal(final?.firstSeenAt, "2026-10-20T08:00:00.000Z");
+    assert.equal(final?.lastSeenAt, "2026-10-20T10:00:00.000Z");
+  });
+});
+
 test("rejects malformed JSON without replacing the history file", async () => {
   await withHistory(async (history, filePath) => {
     await writeFile(filePath, "{not valid JSON", "utf8");

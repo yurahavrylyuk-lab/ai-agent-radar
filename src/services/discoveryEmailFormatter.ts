@@ -312,8 +312,8 @@ function dailyShellHtml(badge: string, heading: string, explanation: string, con
 </html>`;
 }
 
-function feedbackHtml(action?:FeedbackActionLinks):string { return action?`<p style="margin:16px 0 0;color:${SECONDARY_TEXT};font-family:Arial,sans-serif"><a href="${escapeHtml(safeHref(action.relevantUrl))}">Relevant</a> &middot; <a href="${escapeHtml(safeHref(action.notRelevantUrl))}">Not relevant</a></p>`:""; }
-function feedbackText(action?:FeedbackActionLinks):string[] { return action?[`Relevant: ${action.relevantUrl}`,`Not relevant: ${action.notRelevantUrl}`]:[]; }
+function feedbackHtml(action?:FeedbackActionLinks):string { return action?`<p style="margin:16px 0 0;color:${SECONDARY_TEXT};font-family:Arial,sans-serif"><a href="${escapeHtml(safeHref(action.relevantUrl))}">Relevant</a> &middot; <a href="${escapeHtml(safeHref(action.notRelevantUrl))}">Not Relevant</a></p>`:""; }
+function feedbackText(action?:FeedbackActionLinks):string[] { return action?[`Relevant: ${action.relevantUrl}`,`Not Relevant: ${action.notRelevantUrl}`]:[]; }
 
 function rawDailyCardHtml(title: string, snippet: string, source: DailySource, slot: number, feedback?:FeedbackActionLinks): string {
   return `<tr>

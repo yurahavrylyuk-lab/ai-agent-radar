@@ -435,6 +435,41 @@ test("D1 notification history preserves URL/channel identity and provider messag
   });
 });
 
+test("D1 bounded bulk history normalizes aliases, rejects overflow, validates rows and advances touches monotonically", async () => {
+  await withDatabase(async (database, d1) => {
+    const discoveries = new D1DiscoveryHistory(d1) as D1DiscoveryHistory & {
+      getDiscoveries(urls: readonly string[]): Promise<Map<string, ReturnType<typeof analysis> & object>>;
+      touchDiscoveries(urls: readonly string[], seenAt: Date): Promise<void>;
+    };
+    const notifications = new D1NotificationHistory(d1) as D1NotificationHistory & {
+      getNotificationRecords(urls: readonly string[], channel: "email"): Promise<Map<string, unknown>>;
+    };
+    const stored = await discoveries.recordDiscovery(analysis("https://example.com/bulk/"), new Date("2026-10-20T08:00:00.000Z"));
+    await notifications.recordNotificationSent(stored.normalizedUrl, "email", "msg", new Date("2026-10-20T08:01:00.000Z"));
+
+    assert.deepEqual(await discoveries.getDiscoveries([]), new Map());
+    assert.deepEqual([...await discoveries.getDiscoveries([" https://example.com/bulk ", stored.normalizedUrl])].map(([url]) => url), [stored.normalizedUrl]);
+    assert.deepEqual([...await notifications.getNotificationRecords([stored.normalizedUrl, "https://example.com/bulk/"], "email")].map(([url]) => url), [stored.normalizedUrl]);
+    const maximum = Array.from({ length: 100 }, (_, index) => `https://example.com/${index}`);
+    assert.deepEqual(await discoveries.getDiscoveries(maximum), new Map());
+    await assert.rejects(discoveries.getDiscoveries([...maximum, "https://example.com/overflow"]), /at most 100/);
+
+    await Promise.all([
+      discoveries.touchDiscoveries([stored.normalizedUrl], new Date("2026-10-20T10:00:00.000Z")),
+      discoveries.touchDiscoveries([stored.normalizedUrl], new Date("2026-10-20T09:00:00.000Z")),
+      discoveries.touchDiscoveries([stored.normalizedUrl], new Date("2026-10-20T10:00:00.000Z")),
+    ]);
+    const touched = await discoveries.getDiscovery(stored.normalizedUrl);
+    assert.equal(touched?.firstSeenAt, "2026-10-20T08:00:00.000Z");
+    assert.equal(touched?.lastSeenAt, "2026-10-20T10:00:00.000Z");
+
+    database.prepare("UPDATE notifications SET sent_at = ? WHERE normalized_url = ?").run("not-a-timestamp", stored.normalizedUrl);
+    await assert.rejects(notifications.getNotificationRecords([stored.normalizedUrl], "email"), /invalid record/);
+    database.prepare("UPDATE discoveries SET analysis_json = ? WHERE normalized_url = ?").run("{}", stored.normalizedUrl);
+    await assert.rejects(discoveries.getDiscoveries([stored.normalizedUrl]), /invalid record/);
+  });
+});
+
 test("D1 Brave usage records round-trip and remain usable by the existing guard", async () => {
   await withDatabase(async (database, d1) => {
     const store = new D1BraveUsageStore(d1);

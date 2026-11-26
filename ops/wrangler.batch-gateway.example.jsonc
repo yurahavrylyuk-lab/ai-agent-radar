@@ -1,0 +1,14 @@
+{
+  "name": "ai-radar-batch-gateway-example",
+  "main": "../src/batchGatewayWorker.ts",
+  "compatibility_date": "2026-09-20",
+  "workers_dev": false,
+  "preview_urls": false,
+  "observability": { "enabled": false },
+  "d1_databases": [{
+    "binding": "DB",
+    "database_name": "replace-only-after-release-approval",
+    "database_id": "00000000-0000-0000-0000-000000000000"
+  }],
+  "secrets": { "required": ["BATCH_GATEWAY_KEY"] }
+}

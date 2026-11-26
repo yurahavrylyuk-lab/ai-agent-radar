@@ -1,4 +1,4 @@
-import { normalizeDiscoveryUrl } from "./discoveryHistoryCore.js";
+import { normalizeBoundedHistoryAliases, normalizeDiscoveryUrl } from "./discoveryHistoryCore.js";
 import { NotificationHistoryError, type NotificationHistory } from "./notificationHistoryCore.js";
 import { notificationChannels, type NotificationChannel, type NotificationRecord } from "../types/index.js";
 
@@ -66,6 +66,28 @@ export class D1NotificationHistory implements NotificationHistory {
         "SELECT normalized_url, channel, sent_at, provider_message_id FROM notifications WHERE normalized_url = ?1 AND channel = ?2",
       ).bind(normalizedUrl, channel).first<NotificationRow>();
       return row ? { ...recordFromRow(row) } : undefined;
+    } catch (error) {
+      if (error instanceof NotificationHistoryError) throw error;
+      throw new NotificationHistoryError("D1 notification history could not be read safely.");
+    }
+  }
+
+  async getNotificationRecords(urls: readonly string[], channel: NotificationChannel): Promise<Map<string, NotificationRecord>> {
+    const normalized = normalizeBoundedHistoryAliases(urls);
+    requireChannel(channel);
+    if (normalized.length === 0) return new Map();
+    try {
+      const result = await this.database.prepare(
+        "SELECT n.normalized_url, n.channel, n.sent_at, n.provider_message_id "
+        + "FROM notifications n JOIN json_each(?1) requested ON requested.value = n.normalized_url "
+        + "WHERE n.channel = ?2 ORDER BY requested.key ASC",
+      ).bind(JSON.stringify(normalized), channel).all<NotificationRow>();
+      const records = new Map<string, NotificationRecord>();
+      for (const row of result.results ?? []) {
+        const record = recordFromRow(row);
+        records.set(record.normalizedUrl, { ...record });
+      }
+      return records;
     } catch (error) {
       if (error instanceof NotificationHistoryError) throw error;
       throw new NotificationHistoryError("D1 notification history could not be read safely.");

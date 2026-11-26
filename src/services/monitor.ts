@@ -7,6 +7,7 @@ import { createDailyEmailContext, finalizeDailyDigest, prepareDailyDigest, recov
 import { batchAliasKey, isBatchNewsUrl, prepareBatchCandidates } from "./batchCandidates.js";
 import { prepareBatchPrompt } from "./batchPrompt.js";
 import { selectGeminiCandidates } from "./batchCandidateSelection.js";
+import type { FeedbackPreferenceProfile } from "./feedbackPreferences.js";
 import { BatchAnalysisError } from "./analysisAgent.js";
 import { recordBatchSelection } from "./discoveryProcessor.js";
 import { type GeminiAvailability, type GeminiBlockedReason } from "./geminiUsageGuard.js";
@@ -369,6 +370,9 @@ async function runBatchMonitoringCycleInternal(dependencies: BatchMonitoringDepe
   const fresh: BatchDeliveryCandidate[] = [];
   let selectionPersistenceFailed = false;
   let prepared: PreparedBatch | undefined;
+  let preferenceProfile: FeedbackPreferenceProfile | undefined;
+  try { preferenceProfile = await dependencies.dailyDelivery?.loadPreferenceProfile?.(); }
+  catch { /* Optional feedback cannot prevent analysis or delivery. */ }
   const selection = selectGeminiCandidates(pool.candidates);
   batch.latency = {
     version: 1,
@@ -385,7 +389,7 @@ async function runBatchMonitoringCycleInternal(dependencies: BatchMonitoringDepe
   };
   if (pool.candidates.length > 0) {
     try {
-      prepared = prepareBatchPrompt(selection.candidates);
+      prepared = prepareBatchPrompt(selection.candidates, undefined, preferenceProfile);
       batch.sizeExcluded = prepared.sizeExcluded;
       batch.submittedCandidates = prepared.candidates.length;
       batch.submittedBySource = {
@@ -511,8 +515,6 @@ async function runBatchMonitoringCycleInternal(dependencies: BatchMonitoringDepe
     : batch.status === "validated" ? "ai_no_selections" as const
       : batch.status === "provider_failed" || batch.status === "timeout" || batch.status === "invalid_output" || batch.status === "blocked" ? "ai_unavailable" as const
         : batch.status === "preparation_failed" ? "preparation_unavailable" as const : "no_eligible_stories" as const;
-  let preferenceProfile;
-  try { preferenceProfile=await dependencies.dailyDelivery?.loadPreferenceProfile?.(); } catch { preferenceProfile=undefined; }
   const preparedDigest = await prepareDailyDigest({ cycleDate: cycleStartedAt.toISOString(),
     fresh: candidates.filter(candidate => candidate.origin === "fresh"),
     replay: candidates.filter(candidate => candidate.origin === "replay"),
